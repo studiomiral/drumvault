@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f5f4fa;
+  --color-panel: #ffffff;
+  --color-panel-2: #f6f4fc;
+  --color-raised: #eeebf7;
+  --color-line: #e5e1f0;
+  --color-text: #1e1b2e;
+  --color-muted: #5f5975;
+  --color-faint: #9a94ae;
+  --color-accent: #7c3aed;
+  --color-accent-soft: #7c3aed14;
+  --color-ok: #15803d;
+  --color-warn: #b45309;
+  --color-bad: #dc2626;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "SF Pro Text", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Purple gradient details: primary buttons, active states, progress, the wordmark. */
+@utility bg-brand {
+  background-image: linear-gradient(135deg, #6d28d9 0%, #8b5cf6 55%, #c026d3 100%);
+}
+
+@utility bg-brand-soft {
+  background-image: linear-gradient(135deg, #7c3aed14 0%, #c026d314 100%);
+}
+
+@utility text-brand {
+  background-image: linear-gradient(135deg, #6d28d9 0%, #8b5cf6 55%, #c026d3 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color-scheme: light;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+input, select, textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #d4cee6; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }

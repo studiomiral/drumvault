@@ -14,5 +14,6 @@ app/node_modules/
 app/dist/
 app/dist-electron/
 app/release/
+app/out/
 
 .DS_Store

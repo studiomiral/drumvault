@@ -40,7 +40,7 @@
 | Analysis/processing engine | **Python 3.12 sidecar**, managed with **uv** | Best audio tooling |
 | Python libs | numpy, scipy, soundfile, librosa, essentia (key), pyloudnorm (optional) | |
 | Time-stretch | **Rubber Band** CLI (macOS: `brew install rubberband`; Linux cloud: `apt-get install rubberband-cli`), called via subprocess | Best quality available; GPL is fine for personal use |
-| Library index | **SQLite** (WAL mode); Python writes, Electron reads via better-sqlite3 | |
+| Library index | **SQLite** (WAL mode); Python writes, Electron reads via Node's built-in `node:sqlite` (read-only) | No native module to rebuild for Electron (originally planned: better-sqlite3) |
 | Engine ↔ app | JSON-lines RPC over the sidecar's stdin/stdout | No ports, no servers |
 
 Startup check: the app verifies `rubberband` and the Python environment exist and shows a clear setup message if not.
@@ -61,7 +61,7 @@ drumvault/
 │   │   ├── main.ts               # window, menus, IPC handlers
 │   │   ├── preload.ts            # typed contextBridge API
 │   │   ├── sidecar.ts            # spawn + JSON-lines RPC client for the Python engine
-│   │   ├── db.ts                 # read-only better-sqlite3 access to the library
+│   │   ├── db.ts                 # read-only node:sqlite access to the library
 │   │   └── fs.ts                 # export writing, folder pickers, settings file
 │   └── src/
 │       ├── main.tsx
@@ -363,7 +363,7 @@ uv run python -m drumvault_engine cli analyze <zip>        # prints classificati
 
 ### 6.1 Layout
 
-A single window with three tabs or a left nav: **Process**, **Library**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark theme.
+A single window with three tabs or a left nav: **Process**, **Library**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a light theme with purple gradient accents.
 
 ### 6.2 Process view
 

@@ -130,3 +130,25 @@ def test_process_error_reported(engine, tmp_path):
     job = engine.until(lambda o: o.get("id") == "e")["result"]["job_id"]
     done = engine.until(lambda o: o.get("event") == "job_done" and o["job_id"] == job)
     assert done["status"] == "error" and done["error"]["code"] == "missing_zip"
+
+
+def test_set_sample_meta(engine, library):
+    import sqlite3
+    settings = {"library_path": str(library.path)}
+    sid = sqlite3.connect(library.path / ".drumvault" / "library.sqlite").execute(
+        "SELECT id FROM samples ORDER BY id LIMIT 1").fetchone()[0]
+    engine.send(id="m1", method="set_sample_meta",
+                params={"sample_id": sid, "favorite": True, "rating": 4, "tags": " punchy ", "settings": settings})
+    assert engine.until(lambda o: o.get("id") == "m1")["result"] == {"sample_id": sid}
+    row = sqlite3.connect(library.path / ".drumvault" / "library.sqlite").execute(
+        "SELECT favorite, rating, tags FROM samples WHERE id = ?", (sid,)).fetchone()
+    assert row == (1, 4, "punchy")
+    engine.send(id="m2", method="set_sample_meta", params={"sample_id": sid, "rating": 0, "settings": settings})
+    engine.until(lambda o: o.get("id") == "m2")
+    row = sqlite3.connect(library.path / ".drumvault" / "library.sqlite").execute(
+        "SELECT favorite, rating FROM samples WHERE id = ?", (sid,)).fetchone()
+    assert row == (1, None)  # rating cleared, favourite untouched
+    engine.send(id="m3", method="set_sample_meta", params={"sample_id": 999999, "favorite": True, "settings": settings})
+    assert engine.until(lambda o: o.get("id") == "m3")["error"]["code"] == "not_found"
+    engine.send(id="m4", method="set_sample_meta", params={"sample_id": sid, "rating": 9, "settings": settings})
+    assert engine.until(lambda o: o.get("id") == "m4")["error"]["code"] == "bad_params"

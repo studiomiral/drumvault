@@ -27,8 +27,9 @@ from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteZipParams, HealthResult, JobAccepted, JobDoneEvent,
     ProcessZipParams, ProgressEvent, RebuildLoopsParams, ReprocessZipParams, RpcError, RpcRequest,
-    SampleCounts,
+    SampleCounts, SetSampleMetaParams,
 )
+from .db import LibraryDB
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +123,19 @@ class RpcServer:
         elif m == "cancel":
             p = CancelParams.model_validate(req.params)
             self._reply(req.id, {"job_id": p.job_id, "cancelled": self.cancel(p.job_id)})
+        elif m == "set_sample_meta":
+            # Immediate (not queued): starring a sample must not wait for a running zip.
+            p = SetSampleMetaParams.model_validate(req.params)
+            settings = Settings.from_dict(p.settings)
+            if not settings.library_path:
+                self._error(req.id, "no_library", "No library folder configured")
+                return
+            with LibraryDB(settings.library_path) as db:
+                ok = db.set_sample_meta(p.sample_id, p.favorite, p.rating, p.tags)
+            if ok:
+                self._reply(req.id, {"sample_id": p.sample_id})
+            else:
+                self._error(req.id, "not_found", f"No sample with id {p.sample_id}")
         elif m == "shutdown":
             self._reply(req.id, {"ok": True})
             self._stopping = True

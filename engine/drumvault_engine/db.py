@@ -180,6 +180,21 @@ class LibraryDB:
     def insert_sample(self, **fields: Any) -> int:
         return self._insert("samples", fields)
 
+    def set_sample_meta(self, sample_id: int, favorite: bool | None = None, rating: int | None = None,
+                        tags: str | None = None) -> bool:
+        fields: dict[str, Any] = {}
+        if favorite is not None:
+            fields["favorite"] = int(favorite)
+        if rating is not None:
+            fields["rating"] = rating or None
+        if tags is not None:
+            fields["tags"] = tags.strip() or None
+        with self._lock:
+            if self.conn.execute("SELECT 1 FROM samples WHERE id = ?", (sample_id,)).fetchone() is None:
+                return False
+            self._update("samples", sample_id, fields)
+        return True
+
     def delete_samples(self, zip_id: int, kind: str | None = None) -> None:
         if kind:
             self.conn.execute("DELETE FROM samples WHERE zip_id = ? AND kind = ?", (zip_id, kind))

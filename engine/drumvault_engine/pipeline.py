@@ -138,7 +138,7 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
 
     return ZipAnalysis(
         file_name=ex.zip_path.name, file_sha1=ex.sha1, stems=[stems[n] for n in names],
-        tempo=TempoInfo(bpm=tres.bpm, raw_bpm=tres.raw_bpm, phase_samples=tres.phase_samples,
+        tempo=TempoInfo(bpm=tres.bpm, raw_bpm=tres.raw_bpm, detected_bpm=tres.detected_bpm, phase_samples=tres.phase_samples,
                         sample_rate=tres.sample_rate, confidence=tres.confidence,
                         source_stem=tres.source_stem, source_category=tres.source_category,
                         grid_warning=tres.grid_warning, bpm_warning=tres.bpm_warning,
@@ -337,7 +337,7 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         counts = _write_outputs(db, lib, zid, tag, analysis, outputs, settings, loops_only, ctx)
 
         db.update_zip(
-            zid, file_name=zip_path.name, detected_bpm=t.raw_bpm, bpm_override=ov.bpm,
+            zid, file_name=zip_path.name, detected_bpm=t.detected_bpm, bpm_override=ov.bpm,
             bpm_source_stem=t.source_stem, phase_samples=t.phase_samples,
             grid_offset_override_ms=ov.grid_offset_ms, tempo_confidence=t.confidence,
             key_label=k.label, key_camelot=k.camelot, key_confidence=k.confidence,

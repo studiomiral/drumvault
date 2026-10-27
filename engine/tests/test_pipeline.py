@@ -43,6 +43,9 @@ def test_all_fixtures_processed(library, fixtures):
         assert r.analysis.tempo.bpm == truth.bpm  # whole number, exact
         assert abs(r.analysis.tempo.raw_bpm - truth.bpm) <= 0.02
         assert not r.analysis.tempo.bpm_warning
+    with LibraryDB(library.path) as d:
+        for name, r in library.results.items():
+            assert d.get_zip(r.zip_id)["detected_bpm"] == fixtures.truths[name].bpm
         assert r.analysis.tempo.phase_samples == 0
         assert r.analysis.key.label == truth.key
         assert r.counts.oneshots > 0 and r.counts.loops > 0
@@ -287,9 +290,10 @@ def test_reprocess_keeps_favorites_and_applies_overrides(small_lib):
 def test_bpm_override(small_lib):
     settings, r = small_lib
     r2 = pipeline.process_zip(None, settings, zip_id=r.zip_id, overrides=Overrides(bpm=123.0))
-    assert r2.analysis.tempo.bpm == 123.0
+    assert r2.analysis.tempo.bpm == 123.0 and r2.analysis.tempo.detected_bpm == 124.0
     with LibraryDB(settings.library_path) as db:
-        assert db.get_zip(r.zip_id)["bpm_override"] == 123.0
+        z = db.get_zip(r.zip_id)
+        assert z["bpm_override"] == 123.0 and z["detected_bpm"] == 124.0
 
 
 def test_delete_zip(small_lib):

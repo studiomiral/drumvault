@@ -17,7 +17,8 @@ export type StemRole = "tempo" | "key" | "oneshots" | "loops";
 
 export interface TempoInfo {
   bpm: number;
-  raw_bpm: number;
+  raw_bpm: number;             // least-squares fit
+  detected_bpm: number;        // detection result ignoring the user's override
   phase_samples: number;
   sample_rate: number;
   confidence: number;
@@ -120,6 +121,7 @@ export type RpcRequest =
   | { id: string; method: "rebuild_loops"; params: { settings: EngineSettings } }
   | { id: string; method: "analyze_zip"; params: { path: string; settings?: EngineSettings } }
   | { id: string; method: "cancel"; params: { job_id: string } }
+  | { id: string; method: "set_sample_meta"; params: { sample_id: number; favorite?: boolean; rating?: number; tags?: string; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
   | { id: string; method: "shutdown"; params: Record<string, never> };
 
@@ -188,7 +190,7 @@ export interface ZipRow {
   file_name: string;
   file_sha1: string;
   original_path: string;
-  detected_bpm: number | null;
+  detected_bpm: number | null;   // detection result (whole number); effective = bpm_override ?? detected_bpm
   bpm_override: number | null;
   bpm_source_stem: string | null;
   phase_samples: number | null;

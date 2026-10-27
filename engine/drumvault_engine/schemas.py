@@ -24,7 +24,8 @@ StemRole = Literal["tempo", "key", "oneshots", "loops"]
 
 class TempoInfo(BaseModel):
     bpm: float
-    raw_bpm: float
+    raw_bpm: float                     # least-squares fit
+    detected_bpm: float = 0.0          # detection result ignoring the user's override
     phase_samples: int
     sample_rate: int
     confidence: float
@@ -99,7 +100,7 @@ class Overrides(BaseModel):
 # ---------------------------------------------------------------------------
 
 Method = Literal["process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "cancel", "health",
-                 "analyze_zip", "shutdown"]
+                 "analyze_zip", "set_sample_meta", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -136,6 +137,15 @@ class CancelParams(BaseModel):
 
 class AnalyzeZipParams(BaseModel):
     path: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SetSampleMetaParams(BaseModel):
+    """Favourite / rating / tags of one sample. Only the fields given are changed."""
+    sample_id: int
+    favorite: Optional[bool] = None
+    rating: Optional[int] = Field(default=None, ge=0, le=5)   # 0 clears the rating
+    tags: Optional[str] = None
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
