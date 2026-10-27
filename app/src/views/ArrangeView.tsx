@@ -34,6 +34,9 @@ export function ArrangeView() {
       } else if (e.key === 'Escape') {
         if (st.editingClip) st.openEditor(null)
         else st.select([])
+      } else if (e.key.toLowerCase() === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        duplicateSelection()
       } else if (e.key.toLowerCase() === 'l' && !e.metaKey && !e.ctrlKey) {
         st.edit('Toggle loop', (d) => {
           d.loop.enabled = !d.loop.enabled
@@ -88,7 +91,7 @@ export function deleteSelection(): void {
 }
 
 /**
- * ⌘D: copies of the selection placed right after it. With a section marker selected the
+ * ⌘D / R: copies of the selection placed right after it. With a section marker selected the
  * whole section is duplicated: its clips move by the section length and the marker is copied.
  */
 export function duplicateSelection(): void {

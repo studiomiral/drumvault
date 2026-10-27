@@ -16,6 +16,13 @@ export const MAX_LANE_HEIGHT = 200
 export const VELOCITY_GAIN: Record<Velocity, number> = { 0: 0, 1: 0.35, 2: 0.65, 3: 1 }
 
 export const LANE_COLORS = ['#7c3aed', '#c026d3', '#db2777', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb']
+/** Colour picker choices: the default lane colours, then lighter and darker variants. */
+export const LANE_PALETTE = [
+  ...LANE_COLORS,
+  '#a78bfa', '#e879f9', '#f472b6', '#fb923c', '#facc15', '#4ade80', '#22d3ee', '#60a5fa',
+  '#4c1d95', '#86198f', '#9d174d', '#9a3412', '#854d0e', '#166534', '#155e75', '#1e3a8a',
+  '#dc2626', '#0d9488', '#65a30d', '#78716c', '#475569', '#1f2937', '#94a3b8', '#d6d3d1',
+]
 
 export const MARKER_NAMES = ['Intro', 'Build', 'Drop', 'Break', 'Outro']
 const MARKER_COLORS: Record<string, string> = {

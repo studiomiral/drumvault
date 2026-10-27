@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { cx } from '../components/ui'
-import { LANE_COLORS, makeLane, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
+import { LANE_PALETTE, makeLane, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Lane } from '../types/project'
@@ -53,6 +54,9 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
   const edit = useProject((s) => s.edit)
   const clipCount = useProject((s) => s.project.clips.filter((c) => c.laneId === lane.id).length)
   const [name, setName] = useState<string | null>(null)
+  const [palette, setPalette] = useState<DOMRect | null>(null)
+  // Set while a control (volume, pan) is being dragged, so the lane itself doesn't start moving.
+  const controlDrag = useRef(false)
   const set = (label: string, patch: Partial<Lane>, coalesce?: string) =>
     edit(label, (d) => {
       Object.assign(d.lanes.find((l) => l.id === lane.id)!, patch)
@@ -81,6 +85,10 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
       style={{ height: lane.height }}
       draggable={name === null}
       onDragStart={(e) => {
+        if (controlDrag.current) {
+          e.preventDefault()
+          return
+        }
         e.dataTransfer.setData('application/x-drumvault-lane', lane.id)
         onDragStart()
       }}
@@ -91,9 +99,16 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
         onDropOn()
       }}
     >
-      <button title="Change colour" className="w-1.5 my-1.5 rounded-full shrink-0 cursor-pointer"
+      <button title="Change colour" className="w-2 my-1.5 rounded-full shrink-0 cursor-pointer hover:ring-2 hover:ring-accent/30"
               style={{ background: lane.color }}
-              onClick={() => set('Lane colour', { color: LANE_COLORS[(LANE_COLORS.indexOf(lane.color) + 1) % LANE_COLORS.length] })} />
+              onClick={(e) => setPalette(e.currentTarget.getBoundingClientRect())} />
+      {palette && (
+        <ColorPalette anchor={palette} value={lane.color} onClose={() => setPalette(null)}
+                      onPick={(color) => {
+                        set('Lane colour', { color })
+                        setPalette(null)
+                      }} />
+      )}
       <div className={cx('flex-1 min-w-0 flex', compact ? 'items-center gap-2' : 'flex-col justify-center gap-1')}>
         <div className="flex items-center gap-1.5 min-w-0">
           {name === null ? (
@@ -127,20 +142,97 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
         </div>
         {!compact && (
           <div className="flex items-center gap-1.5">
-            <input type="range" min={-60} max={6} step={0.5} value={lane.volumeDb} title={`Volume ${fmtDb(lane.volumeDb)} (double-click: 0 dB)`}
-                   onChange={(e) => set('Lane volume', { volumeDb: Number(e.target.value) }, `vol-${lane.id}`)}
-                   onDoubleClick={() => set('Lane volume', { volumeDb: 0 })}
-                   className="flex-1 min-w-0 h-1 accent-[#7c3aed]" />
+            <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb} reset={0}
+                       color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (double-click: 0 dB)`} dragging={controlDrag}
+                       onChange={(v) => set('Lane volume', { volumeDb: v }, `vol-${lane.id}`)} />
             <span className="w-11 text-right text-[10.5px] tabular-nums text-muted">{fmtDb(lane.volumeDb)}</span>
-            <input type="range" min={-1} max={1} step={0.05} value={lane.pan} title={`Pan ${fmtPan(lane.pan)} (double-click: centre)`}
-                   onChange={(e) => set('Lane pan', { pan: Number(e.target.value) }, `pan-${lane.id}`)}
-                   onDoubleClick={() => set('Lane pan', { pan: 0 })}
-                   className="w-12 h-1 accent-[#7c3aed]" />
+            <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}
+                       color={lane.color} title={`Pan ${fmtPan(lane.pan)} (double-click: centre)`} dragging={controlDrag}
+                       onChange={(v) => set('Lane pan', { pan: v }, `pan-${lane.id}`)} />
           </div>
         )}
       </div>
       <div onMouseDown={startResize} className="absolute left-0 right-0 -bottom-1 h-2 cursor-row-resize z-10" />
     </div>
+  )
+}
+
+/**
+ * A rectangle filled up to the value (from `origin`, default the minimum): click or drag
+ * to set it, double-click to reset. Marks `dragging` so the lane strip doesn't move along.
+ */
+function BarSlider({ min, max, step, value, reset, origin = min, color, title, className, dragging, onChange }: {
+  min: number
+  max: number
+  step: number
+  value: number
+  reset: number
+  origin?: number
+  color: string
+  title: string
+  className?: string
+  dragging: React.MutableRefObject<boolean>
+  onChange: (v: number) => void
+}) {
+  const frac = (v: number) => (v - min) / (max - min)
+  const from = Math.min(frac(origin), frac(value))
+  const to = Math.max(frac(origin), frac(value))
+  const fromX = (el: HTMLElement, clientX: number) => {
+    const r = el.getBoundingClientRect()
+    const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
+    return Math.round((min + f * (max - min)) / step) * step
+  }
+  return (
+    <div title={title} role="slider" aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
+         className={cx('relative h-3.5 rounded-[3px] border border-line bg-raised overflow-hidden cursor-ew-resize', className)}
+         onPointerDown={(e) => {
+           if (e.button !== 0) return
+           e.preventDefault()
+           e.stopPropagation()
+           dragging.current = true
+           e.currentTarget.setPointerCapture(e.pointerId)
+           onChange(fromX(e.currentTarget, e.clientX))
+         }}
+         onPointerMove={(e) => {
+           if (e.currentTarget.hasPointerCapture(e.pointerId)) onChange(fromX(e.currentTarget, e.clientX))
+         }}
+         onPointerUp={() => {
+           dragging.current = false
+         }}
+         onLostPointerCapture={() => {
+           dragging.current = false
+         }}
+         onDoubleClick={() => onChange(reset)}>
+      <div className="absolute inset-y-0 opacity-80" style={{ left: `${from * 100}%`, width: `${(to - from) * 100}%`, background: color }} />
+      {origin !== min && <div className="absolute inset-y-0 w-px bg-faint/60" style={{ left: `${frac(origin) * 100}%` }} />}
+    </div>
+  )
+}
+
+function ColorPalette({ anchor, value, onPick, onClose }: {
+  anchor: DOMRect
+  value: string
+  onPick: (color: string) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const top = Math.min(anchor.top, window.innerHeight - 140)
+  return createPortal(
+    <div className="fixed inset-0 z-50" onMouseDown={onClose}>
+      <div className="absolute grid grid-cols-8 gap-1.5 p-2.5 rounded-lg border border-line bg-panel shadow-lg"
+           style={{ left: anchor.right + 8, top }} onMouseDown={(e) => e.stopPropagation()}>
+        {LANE_PALETTE.map((c) => (
+          <button key={c} title={c} onClick={() => onPick(c)} style={{ background: c }}
+                  className={cx('w-5 h-5 rounded-[4px] hover:scale-110 transition-transform',
+                    c === value && 'ring-2 ring-offset-1 ring-text')} />
+        ))}
+      </div>
+    </div>,
+    document.body,
   )
 }
 

@@ -175,7 +175,7 @@ Algorithm:
 4. Source tracks are always whole-number BPM: round the refined BPM to the nearest integer. If it was more than ±0.05 away from that integer, flag `needs_review` (the detection is suspect) unless a filename BPM confirms it. (Configurable: `integer_bpm`.)
 5. If the zip name or any stem filename contains a BPM (regex `(\d{2,3}(?:\.\d+)?)\s?bpm`, case-insensitive) within ±1 of the detected value, use the filename BPM.
 6. **Grid phase / bar 1**: assume stems were exported from bar 1 (sample 0 = downbeat). Validate: if the fitted phase is within ±15 ms of 0 modulo one beat, use phase = 0. Otherwise use the first strong kick onset as the downbeat and flag `grid_warning`.
-7. **Confidence** = fraction of strong onsets within ±10 ms of the grid. Below 0.8 → zip status `needs_review`.
+7. **Confidence** = fraction of strong onsets within ±10 ms of the grid. Logged only: it never flags a zip or shows in the UI. The detected BPM is trusted; Lars overrides it when it's wrong.
 
 Output: `{bpm, phase_samples, confidence, source_stem, warnings[]}`.
 
@@ -401,7 +401,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - A job queue list: zip name, status chip, progress bar with the current stage, detected BPM + confidence, key, and sample counts.
 - Clicking a zip opens a detail panel:
   - Stem table: filename, category (dropdown to override), an "auto" badge if auto-classified, and which roles the stem was used for.
-  - BPM/grid: detected value, confidence, source stem, override field, and a grid-offset nudge.
+  - BPM/grid: detected value, source stem, override field, and a grid-offset nudge.
   - Key: detected value, confidence, override dropdown.
   - Warnings.
   - Buttons: **Reprocess**, **Delete samples from library**, **Reveal in Finder**.
@@ -425,8 +425,8 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - Saved as JSON `.dvproj` files (default folder `<Library>/.drumvault/projects/`), with autosave.
 
 **Lanes**
-- Default lanes: Kick, Clap, Snare, Hats, Perc, Tops, Groove. The user can add, rename, reorder, color, and delete lanes.
-- Per lane: volume (dB fader), mute, solo, and pan.
+- Default lanes: Kick, Clap, Snare, Hats, Perc, Tops, Groove. The user can add, rename, reorder, color (click the colour strip for a palette), and delete lanes.
+- Per lane: volume (dB, a bar filled to the level: click/drag to set, double-click for 0 dB), mute, solo, and pan (same bar, filled from the centre).
 - **Each lane exports as one stem.**
 
 **Clip types**
@@ -436,7 +436,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 
 **Editing**
 - Snap to bar by default; hold ⌥ to snap to beats.
-- Select, multi-select (drag a marquee or ⇧-click), move, copy (⌥-drag), ⌘D duplicate (places the copy right after), Delete.
+- Select, multi-select (drag a marquee or ⇧-click), move, copy (⌥-drag), R or ⌘D duplicate (places the copy right after), Delete.
 - ⌘Z / ⇧⌘Z undo/redo (command-pattern history in the store, minimum 100 steps).
 - **Section markers**: named ranges (Intro, Build, Drop, Break, Outro, custom), drawn as a colored ruler band. Clicking a marker selects all clips in that range, enabling a "duplicate section" workflow.
 - Horizontal zoom (pinch / ⌘ + scroll) and scroll; vertical lane height adjustment.

@@ -108,7 +108,7 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
         grid_offset_ms=overrides.grid_offset_ms)
     for n in src_names:
         stems[n].used_for.append("tempo")
-    ctx.progress("tempo", 0.2, f"{src_cat.title()}: {tres.bpm:.2f} BPM (conf {tres.confidence:.2f})")
+    ctx.progress("tempo", 0.2, f"{src_cat.title()}: {tres.bpm:.2f} BPM")
     ctx.check()
 
     warnings = list(ex.warnings)
@@ -301,10 +301,8 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         ex._cache.clear()
         t, k = analysis.tempo, analysis.key
         warnings = list(analysis.warnings)
+        # Tempo confidence is not used: the detected BPM is trusted, Lars overrides it if wrong.
         status = "done"
-        if t.confidence < th.tempo_min_confidence:
-            status = "needs_review"
-            warnings.append(f"Low tempo confidence ({t.confidence:.2f})")
         if t.grid_warning or t.bpm_warning:
             status = "needs_review"
 

@@ -123,11 +123,6 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
             <span className="text-muted">Detected</span>
             <span>
               {formatBpm(z.detected_bpm)} BPM
-              {z.tempo_confidence != null && (
-                <span className={cx('ml-2', z.tempo_confidence < 0.8 ? 'text-warn' : 'text-faint')}>
-                  confidence {z.tempo_confidence.toFixed(2)}
-                </span>
-              )}
             </span>
             <span className="text-muted">From</span>
             <span className="truncate text-muted" title={z.bpm_source_stem ?? ''}>{z.bpm_source_stem ?? '–'}</span>

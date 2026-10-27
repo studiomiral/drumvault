@@ -16,7 +16,7 @@ export function BottomPanel() {
   return (
     <div className="h-10 shrink-0 border-t border-line bg-panel px-4 flex items-center text-[12px] text-faint gap-4">
       <span>Drag loops and one-shots from the library onto a lane.</span>
-      <span>Drag clip edges to extend · ⌥ snaps to beats · ⌥-drag copies · ⌘D duplicates · double-click a pattern to edit it</span>
+      <span>Drag clip edges to extend · ⌥ snaps to beats · ⌥-drag copies · R duplicates · double-click a pattern to edit it</span>
     </div>
   )
 }

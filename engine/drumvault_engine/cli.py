@@ -91,7 +91,7 @@ def cmd_analyze(args) -> int:
         print(f"  {s.category:<10} {s.file_name}{flag}  {s.duration_s:.1f}s {s.sample_rate}Hz "
               f"{s.channels}ch  {roles}")
     t = a.tempo
-    print(f"Tempo: {t.bpm:g} BPM (raw {t.raw_bpm:.3f}, conf {t.confidence:.2f}, from {t.source_stem}), "
+    print(f"Tempo: {t.bpm:g} BPM (raw {t.raw_bpm:.3f}, from {t.source_stem}), "
           f"phase {t.phase_samples} samples")
     k = a.key
     print(f"Key:   {k.label or 'NoKey'} {k.camelot or ''} (conf {k.confidence:.2f}, {k.backend}"

@@ -150,7 +150,7 @@ function Queue({ jobs, onOpen }: { jobs: JobInfo[]; onOpen: (zipId: number) => v
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="truncate font-medium" title={j.path ?? j.label}>{j.label}</span>
                   <StatusChip status={j.status} />
-                  {t && <Chip>{formatBpm(t.bpm)} BPM · {t.confidence.toFixed(2)}</Chip>}
+                  {t && <Chip>{formatBpm(t.bpm)} BPM</Chip>}
                   {k && <Chip>{k.label ?? 'NoKey'}{k.uncertain && k.label ? '?' : ''}</Chip>}
                 </div>
                 <div className="text-[12px] text-muted mt-1 truncate select-text">
@@ -207,8 +207,7 @@ function ZipTable({ zips, selected, onSelect }: {
                 <td className="px-3 py-2"><StatusChip status={z.status} /></td>
                 <td className="px-3 py-2">
                   {formatBpm(bpm)}
-                  {z.bpm_override != null ? <span className="text-accent ml-1" title="Set manually">●</span>
-                    : z.tempo_confidence != null && <span className="text-faint ml-1.5">{z.tempo_confidence.toFixed(2)}</span>}
+                  {z.bpm_override != null && <span className="text-accent ml-1" title="Set manually">●</span>}
                 </td>
                 <td className="px-3 py-2">
                   {z.key_label ?? <span className="text-faint">–</span>}

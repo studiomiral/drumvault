@@ -18,7 +18,7 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
       ['Drag on the ruler', 'Set the loop region'], ['L', 'Loop on / off'],
       ['Click, ⇧-click, drag on empty space', 'Select clips'], ['⌘A', 'Select all'],
       ['Drag', 'Move (snaps to bars)'], ['⌥ while dragging', 'Snap to beats'], ['⌥ when clicking, then drag', 'Copy'],
-      ['Drag a clip edge', 'Extend (repeats) / trim'], ['⌘D', 'Duplicate after the selection (or the selected section)'],
+      ['Drag a clip edge', 'Extend (repeats) / trim'], ['R / ⌘D', 'Duplicate after the selection (or the selected section)'],
       ['← / →', 'Nudge a bar (⌥: a beat)'], ['⌫', 'Delete'], ['⌘Z / ⇧⌘Z', 'Undo / redo'],
       ['Double-click a pattern', 'Step editor (click cycles full → medium → soft → off)'],
       ['Drag in the top band', 'Add a section marker; click it to select its clips'],

@@ -55,10 +55,10 @@ def test_peaks():
 
 def test_settings_roundtrip():
     s = Settings(library_bpm=126.0)
-    s.thresholds.tempo_min_confidence = 0.7
+    s.thresholds.tempo_phase_tolerance_ms = 7.0
     d = s.to_dict()
     s2 = Settings.from_dict({**d, "unknown_key": 1})
-    assert s2.library_bpm == 126.0 and s2.thresholds.tempo_min_confidence == 0.7
+    assert s2.library_bpm == 126.0 and s2.thresholds.tempo_phase_tolerance_ms == 7.0
     assert s2.processing_hash() == s.processing_hash()
     s2.library_path = "/elsewhere"
     assert s2.processing_hash() == s.processing_hash()

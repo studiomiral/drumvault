@@ -88,7 +88,6 @@ class Thresholds:
     tempo_filename_tolerance: float = 1.0   # use filename BPM within this
     tempo_phase_tolerance_ms: float = 15.0
     tempo_confidence_window_ms: float = 10.0
-    tempo_min_confidence: float = 0.8       # below -> needs_review
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak
     tempo_rms_floor_db: float = -80.0       # log-RMS novelty floor (relative to the loudest frame)
