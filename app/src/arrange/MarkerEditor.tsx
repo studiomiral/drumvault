@@ -19,7 +19,7 @@ export function MarkerEditor({ marker, x, onClose }: { marker: Marker; x: number
     onClose()
   }
   return (
-    <div className="absolute z-30 top-6 rounded-lg border border-line bg-panel shadow-xl shadow-violet-900/10 p-2.5 flex items-center gap-2"
+    <div className="absolute z-30 top-6 rounded-xl glass-strong p-2.5 flex items-center gap-2"
          style={{ left: Math.max(8, x) }} onMouseDown={(e) => e.stopPropagation()}>
       <input autoFocus list="dv-marker-names" className={inputClass + ' w-36'} value={name}
              onChange={(e) => setName(e.target.value)}

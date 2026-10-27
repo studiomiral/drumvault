@@ -26,7 +26,7 @@ export function EngineBanner() {
   const missing = deps?.checks.filter((c) => !c.ok) ?? []
   return (
     <div className={cx('mx-6 mt-4 rounded-lg border px-4 py-3',
-      starting ? 'border-line bg-panel' : 'border-[#fecaca] bg-[#fef2f2]')}>
+      starting ? 'border-line bg-panel' : 'border-[rgb(248_113_113/0.3)] bg-[rgb(248_113_113/0.1)]')}>
       <div className="flex items-center gap-3">
         <div className="flex-1">
           <div className="font-medium">

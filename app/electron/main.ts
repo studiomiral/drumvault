@@ -2,7 +2,7 @@
 // All heavy work happens in the Python sidecar; the main process only routes messages
 // and runs small, indexed SQLite reads.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
@@ -294,8 +294,14 @@ function createWindow(): void {
     height: 920,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: '#f5f4fa',
     title: 'Drumvault',
+    // macOS: frosted window (native vibrancy) behind the glass UI, traffic lights over the sidebar.
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 20 },
+          vibrancy: 'under-window' as const, visualEffectState: 'active' as const, backgroundColor: '#00000000',
+        }
+      : { backgroundColor: '#0b0b0c' }),
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -371,6 +377,7 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
+  nativeTheme.themeSource = 'dark' // the UI is dark-only; keep the vibrancy material dark too
   settings = await loadSettings(settingsFile())
   reader = new LibraryReader(settings.libraryPath)
   registerIpc()

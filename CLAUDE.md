@@ -6,7 +6,7 @@ This repo is **Drumvault**, a personal macOS desktop app. `SCOPE.md` is the sour
 Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out → arrange drums on a mini timeline → export full-length drum stems for Logic Pro.
 
 ## Stack
-- `app/` — Electron + React + Vite (electron-vite) + TypeScript + Tailwind + Zustand. Web Audio for playback/export. Light theme with purple gradient accents.
+- `app/` — Electron + React + Vite (electron-vite) + TypeScript + Tailwind + Zustand. Web Audio for playback/export. Dark glass theme with a subtle yellow accent (see SCOPE.md §6.1).
 - `engine/` — Python 3.12 sidecar managed with **uv**: numpy, scipy, soundfile, librosa, essentia. Time-stretch via the `rubberband` CLI.
 - SQLite library index in `<Library>/.drumvault/library.sqlite` (engine writes, app reads).
 - App ↔ engine: JSON-lines RPC over stdin/stdout (see SCOPE.md §5.14). The engine must only print RPC messages to stdout; all logs go to stderr.

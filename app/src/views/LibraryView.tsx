@@ -118,8 +118,8 @@ export function LibraryView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
-        <h1 className="text-[15px] font-semibold mr-2">Library</h1>
+      <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
+        <h1 className="font-display text-[21px] font-medium mr-2">Library</h1>
         <input ref={searchRef} className={cx(inputClass, 'w-64')} placeholder="Search names and tags  ⌘F"
                value={search} onChange={(e) => setSearch(e.target.value)} />
         <Segmented<'all' | SampleKind> value={filter.kind ?? 'all'}
@@ -219,10 +219,10 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
     >
       <button onClick={onPlayToggle}
               className={cx('w-7 h-7 rounded-full flex items-center justify-center shrink-0',
-                playing ? 'bg-brand text-white shadow-sm shadow-violet-500/30' : 'text-muted hover:text-accent hover:bg-raised')}>
+                playing ? 'bg-brand text-on-accent shadow-sm shadow-black/30' : 'text-muted hover:text-accent hover:bg-raised')}>
         {playing ? <IconStop className="w-3.5 h-3.5" /> : <IconPlay className="w-3.5 h-3.5" />}
       </button>
-      <Waveform id={s.id} width={150} height={28} color={playing ? '#7c3aed' : selected ? '#6b6390' : '#b3acc9'} />
+      <Waveform id={s.id} width={150} height={28} color={playing ? '#e2c35f' : selected ? '#bdbab3' : '#5d5b57'} />
       <div className="flex-1 min-w-0">
         <div className="truncate text-[12.5px]">{s.name}</div>
         <div className="text-[11px] text-faint truncate">{s.source_code} · {formatDuration(s.duration_s)}</div>
@@ -245,7 +245,7 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
       <span className="flex gap-0.5 w-[58px] shrink-0" title="Rating (1–5)">
         {[1, 2, 3, 4, 5].map((r) => (
           <button key={r} onClick={() => onRate(r)}
-                  className={cx('w-2.5 h-2.5 rounded-full', (s.rating ?? 0) >= r ? 'bg-brand' : 'bg-[#dcd6ea] hover:bg-[#c4bcdc]')} />
+                  className={cx('w-2.5 h-2.5 rounded-full', (s.rating ?? 0) >= r ? 'bg-brand' : 'bg-[rgb(255_255_255/0.12)] hover:bg-[rgb(255_255_255/0.22)]')} />
         ))}
       </span>
     </div>
@@ -284,7 +284,7 @@ function toggle<T>(list: T[] | undefined, v: T): T[] {
 
 function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | null; onReset: () => void; filtered: boolean }) {
   const { filter, setFilter } = useLibrary()
-  if (!facets) return <aside className="w-[232px] shrink-0 border-r border-line bg-panel" />
+  if (!facets) return <aside className="w-[232px] shrink-0 border-r border-line bg-panel-2" />
 
   const catCounts = new Map<string, number>()
   for (const c of facets.categories) {
@@ -296,7 +296,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
   const implied = filter.compatible ? expandCompatible(selectedKeys.filter((k) => k !== 'NoKey')) : []
 
   return (
-    <aside className="w-[232px] shrink-0 border-r border-line bg-panel overflow-y-auto px-4 py-4 space-y-6 text-[12.5px]">
+    <aside className="w-[232px] shrink-0 border-r border-line bg-panel-2 overflow-y-auto px-4 py-4 space-y-6 text-[12.5px]">
       {filtered && (
         <button onClick={onReset} className="text-accent hover:underline text-[12px]">Clear all filters</button>
       )}
@@ -323,7 +323,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
           <label className="flex items-center gap-1.5 text-[11.5px] text-muted cursor-pointer"
                  title="Also show keys next to the selected ones on the Camelot wheel">
             <input type="checkbox" checked={!!filter.compatible}
-                   onChange={(e) => setFilter({ compatible: e.target.checked })} className="accent-[#7c3aed]" />
+                   onChange={(e) => setFilter({ compatible: e.target.checked })} className="accent-[#e2c35f]" />
             compatible
           </label>
         </div>
@@ -336,10 +336,10 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
               <button key={k.label} onClick={() => setFilter({ keys: toggle(filter.keys, k.label) })}
                       title={`${k.label} (${k.camelot}) · ${n} samples`}
                       className={cx('h-9 rounded-md flex flex-col items-center justify-center leading-none',
-                        on ? 'bg-brand text-white' : viaCompat ? 'bg-accent-soft text-accent'
+                        on ? 'bg-brand text-on-accent' : viaCompat ? 'bg-accent-soft text-accent'
                           : n ? 'bg-panel-2 text-text hover:bg-raised' : 'bg-panel-2 text-faint/60 hover:bg-raised')}>
                 <span className="text-[12px] font-medium">{k.label}</span>
-                <span className={cx('text-[9.5px] mt-0.5', on ? 'text-white/75' : 'text-faint')}>{k.camelot}</span>
+                <span className={cx('text-[9.5px] mt-0.5', on ? 'text-on-accent/75' : 'text-faint')}>{k.camelot}</span>
               </button>
             )
           })}
@@ -347,7 +347,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
         {keyCounts.has('NoKey') && (
           <button onClick={() => setFilter({ keys: toggle(filter.keys, 'NoKey') })}
                   className={cx('mt-1 w-full h-7 rounded-md text-[12px]',
-                    selectedKeys.includes('NoKey') ? 'bg-brand text-white' : 'bg-panel-2 text-muted hover:bg-raised')}>
+                    selectedKeys.includes('NoKey') ? 'bg-brand text-on-accent' : 'bg-panel-2 text-muted hover:bg-raised')}>
             No key ({keyCounts.get('NoKey')})
           </button>
         )}
@@ -360,7 +360,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
             {facets.bars.map((b) => (
               <button key={b} onClick={() => setFilter({ bars: toggle(filter.bars, b) })}
                       className={cx('h-7 px-2.5 rounded-md',
-                        filter.bars?.includes(b) ? 'bg-brand text-white' : 'bg-panel-2 text-muted hover:bg-raised')}>
+                        filter.bars?.includes(b) ? 'bg-brand text-on-accent' : 'bg-panel-2 text-muted hover:bg-raised')}>
                 {b} bar{b === 1 ? '' : 's'}
               </button>
             ))}

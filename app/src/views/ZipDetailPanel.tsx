@@ -43,7 +43,7 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
   }, [detail])
 
   if (!detail) {
-    return <aside className="w-[460px] shrink-0 border-l border-line bg-panel" />
+    return <aside className="w-[460px] shrink-0 border-l border-line bg-panel-2" />
   }
   const z = detail.zip
   const detectedOffsetMs = z.phase_samples != null ? (z.phase_samples / sourceSr) * 1000 : null
@@ -74,7 +74,7 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
   }
 
   return (
-    <aside className="w-[460px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0">
+    <aside className="w-[460px] shrink-0 border-l border-line bg-panel-2 flex flex-col min-h-0">
       <div className="px-5 pt-4 pb-3 border-b border-line">
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">

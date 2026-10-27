@@ -50,8 +50,8 @@ export function SettingsView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
-        <h1 className="text-[15px] font-semibold flex-1">Settings</h1>
+      <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
+        <h1 className="font-display text-[21px] font-medium flex-1">Settings</h1>
         <Button variant="ghost" disabled={!dirty} onClick={() => {
           setDraft(saved)
           setPaths({ enginePath: settings.enginePath ?? '', uvPath: settings.uvPath ?? '' })
@@ -72,7 +72,7 @@ export function SettingsView() {
             </p>
             <Field label="Library BPM" hint="loops and FX/fills are stretched to this tempo">{num('library_bpm')}</Field>
             {staleLoops.length > 0 && (
-              <div className="ml-[192px] mt-1 mb-2 rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-[12px] flex items-center gap-3">
+              <div className="ml-[192px] mt-1 mb-2 rounded-md border border-[rgb(251_191_36/0.3)] bg-[rgb(251_191_36/0.08)] px-3 py-2 text-[12px] flex items-center gap-3">
                 <span className="flex-1 text-warn">
                   The library has loops and FX/fills at {staleLoops.join(', ')} BPM. Rebuild them at {saved.library_bpm} BPM
                   (one-shots stay; the original zips must still exist).
@@ -94,7 +94,7 @@ export function SettingsView() {
             </Field>
             <Field label="Whole-number BPM" hint="source tracks are always integer BPM">
               <input type="checkbox" checked={!!draft.integer_bpm} onChange={(e) => set('integer_bpm', e.target.checked)}
-                     className="accent-[#7c3aed]" />
+                     className="accent-[#e2c35f]" />
             </Field>
             <Field label="Max stretch" hint="skip loops beyond this tempo change">
               <input type="number" className={cx(inputClass, 'w-24')} value={Math.round(draft.max_stretch * 100)}

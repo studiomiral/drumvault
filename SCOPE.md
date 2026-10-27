@@ -393,7 +393,7 @@ uv run python -m drumvault_engine cli analyze <zip>        # prints classificati
 
 ### 6.1 Layout
 
-A single window with three tabs or a left nav: **Process**, **Library**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a light theme with purple gradient accents.
+A single window with three tabs or a left nav: **Process**, **Library**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark glass theme with a subtle yellow accent (muted gold, used sparingly: flat fills and tints, no glows; primary buttons are a soft yellow tint): on macOS the window is frosted (native dark vibrancy, hidden title bar), the sidebar sits on it and the views on a translucent glass card over a dark backdrop with a faint warm glow; dialogs and popovers are stronger glass. Type pairs a book serif for titles (Newsreader) with a grotesk for the UI (Hanken Grotesk), bundled locally as a free stand-in for Claude's typefaces.
 
 ### 6.2 Process view
 
@@ -435,7 +435,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4".
 
 **Editing**
-- Snap to bar by default; hold ⌥ to snap to beats.
+- Snapping follows the zoom: moves and resizes snap to the finest division at least 14 px wide (several bars zoomed far out, bars at the default zoom, then beats, 8ths and 16ths zoomed in close). Hold ⌥ to snap four times finer, down to 16ths.
 - Select, multi-select (drag a marquee or ⇧-click), move, copy (⌥-drag), R or ⌘D duplicate (places the copy right after), Delete.
 - ⌘Z / ⇧⌘Z undo/redo (command-pattern history in the store, minimum 100 steps).
 - **Section markers**: named ranges (Intro, Build, Drop, Break, Outro, custom), drawn as a colored ruler band. Clicking a marker selects all clips in that range, enabling a "duplicate section" workflow.

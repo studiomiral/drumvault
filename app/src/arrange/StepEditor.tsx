@@ -16,7 +16,7 @@ export function BottomPanel() {
   return (
     <div className="h-10 shrink-0 border-t border-line bg-panel px-4 flex items-center text-[12px] text-faint gap-4">
       <span>Drag loops and one-shots from the library onto a lane.</span>
-      <span>Drag clip edges to extend · ⌥ snaps to beats · ⌥-drag copies · R duplicates · double-click a pattern to edit it</span>
+      <span>Drag clip edges to extend · snapping follows the zoom · ⌥ snaps finer · ⌥-drag copies · R duplicates · double-click a pattern to edit it</span>
     </div>
   )
 }
@@ -26,7 +26,7 @@ function GainSlider({ clip }: { clip: Clip }) {
   return (
     <label className="flex items-center gap-2 text-[12px] text-muted">
       Gain
-      <input type="range" min={-30} max={6} step={0.5} value={clip.gainDb} className="w-28 accent-[#7c3aed]"
+      <input type="range" min={-30} max={6} step={0.5} value={clip.gainDb} className="w-28 accent-[#e2c35f]"
              onChange={(e) => edit('Clip gain', (d) => {
                d.clips.find((c) => c.id === clip.id)!.gainDb = Number(e.target.value)
              }, { coalesce: `gain-${clip.id}` })}
@@ -122,7 +122,7 @@ function StepEditor({ clip, onClose }: { clip: PatternClip; onClose: () => void 
             <button key={i} title={`Step ${i + 1} · ${['off', 'soft', 'medium', 'full'][v]} (click: cycle, shift/right-click: off)`}
                     onMouseDown={(e) => cycle(i, e)}
                     className={cx('relative h-11 rounded-md overflow-hidden ring-accent ring-offset-1 transition-colors',
-                      v ? 'bg-[#ede8fb]' : barStart ? 'bg-[#e9e5f4]' : beatStart ? 'bg-[#f0edf8]' : 'bg-[#f6f4fb]',
+                      v ? 'bg-[rgb(255_255_255/0.1)]' : barStart ? 'bg-[rgb(255_255_255/0.09)]' : beatStart ? 'bg-[rgb(255_255_255/0.065)]' : 'bg-[rgb(255_255_255/0.04)]',
                       'hover:brightness-95')}>
               {v > 0 && <span className="absolute inset-x-0 bottom-0 bg-brand" style={{ height: `${(v / 3) * 100}%` }} />}
               {barStart && <span className="absolute left-1 top-0.5 text-[9.5px] text-faint">{i / STEPS_PER_BAR + 1}</span>}

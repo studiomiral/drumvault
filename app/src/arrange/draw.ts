@@ -7,22 +7,25 @@ import type { Clip, LoopRegion, Marker, Project } from '../types/project'
 import { beatToX, MARKER_H, RULER_H, rulerStep, TOP, type LaneBox } from './geometry'
 import { clipPeaks } from './peaks'
 
+// Translucent fills: the timeline sits on a dark glass card and lets it show through.
 const C = {
-  bg: '#f5f4fa',
-  laneA: '#ffffff',
-  laneB: '#faf9fd',
-  grid: '#ece9f4',
-  gridBeat: '#f1eef8',
-  gridBar: '#ddd8ea',
-  gridBar4: '#cdc6e0',
-  ruler: '#ffffff',
-  rulerText: '#5f5975',
-  markerBand: '#f6f4fc',
-  line: '#e5e1f0',
-  beyond: '#ebe8f3',
-  accent: '#7c3aed',
-  missing: '#dc2626',
+  bg: 'rgba(0, 0, 0, 0)',
+  laneA: 'rgba(255, 255, 255, 0.035)',
+  laneB: 'rgba(255, 255, 255, 0.012)',
+  grid: 'rgba(255, 255, 255, 0.045)',
+  gridBeat: 'rgba(255, 255, 255, 0.025)',
+  gridBar: 'rgba(255, 255, 255, 0.09)',
+  gridBar4: 'rgba(255, 255, 255, 0.16)',
+  ruler: 'rgba(255, 255, 255, 0.05)',
+  rulerText: '#a6a39d',
+  markerBand: 'rgba(255, 255, 255, 0.03)',
+  line: 'rgba(255, 255, 255, 0.08)',
+  beyond: 'rgba(0, 0, 0, 0.28)',
+  accent: '#e2c35f',
+  missing: '#f87171',
 }
+
+const UI_FONT = '"Hanken Grotesk Variable", system-ui, sans-serif'
 
 export interface BaseInput {
   project: Project
@@ -111,7 +114,7 @@ export function drawBase(g: CanvasRenderingContext2D, d: BaseInput): void {
     g.fillRect(beatToX(sel.start, px, sx), TOP, (sel.end - sel.start) * px, lanesBottom - TOP)
   }
   if (d.loop.enabled) {
-    g.fillStyle = '#7c3aed0a'
+    g.fillStyle = '#e2c35f0a'
     g.fillRect(beatToX(d.loop.start, px, sx), TOP, (d.loop.end - d.loop.start) * px, lanesBottom - TOP)
   }
   const endX = beatToX(endBeat, px, sx)
@@ -150,8 +153,8 @@ export function drawBase(g: CanvasRenderingContext2D, d: BaseInput): void {
     g.beginPath()
     g.rect(x0 + 6, 0, Math.max(0, x1 - x0 - 10), MARKER_H)
     g.clip()
-    g.fillStyle = '#1e1b2e'
-    g.font = '600 11px Inter, system-ui, sans-serif'
+    g.fillStyle = '#ecebe8'
+    g.font = `600 11px ${UI_FONT}`
     g.textBaseline = 'middle'
     g.fillText(m.name, Math.max(x0 + 8, 4), MARKER_H / 2 + 0.5)
     g.restore()
@@ -165,28 +168,28 @@ export function drawBase(g: CanvasRenderingContext2D, d: BaseInput): void {
     const w = (d.loop.end - d.loop.start) * px
     if (d.loop.enabled) {
       const grad = g.createLinearGradient(x0, 0, x0 + w, 0)
-      grad.addColorStop(0, '#6d28d955')
-      grad.addColorStop(1, '#c026d355')
+      grad.addColorStop(0, '#e2c35f55')
+      grad.addColorStop(1, '#e2c35f40')
       g.fillStyle = grad
     } else {
-      g.fillStyle = '#9a94ae30'
+      g.fillStyle = '#ffffff1f'
     }
     roundRect(g, x0, MARKER_H + 2, w, 7, 3)
     g.fill()
   }
   const step = rulerStep(px)
-  g.font = '11px Inter, system-ui, sans-serif'
+  g.font = `11px ${UI_FONT}`
   g.textBaseline = 'alphabetic'
   for (let bar = Math.floor(firstBeat / 4); bar * 4 <= lastBeat; bar++) {
     const x = Math.round(beatToX(bar * 4, px, sx)) + 0.5
     const label = bar % step === 0
-    g.strokeStyle = label ? '#b9b1d0' : '#ddd8ea'
+    g.strokeStyle = label ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.12)'
     g.beginPath()
     g.moveTo(x, TOP - (label ? 12 : 6))
     g.lineTo(x, TOP)
     g.stroke()
     if (label) {
-      g.fillStyle = bar * 4 >= endBeat ? '#b9b1d0' : C.rulerText
+      g.fillStyle = bar * 4 >= endBeat ? '#5d5b57' : C.rulerText
       g.fillText(String(bar + 1), x + 4, TOP - 5)
     }
   }
@@ -214,7 +217,7 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
   g.save()
   g.globalAlpha = alpha
   roundRect(g, x0 + 0.5, y, w, h, 5)
-  g.fillStyle = selected ? `${color}38` : `${color}1c`
+  g.fillStyle = selected ? `${color}4d` : `${color}2b`
   g.fill()
   g.lineWidth = selected ? 2 : 1
   g.strokeStyle = missing ? C.missing : selected ? color : `${color}88`
@@ -227,8 +230,8 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
   else drawPatternBody(g, c, x0, x1, bodyTop, bodyH, px, color, W)
 
   if (h >= 34 && w >= 40) {
-    g.fillStyle = missing ? C.missing : '#2b2540'
-    g.font = `${selected ? 600 : 500} 11px Inter, system-ui, sans-serif`
+    g.fillStyle = missing ? C.missing : '#ecebe8'
+    g.font = `${selected ? 600 : 500} 11px ${UI_FONT}`
     g.textBaseline = 'top'
     const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name)
     g.fillText(label, Math.max(x0 + 6, 4), y + 3)
@@ -245,7 +248,7 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
 
 function shortName(name: string): string {
   // OS_Kick_Am_S0001-deep-groove_01 -> Kick · S0001 01
-  const m = name.match(/^(?:OS|LP)_([A-Za-z]+)_(?:[\d.]+_)?[^_]+_(S\d{4})[^_]*_(?:(\d+bar)_)?(\d+)$/)
+  const m = name.match(/^(?:OS|LP|FX|FL)_([A-Za-z]+)_(?:[\d.]+_)?[^_]+_(S\d{4})[^_]*_(?:(\d+bar)_)?(\d+)$/)
   return m ? `${m[1]} · ${m[2]}${m[3] ? ` · ${m[3]}` : ''} · ${m[4]}` : name
 }
 
@@ -322,8 +325,8 @@ export interface OverlayInput {
 export function drawOverlay(g: CanvasRenderingContext2D, d: OverlayInput): void {
   g.clearRect(0, 0, d.width, d.height)
   if (d.drop) {
-    g.fillStyle = '#7c3aed22'
-    g.strokeStyle = '#7c3aed'
+    g.fillStyle = '#e2c35f1c'
+    g.strokeStyle = '#e2c35f'
     g.setLineDash([4, 3])
     roundRect(g, d.drop.x, d.drop.y, d.drop.w, d.drop.h, 5)
     g.fill()
@@ -333,8 +336,8 @@ export function drawOverlay(g: CanvasRenderingContext2D, d: OverlayInput): void 
   if (d.marquee) {
     const x = Math.min(d.marquee.x0, d.marquee.x1)
     const y = Math.min(d.marquee.y0, d.marquee.y1)
-    g.fillStyle = '#7c3aed14'
-    g.strokeStyle = '#7c3aedaa'
+    g.fillStyle = '#e2c35f12'
+    g.strokeStyle = '#e2c35f99'
     g.fillRect(x, y, Math.abs(d.marquee.x1 - d.marquee.x0), Math.abs(d.marquee.y1 - d.marquee.y0))
     g.strokeRect(x + 0.5, y + 0.5, Math.abs(d.marquee.x1 - d.marquee.x0), Math.abs(d.marquee.y1 - d.marquee.y0))
   }

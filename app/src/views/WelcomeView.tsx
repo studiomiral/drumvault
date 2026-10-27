@@ -11,9 +11,10 @@ export function WelcomeView() {
   }
 
   return (
-    <div className="h-full flex items-center justify-center bg-bg">
-      <div className="w-[520px] rounded-2xl border border-line bg-panel p-8 shadow-xl shadow-violet-900/5">
-        <div className="text-[22px] font-semibold tracking-tight">Welcome to <span className="text-brand">Drumvault</span></div>
+    <div className="app-drag h-full flex items-center justify-center">
+      <div className="aurora" />
+      <div className="w-[520px] rounded-3xl glass-strong p-9">
+        <div className="font-display text-[30px] font-medium leading-tight">Welcome to <span className="text-brand">Drumvault</span></div>
         <p className="text-muted mt-2 leading-relaxed">
           Drumvault turns zips of stems into one drum sample library: one-shots and tempo-matched loops,
           labelled with the source track's key. Choose the folder for that library. Everything goes in

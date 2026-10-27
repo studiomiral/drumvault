@@ -42,7 +42,7 @@ export function LibraryPanel() {
       : ['snare', 'clap', 'hat', 'hat_closed', 'hat_open', 'ride', 'shaker', 'perc', 'top', 'groove', 'drums']
 
   return (
-    <aside className="w-[300px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0">
+    <aside className="w-[300px] shrink-0 border-l border-line bg-panel-2 flex flex-col min-h-0">
       <div className="p-3 space-y-2 border-b border-line">
         <input className={cx(inputClass, 'w-full')} placeholder="Search library" value={search}
                onChange={(e) => setSearch(e.target.value)} />
@@ -78,7 +78,7 @@ export function LibraryPanel() {
                className={cx('h-full flex items-center gap-2 px-3 border-b border-line/60 cursor-grab', on ? 'bg-brand-soft' : 'hover:bg-panel-2')}>
             <button onClick={() => audition.toggle(s)}
                     className={cx('w-6 h-6 rounded-full flex items-center justify-center shrink-0',
-                      on ? 'bg-brand text-white' : 'text-muted hover:text-accent')}>
+                      on ? 'bg-brand text-on-accent' : 'text-muted hover:text-accent')}>
               {on ? <IconStop className="w-3 h-3" /> : <IconPlay className="w-3 h-3" />}
             </button>
             <div className="flex-1 min-w-0">

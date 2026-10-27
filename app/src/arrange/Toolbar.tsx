@@ -17,7 +17,7 @@ export function Toolbar() {
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
 
   return (
-    <div className="h-14 shrink-0 flex items-center gap-2 px-4 border-b border-line bg-panel">
+    <div className="app-drag h-14 shrink-0 flex items-center gap-2 px-4 border-b border-line">
       <ProjectMenu />
       <input className={cx(inputClass, 'w-44 font-medium')} value={project.name} title="Project name"
              onChange={(e) => edit('Rename project', (d) => {
@@ -32,7 +32,7 @@ export function Toolbar() {
       <div className="w-px h-6 bg-line mx-1" />
       <button title="Play / stop (Space)" onClick={() => playback.toggle()}
               className={cx('w-9 h-9 rounded-full flex items-center justify-center shadow-sm',
-                playback.playing ? 'bg-brand text-white shadow-violet-500/30' : 'bg-panel border border-line text-accent hover:bg-panel-2')}>
+                playback.playing ? 'bg-brand text-on-accent shadow-black/30' : 'bg-panel border border-line text-accent hover:bg-panel-2')}>
         {playback.loading ? <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
           : playback.playing ? <IconStop className="w-4 h-4" /> : <IconPlay className="w-4 h-4 ml-0.5" />}
       </button>
@@ -62,7 +62,7 @@ export function Toolbar() {
       <div className="flex-1" />
       <span className="text-[11px] text-faint">Zoom</span>
       <input type="range" min={Math.log(MIN_PX_PER_BEAT)} max={Math.log(MAX_PX_PER_BEAT)} step={0.01}
-             value={Math.log(pxPerBeat)} className="w-28 accent-[#7c3aed]"
+             value={Math.log(pxPerBeat)} className="w-28 accent-[#e2c35f]"
              onChange={(e) => {
                const next = Math.exp(Number(e.target.value))
                const st = useArrange.getState()
@@ -82,7 +82,7 @@ function Toggle({ on, children, onClick, title }: { on: boolean; children: strin
   return (
     <button title={title} onClick={onClick}
             className={cx('h-7 px-2.5 rounded-md text-[12px] font-medium border transition-colors',
-              on ? 'bg-brand text-white border-transparent' : 'border-line text-muted hover:text-text bg-panel')}>
+              on ? 'bg-brand text-on-accent border-transparent' : 'border-line text-muted hover:text-text bg-panel')}>
       {children}
     </button>
   )
@@ -116,7 +116,7 @@ function ProjectMenu() {
     <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
       <Button onClick={() => setOpen(!open)}>Projects ▾</Button>
       {open && (
-        <div className="absolute left-0 top-9 z-30 w-72 rounded-lg border border-line bg-panel shadow-xl shadow-violet-900/10 py-1">
+        <div className="absolute left-0 top-9 z-30 w-72 rounded-xl glass-strong py-1">
           <MenuItem onClick={() => {
             setOpen(false)
             void createProject()

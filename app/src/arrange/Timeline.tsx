@@ -7,7 +7,7 @@ import { useProject } from '../store/project'
 import type { SampleListItem } from '../types/api'
 import type { Clip, LoopRegion, Marker } from '../types/project'
 import { drawBase, drawOverlay } from './draw'
-import { beatToX, EDGE_PX, laneAt, laneBoxes, lanesHeight, MARKER_H, TOP, xToBeat } from './geometry'
+import { beatToX, EDGE_PX, laneAt, laneBoxes, lanesHeight, MARKER_H, MIN_SNAP_BEATS, snapUnit, TOP, xToBeat } from './geometry'
 import { onPeaks } from './peaks'
 
 export const SAMPLE_MIME = 'application/x-drumvault-sample'
@@ -186,7 +186,8 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
     const r = over.current!.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
-  const unit = (alt: boolean) => (alt ? 1 : BEATS_PER_BAR)
+  /** Snap step at the current zoom (finer when zoomed in); ⌥ snaps four times finer. */
+  const unit = (alt: boolean) => snapUnit(px, alt)
 
   // ---- mouse ----------------------------------------------------------------
   const onMouseDown = (e: React.MouseEvent) => {
@@ -258,12 +259,13 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
         break
       }
       case 'resize-r': {
-        const end = Math.max(d.primary.start + 1, snap(clipEnd(d.primary) + (x - d.x0) / px, u))
+        const end = Math.max(d.primary.start + Math.min(u, d.primary.length), snap(clipEnd(d.primary) + (x - d.x0) / px, u))
         setPreview({ dBeats: end - clipEnd(d.primary), dLanes: 0, copy: false, resize: 'r', alt: e.altKey })
         break
       }
       case 'resize-l': {
-        const start = Math.min(clipEnd(d.primary) - 1, Math.max(0, snap(d.primary.start + (x - d.x0) / px, u)))
+        const start = Math.min(clipEnd(d.primary) - Math.min(u, d.primary.length),
+          Math.max(0, snap(d.primary.start + (x - d.x0) / px, u)))
         setPreview({ dBeats: start - d.primary.start, dLanes: 0, copy: false, resize: 'l', alt: e.altKey })
         break
       }
@@ -463,9 +465,9 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
 export const dragSample: { current: { kind: string; bars: number | null } | null } = { current: null }
 
 function transformClip(c: Clip, p: Preview, lanes: { id: string }[]): Clip {
-  if (p.resize === 'r') return { ...c, length: Math.max(1, c.length + p.dBeats) }
+  if (p.resize === 'r') return { ...c, length: Math.max(MIN_SNAP_BEATS, c.length + p.dBeats) }
   if (p.resize === 'l') {
-    const d = Math.min(p.dBeats, c.length - 1)
+    const d = Math.min(p.dBeats, c.length - MIN_SNAP_BEATS)
     if (c.type !== 'audio') return { ...c, start: Math.max(0, c.start + d), length: c.length - d }
     const L = loopBeats(c)
     return { ...c, start: Math.max(0, c.start + d), length: c.length - d, trimBeats: (((c.trimBeats + d) % L) + L) % L }
@@ -495,7 +497,7 @@ function HScrollbar({ width, contentWidth }: { width: number; contentWidth: numb
   }
   return (
     <div className="absolute left-0 right-0 bottom-0 h-2.5 bg-transparent">
-      <div onMouseDown={startDrag} className="absolute top-0.5 h-1.5 rounded-full bg-[#cfc8e3] hover:bg-[#b5abd3]"
+      <div onMouseDown={startDrag} className="absolute top-0.5 h-1.5 rounded-full bg-[rgb(255_255_255/0.18)] hover:bg-[rgb(255_255_255/0.3)]"
            style={{ left, width: thumb }} />
     </div>
   )

@@ -7,6 +7,8 @@ import {
   clipsInRange, duplicateClips, formatPosition, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
   resizePattern, serializeProject,
 } from '../src/lib/project'
+import { SNAP_MIN_PX, snapUnit } from '../src/arrange/geometry'
+import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT } from '../src/store/arrange'
 import { useProject } from '../src/store/project'
 import type { SampleListItem } from '../src/types/api'
 import type { PatternClip } from '../src/types/project'
@@ -17,6 +19,19 @@ const sample = (kind: SampleListItem['kind'], category: SampleListItem['category
 })
 
 describe('project model', () => {
+  it('snaps finer the further you zoom in', () => {
+    expect(snapUnit(MIN_PX_PER_BEAT)).toBe(32)  // zoomed all the way out: 8 bars
+    expect(snapUnit(2)).toBe(8)                 // 2 bars
+    expect(snapUnit(12)).toBe(4)                // default zoom: bars
+    expect(snapUnit(20)).toBe(1)                // beats
+    expect(snapUnit(30)).toBe(0.5)              // 8ths
+    expect(snapUnit(56)).toBe(0.25)             // 16ths, where the 16th grid lines appear
+    expect(snapUnit(MAX_PX_PER_BEAT)).toBe(0.25)
+    expect(snapUnit(12, true)).toBe(1)          // ⌥: four times finer...
+    expect(snapUnit(56, true)).toBe(0.25)       // ...but never below a 16th
+    for (const px of [MIN_PX_PER_BEAT, 3, 12, 20, 40, MAX_PX_PER_BEAT]) expect(snapUnit(px) * px).toBeGreaterThanOrEqual(SNAP_MIN_PX)
+  })
+
   it('starts with the default lanes, 192 bars, at the given BPM', () => {
     const p = newProject('Song', 124)
     expect(p.lanes.map((l) => l.name)).toEqual(['Kick', 'Clap', 'Snare', 'Hats', 'Perc', 'Tops', 'Groove'])

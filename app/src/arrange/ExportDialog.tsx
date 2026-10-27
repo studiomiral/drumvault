@@ -155,7 +155,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-line bg-panel-2 p-3">
           {project.lanes.map((l) => (
             <label key={l.id} className={cx('flex items-center gap-2', l.mute && 'text-faint')}>
-              <input type="checkbox" className="accent-[#7c3aed]" disabled={l.mute || running}
+              <input type="checkbox" className="accent-[#e2c35f]" disabled={l.mute || running}
                      checked={!l.mute && lanes.includes(l.id)}
                      onChange={(e) => setLanes((ls) => e.target.checked ? [...ls, l.id] : ls.filter((x) => x !== l.id))} />
               <span className="w-2 h-2 rounded-full" style={{ background: l.color }} />
@@ -164,11 +164,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             </label>
           ))}
           <label className="flex items-center gap-2 col-span-2 border-t border-line pt-2 mt-1">
-            <input type="checkbox" className="accent-[#7c3aed]" checked={master} disabled={running} onChange={(e) => setMaster(e.target.checked)} />
+            <input type="checkbox" className="accent-[#e2c35f]" checked={master} disabled={running} onChange={(e) => setMaster(e.target.checked)} />
             <span className="font-medium">Master</span><span className="text-[11px] text-faint">all unmuted lanes</span>
           </label>
           <label className="flex items-center gap-2 col-span-2">
-            <input type="checkbox" className="accent-[#7c3aed]" checked={midi} disabled={running} onChange={(e) => setMidi(e.target.checked)} />
+            <input type="checkbox" className="accent-[#e2c35f]" checked={midi} disabled={running} onChange={(e) => setMidi(e.target.checked)} />
             <span className="font-medium">Markers (MIDI)</span>
             <span className="text-[11px] text-faint">tempo + {project.markers.length} section marker{project.markers.length === 1 ? '' : 's'} for Logic</span>
           </label>

@@ -21,7 +21,7 @@ function loadPeaks(id: number, points: number): Promise<PeakPoints | null> {
 }
 
 /** Waveform thumbnail drawn from the engine's precomputed peaks (no audio decoding). */
-export function Waveform({ id, width, height, color = '#a49dbd', points = 120 }: {
+export function Waveform({ id, width, height, color = '#6a6863', points = 120 }: {
   id: number
   width: number
   height: number

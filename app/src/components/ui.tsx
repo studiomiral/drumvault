@@ -12,12 +12,15 @@ export function Button({ variant = 'secondary', className, ...rest }: ButtonHTML
     <button
       {...rest}
       className={cx(
-        'inline-flex items-center justify-center gap-1.5 rounded-md px-3 h-7 text-[12.5px] font-medium transition-colors',
-        'disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap',
-        variant === 'primary' && 'bg-brand text-white shadow-sm shadow-violet-500/25 hover:brightness-110',
-        variant === 'secondary' && 'bg-panel text-text border border-line shadow-xs hover:bg-panel-2',
+        'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 h-7 text-[12.5px] font-medium transition-all',
+        'disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap active:scale-[0.98]',
+        // Primary is a soft yellow tint, not a solid fill: the accent stays quiet.
+        variant === 'primary' && 'bg-accent/15 text-accent hover:bg-accent/22 '
+          + 'shadow-[0_0_0_1px_rgb(226_195_95/0.35),inset_0_1px_0_rgb(255_255_255/0.06)]',
+        (variant === 'secondary' || variant === 'danger') && 'surface-raised hover:bg-[rgb(255_255_255/0.13)]',
+        variant === 'secondary' && 'text-text',
         variant === 'ghost' && 'text-muted hover:text-text hover:bg-raised',
-        variant === 'danger' && 'bg-panel text-bad border border-line shadow-xs hover:bg-[#fef2f2]',
+        variant === 'danger' && 'text-bad',
         className,
       )}
     />
@@ -25,9 +28,9 @@ export function Button({ variant = 'secondary', className, ...rest }: ButtonHTML
 }
 
 const STATUS_STYLE: Record<string, string> = {
-  done: 'bg-[#15803d14] text-ok',
-  needs_review: 'bg-[#f59e0b24] text-warn',
-  error: 'bg-[#dc262614] text-bad',
+  done: 'bg-[rgb(74_222_128/0.12)] text-ok',
+  needs_review: 'bg-[rgb(251_191_36/0.13)] text-warn',
+  error: 'bg-[rgb(248_113_113/0.13)] text-bad',
   processing: 'bg-accent-soft text-accent',
   queued: 'bg-raised text-muted',
   skipped: 'bg-raised text-muted',
@@ -41,7 +44,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function StatusChip({ status }: { status: ZipStatus | string }) {
   return (
-    <span className={cx('inline-flex items-center rounded px-1.5 h-[18px] text-[11px] font-medium whitespace-nowrap',
+    <span className={cx('inline-flex items-center rounded-md px-1.5 h-[18px] text-[11px] font-medium whitespace-nowrap',
       STATUS_STYLE[status] ?? STATUS_STYLE.queued)}>
       {STATUS_LABEL[status] ?? status}
     </span>
@@ -50,7 +53,7 @@ export function StatusChip({ status }: { status: ZipStatus | string }) {
 
 export function Chip({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
   return (
-    <span title={title} className={cx('inline-flex items-center rounded px-1.5 h-[18px] text-[11px] bg-raised text-muted whitespace-nowrap', className)}>
+    <span title={title} className={cx('inline-flex items-center rounded-md px-1.5 h-[18px] text-[11px] bg-raised text-muted whitespace-nowrap', className)}>
       {children}
     </span>
   )
@@ -58,7 +61,7 @@ export function Chip({ children, className, title }: { children: ReactNode; clas
 
 export function ProgressBar({ value, className }: { value: number; className?: string }) {
   return (
-    <div className={cx('h-1 rounded-full bg-raised overflow-hidden', className)}>
+    <div className={cx('h-1.5 rounded-full bg-raised overflow-hidden', className)}>
       <div className="h-full bg-brand transition-[width] duration-300" style={{ width: `${Math.round(value * 100)}%` }} />
     </div>
   )
@@ -86,7 +89,9 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 }
 
 export const inputClass =
-  'h-7 rounded-md bg-panel-2 border border-line px-2 text-text placeholder:text-faint focus:border-accent focus:outline-none'
+  'h-7 rounded-lg bg-[rgb(0_0_0/0.25)] border border-transparent px-2.5 text-text placeholder:text-faint '
+  + 'shadow-[0_0_0_1px_rgb(255_255_255/0.08),inset_0_1px_2px_rgb(0_0_0/0.3)] transition-shadow '
+  + 'focus:bg-[rgb(0_0_0/0.35)] focus:outline-none focus:shadow-[0_0_0_1px_rgb(226_195_95/0.5),0_0_0_3px_rgb(226_195_95/0.1)]'
 
 export function Segmented<T extends string>({ value, options, onChange }: {
   value: T
@@ -94,13 +99,15 @@ export function Segmented<T extends string>({ value, options, onChange }: {
   onChange: (v: T) => void
 }) {
   return (
-    <div className="inline-flex rounded-md bg-panel-2 border border-line p-0.5">
+    <div className="inline-flex rounded-lg bg-[rgb(0_0_0/0.25)] p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.06)]">
       {options.map((o) => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
-          className={cx('px-2.5 h-6 rounded text-[12px] transition-colors',
-            value === o.value ? 'bg-raised text-text' : 'text-muted hover:text-text')}
+          className={cx('px-2.5 h-6 rounded-md text-[12px] transition-all',
+            value === o.value
+              ? 'surface-raised !bg-[rgb(255_255_255/0.12)] text-text font-medium'
+              : 'text-muted hover:text-text')}
         >
           {o.label}
         </button>
@@ -125,12 +132,12 @@ export function Modal({ title, children, onClose, width = 560 }: {
   width?: number
 }) {
   return (
-    <div className="fixed inset-0 z-50 bg-[#1e1b2e33] backdrop-blur-[2px] flex items-center justify-center"
+    <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[3px] flex items-center justify-center"
          onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="rounded-2xl border border-line bg-panel shadow-2xl shadow-violet-900/15 max-h-[88vh] flex flex-col"
+      <div className="rounded-2xl glass-strong max-h-[88vh] flex flex-col"
            style={{ width }}>
         <div className="flex items-center px-5 pt-4 pb-3 border-b border-line">
-          <h2 className="flex-1 text-[15px] font-semibold">{title}</h2>
+          <h2 className="flex-1 font-display text-[19px] font-medium">{title}</h2>
           {onClose && <button onClick={onClose} className="text-muted hover:text-text text-[18px] leading-none">×</button>}
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>

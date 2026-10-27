@@ -73,8 +73,8 @@ export function ProcessView() {
       onDrop={(e) => void onDrop(e)}
     >
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
-          <h1 className="text-[15px] font-semibold flex-1">Process</h1>
+        <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
+          <h1 className="font-display text-[21px] font-medium flex-1">Process</h1>
           <Button variant="primary" onClick={() => void addViaDialog()} disabled={!canProcess}>Add zips…</Button>
         </header>
         <EngineBanner />
@@ -103,7 +103,7 @@ export function ProcessView() {
         <ZipDetailPanel zipId={selected} onClose={() => setSelected(null)} />
       )}
       {dragging && (
-        <div className="absolute inset-2 rounded-xl border-2 border-dashed border-accent bg-[#7c3aed0d] flex items-center justify-center pointer-events-none z-20">
+        <div className="absolute inset-2 rounded-2xl border-2 border-dashed border-accent/70 bg-accent/10 backdrop-blur-sm flex items-center justify-center pointer-events-none z-20">
           <div className="text-accent text-[15px] font-medium">Drop zips or folders to process them</div>
         </div>
       )}
@@ -115,7 +115,7 @@ function DropZone({ compact, onClick }: { compact: boolean; onClick: () => void 
   return (
     <button
       onClick={onClick}
-      className={cx('w-full rounded-xl border border-dashed border-line hover:border-accent hover:bg-brand-soft bg-panel transition-colors',
+      className={cx('w-full rounded-2xl border border-dashed border-[rgb(255_255_255/0.14)] bg-panel-2 hover:border-accent/60 hover:bg-accent-soft transition-all',
         'flex items-center justify-center gap-3 text-muted', compact ? 'h-16' : 'h-56 flex-col')}
     >
       <IconDrop className={compact ? 'w-6 h-6' : 'w-10 h-10 text-faint'} />

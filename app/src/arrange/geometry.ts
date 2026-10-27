@@ -40,6 +40,23 @@ export function xToBeat(x: number, pxPerBeat: number, scrollX: number): number {
   return (x + scrollX) / pxPerBeat
 }
 
+/** Snap divisions in beats: 16th, 8th, beat, then 1, 2, 4, 8 and 16 bars. */
+const SNAP_UNITS = [0.25, 0.5, 1, 4, 8, 16, 32, 64]
+/** A snap step is never narrower than this on screen (16ths appear with the 16th grid lines). */
+export const SNAP_MIN_PX = 14
+/** The finest snap step, and the shortest a clip can be made. */
+export const MIN_SNAP_BEATS = SNAP_UNITS[0]
+
+/**
+ * Snap step for dragging at this zoom: the finest division at least SNAP_MIN_PX wide, so
+ * zoomed in close edits land on 16ths and zoomed out on whole bars or more. ⌥ (`fine`) snaps
+ * four times finer, down to 16ths.
+ */
+export function snapUnit(pxPerBeat: number, fine = false): number {
+  const u = SNAP_UNITS.find((v) => v * pxPerBeat >= SNAP_MIN_PX) ?? SNAP_UNITS[SNAP_UNITS.length - 1]
+  return fine ? Math.max(MIN_SNAP_BEATS, u / 4) : u
+}
+
 /** Spacing (in bars) between ruler labels so they stay readable. */
 export function rulerStep(pxPerBeat: number): number {
   const barPx = pxPerBeat * 4

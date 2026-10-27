@@ -19,8 +19,8 @@ export function LaneHeaders() {
   })
 
   return (
-    <div className="relative shrink-0 border-r border-line bg-panel overflow-hidden" style={{ width: HEADER_W }}>
-      <div className="absolute inset-x-0 top-0 z-10 bg-panel border-b border-line flex items-end justify-between px-3 pb-1.5"
+    <div className="relative shrink-0 border-r border-line bg-panel-2 overflow-hidden" style={{ width: HEADER_W }}>
+      <div className="absolute inset-x-0 top-0 z-10 bg-[rgb(20_20_22/0.72)] backdrop-blur-xl border-b border-line flex items-end justify-between px-3 pb-1.5"
            style={{ height: TOP }}>
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">Lanes</span>
         <button onClick={addLane} className="text-[12px] text-accent hover:underline">+ Lane</button>
@@ -127,9 +127,9 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
                    className="flex-1 min-w-0 h-5 text-[12.5px] rounded border border-accent px-1 outline-none" />
           )}
           <button title="Mute" onClick={() => set(lane.mute ? 'Unmute' : 'Mute', { mute: !lane.mute })}
-                  className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.mute ? 'bg-[#f59e0b] text-white' : 'bg-raised text-muted hover:text-text')}>M</button>
+                  className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.mute ? 'bg-warn text-on-accent' : 'bg-raised text-muted hover:text-text')}>M</button>
           <button title="Solo" onClick={() => set(lane.solo ? 'Unsolo' : 'Solo', { solo: !lane.solo })}
-                  className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.solo ? 'bg-brand text-white' : 'bg-raised text-muted hover:text-text')}>S</button>
+                  className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.solo ? 'bg-brand text-on-accent' : 'bg-raised text-muted hover:text-text')}>S</button>
           <button title={clipCount ? `Delete lane and its ${clipCount} clips` : 'Delete lane'}
                   className="w-4 h-5 text-faint hover:text-bad opacity-0 group-hover:opacity-100"
                   onClick={() => {
@@ -223,12 +223,12 @@ function ColorPalette({ anchor, value, onPick, onClose }: {
   const top = Math.min(anchor.top, window.innerHeight - 140)
   return createPortal(
     <div className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div className="absolute grid grid-cols-8 gap-1.5 p-2.5 rounded-lg border border-line bg-panel shadow-lg"
+      <div className="absolute grid grid-cols-8 gap-1.5 p-2.5 rounded-xl glass-strong"
            style={{ left: anchor.right + 8, top }} onMouseDown={(e) => e.stopPropagation()}>
         {LANE_PALETTE.map((c) => (
           <button key={c} title={c} onClick={() => onPick(c)} style={{ background: c }}
                   className={cx('w-5 h-5 rounded-[4px] hover:scale-110 transition-transform',
-                    c === value && 'ring-2 ring-offset-1 ring-text')} />
+                    c === value && 'ring-2 ring-offset-2 ring-offset-[#161618] ring-text')} />
         ))}
       </div>
     </div>,

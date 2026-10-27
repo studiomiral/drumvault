@@ -37,7 +37,7 @@ interface ClipBase {
 /** A loop on the bar grid; extending it repeats the loop. */
 export interface AudioClip extends ClipBase {
   type: 'audio'
-  /** Whole beats skipped at the start of the loop (left trim). */
+  /** Beats skipped at the start of the loop (left trim), a multiple of a 16th. */
   trimBeats: number
 }
 
