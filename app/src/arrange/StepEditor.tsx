@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { audition } from '../audio/audition'
 import { playback } from '../audio/engine'
 import { Button, cx, Segmented } from '../components/ui'
-import { BEATS_PER_BAR, formatPosition, loopBeats, PRESETS, presetSteps, resizePattern, STEPS_PER_BAR, STEPS_PER_BEAT } from '../lib/project'
+import { BEATS_PER_BAR, contentShift, formatPosition, loopBeats, shiftContent, PRESETS, presetSteps, resizePattern, STEPS_PER_BAR, STEPS_PER_BEAT } from '../lib/project'
 import { useProject } from '../store/project'
 import type { Clip, ClipFilter, PatternClip, Velocity } from '../types/project'
 
@@ -99,12 +99,30 @@ function ClipInspector({ clip }: { clip: Clip }) {
       <span className="font-medium truncate max-w-[360px]" title={clip.sample.relPath}>{clip.sample.name}</span>
       <span className="text-muted">
         at {formatPosition(clip.start)} · {clip.length / BEATS_PER_BAR} bars
-        {clip.type === 'audio' && <> · {loopBeats(clip) / BEATS_PER_BAR}-bar loop{clip.trimBeats ? ` · trimmed ${clip.trimBeats} beats` : ''}</>}
+        {clip.type === 'audio' && <> · {loopBeats(clip) / BEATS_PER_BAR}-bar loop</>}
       </span>
+      <ShiftControl clip={clip} />
       <GainSlider clip={clip} />
       <FilterControl clip={clip} />
       {clip.type === 'pattern' && <Button variant="secondary" onClick={() => openEditor(clip.id)}>Edit pattern</Button>}
     </div>
+  )
+}
+
+/** Move the sound a beat earlier/later inside the clip's loop (wrapping); the clip stays put. */
+function ShiftControl({ clip }: { clip: Clip }) {
+  const edit = useProject((s) => s.edit)
+  const shift = clip.type === 'audio' ? contentShift(clip) : null
+  const move = (beats: number) => edit('Move sound in clip', (d) => {
+    d.clips = d.clips.map((c) => (c.id === clip.id ? shiftContent(c, beats) : c))
+  }, { coalesce: 'shift-content' })
+  return (
+    <span className="flex items-center gap-1 text-muted" title="Move the sound inside its loop by a beat; what falls off one end comes back at the other (⇧← / ⇧→)">
+      Move sound
+      <Button variant="ghost" className="px-1.5" onClick={() => move(-1)}>−1</Button>
+      <Button variant="ghost" className="px-1.5" onClick={() => move(1)}>+1</Button>
+      <span className="w-14 tabular-nums">{shift ? `${shift > 0 ? '+' : '−'}${Math.abs(shift)} beat${Math.abs(shift) === 1 ? '' : 's'}` : ''}</span>
+    </span>
   )
 }
 

@@ -90,6 +90,10 @@ class Thresholds:
     # When the kick puts bar 1 off sample 0, the other drum stems are checked: if their hits sit
     # (median, within tempo_phase_tolerance_ms) on a grid from sample 0, the kick is just late.
     tempo_bar_one_min_onsets: int = 8
+    # "The same" sample after reprocessing (favourites, deleted samples): same stem, kind and
+    # length, start within this distance. Loops and events move with bar 1; one-shots don't.
+    match_oneshot_tolerance_s: float = 0.03
+    match_loop_tolerance_s: float = 0.25
     # Grid view preview (SCOPE.md §6.2a): the drum stems summed to mono at this rate.
     grid_preview_sr: int = 22050
     grid_preview_peak_dbfs: float = -1.0

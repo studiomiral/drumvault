@@ -34,6 +34,9 @@ const api: DrumvaultAPI = {
   clearFinishedJobs: () => ipcRenderer.invoke('jobs:clear'),
   setSampleMeta: (id, meta) => ipcRenderer.invoke('sample:meta', id, meta),
   markReviewed: (zipId) => ipcRenderer.invoke('zip:reviewed', zipId),
+  deleteSamples: (sampleIds) => ipcRenderer.invoke('samples:delete', sampleIds),
+  listRemoved: () => ipcRenderer.invoke('lib:removed'),
+  restoreSamples: (removedIds) => ipcRenderer.invoke('samples:restore', removedIds),
   gridPreview: (zipId) => ipcRenderer.invoke('zip:gridPreview', zipId),
 
   onLibraryChanged: (cb) => subscribe('library-changed', () => cb()),

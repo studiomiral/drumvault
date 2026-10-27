@@ -129,6 +129,8 @@ export type RpcRequest =
   | { id: string; method: "cancel"; params: { job_id: string } }
   | { id: string; method: "set_sample_meta"; params: { sample_id: number; favorite?: boolean; rating?: number; tags?: string; settings: EngineSettings } }
   | { id: string; method: "mark_reviewed"; params: { zip_id: number; settings: EngineSettings } }
+  | { id: string; method: "delete_samples"; params: { sample_ids: number[]; settings: EngineSettings } }
+  | { id: string; method: "restore_samples"; params: { removed_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
   | { id: string; method: "shutdown"; params: Record<string, never> };

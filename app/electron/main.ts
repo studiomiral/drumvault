@@ -229,6 +229,20 @@ function registerIpc(): void {
     send('library-changed')
   })
 
+  ipcMain.handle('samples:delete', async (_e, sampleIds: number[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request<{ deleted: number }>('delete_samples', { sample_ids: sampleIds, settings: engineSettings() }, 60_000)
+    send('library-changed')
+    return r.deleted
+  })
+  ipcMain.handle('samples:restore', async (_e, removedIds: number[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request<{ restored: number; pending: number }>(
+      'restore_samples', { removed_ids: removedIds, settings: engineSettings() }, 60_000)
+    send('library-changed')
+    return r
+  })
+  ipcMain.handle('lib:removed', () => reader.removedSamples())
   ipcMain.handle('zip:gridPreview', async (_e, zipId: number) => {
     if (!sidecar) throw new Error('Engine is not running')
     const info = await sidecar.request<GridPreview>('grid_preview', { zip_id: zipId, settings: engineSettings() }, 180_000)

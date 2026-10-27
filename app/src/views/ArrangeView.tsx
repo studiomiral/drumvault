@@ -11,7 +11,7 @@ import { useApp } from '../store/app'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Marker } from '../types/project'
-import { BEATS_PER_BAR, duplicateClips, uid } from '../lib/project'
+import { BEATS_PER_BAR, duplicateClips, shiftContent, uid } from '../lib/project'
 
 /** Mini DAW (SCOPE.md §6.4). */
 export function ArrangeView() {
@@ -41,6 +41,9 @@ export function ArrangeView() {
         st.edit('Toggle loop', (d) => {
           d.loop.enabled = !d.loop.enabled
         })
+      } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && e.shiftKey && st.selection.length) {
+        e.preventDefault()
+        shiftSelection(e.key === 'ArrowLeft' ? -1 : 1)
       } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && st.selection.length) {
         e.preventDefault()
         const delta = (e.key === 'ArrowLeft' ? -1 : 1) * (e.altKey ? 1 : BEATS_PER_BAR)
@@ -88,6 +91,16 @@ export function deleteSelection(): void {
       d.markers = d.markers.filter((m) => m.id !== id)
     })
   }
+}
+
+/** ⇧← / ⇧→: move the sound of the selected clips a beat earlier/later inside their loop. */
+export function shiftSelection(beats: number): void {
+  const st = useProject.getState()
+  const ids = new Set(st.selection)
+  if (!ids.size) return
+  st.edit('Move sound in clip', (d) => {
+    d.clips = d.clips.map((c) => (ids.has(c.id) ? shiftContent(c, beats) : c))
+  }, { coalesce: 'shift-content' })
 }
 
 /**

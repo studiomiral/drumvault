@@ -122,6 +122,23 @@ export interface ZipListItem extends ZipRow {
   events: number
 }
 
+/** A sample deleted from the library (Library → Deleted), restorable from the library's trash. */
+export interface RemovedSample {
+  id: number               // removed_samples id
+  zip_id: number
+  source_code: string
+  name: string
+  kind: SampleKind
+  category: Category | null
+  bars: number | null
+  key_label: string | null
+  key_camelot: string | null
+  duration_s: number | null
+  removed_at: string | null
+  /** Library-relative path of the trashed WAV; null if none was kept (it comes back on reprocess). */
+  trash_path: string | null
+}
+
 export interface ZipDetail {
   zip: ZipListItem
   stems: StemRow[]
@@ -171,6 +188,12 @@ export interface DrumvaultAPI {
   /** Clear a zip's needs-review flag (it stays cleared when the zip is reprocessed). */
   markReviewed(zipId: number): Promise<void>
 
+  /** Delete samples (files and index); reprocessing their zip doesn't bring them back. Returns the count. */
+  deleteSamples(sampleIds: number[]): Promise<number>
+  /** Deleted samples, newest first. */
+  listRemoved(): Promise<RemovedSample[]>
+  /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */
+  restoreSamples(removedIds: number[]): Promise<{ restored: number; pending: number }>
   /** A zip's drum stems summed to one file (Grid view), with the bar 1 it was cut on. */
   gridPreview(zipId: number): Promise<{ info: GridPreview; data: ArrayBuffer }>
 

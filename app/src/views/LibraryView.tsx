@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { audition } from '../audio/audition'
-import { IconPlay, IconStar, IconStop } from '../components/icons'
+import { IconPlay, IconStar, IconStop, IconTrash } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle, Segmented } from '../components/ui'
 import { VirtualList } from '../components/VirtualList'
 import { Waveform } from '../components/Waveform'
@@ -9,7 +9,7 @@ import { ALL_KEYS, expandCompatible } from '../lib/camelot'
 import { CATEGORY_LABELS, EVENT_CATEGORIES, formatBpm, formatDuration, KIND_LABELS, KIND_PASTEL, lengthLabel } from '../lib/format'
 import { attempt, useApp } from '../store/app'
 import { useLibrary } from '../store/library'
-import type { LibraryFacets, SampleListItem, SampleSort } from '../types/api'
+import type { LibraryFacets, RemovedSample, SampleListItem, SampleSort } from '../types/api'
 import type { Category, SampleKind } from '../types/engine'
 
 const ROW = 46
@@ -19,11 +19,14 @@ const ORDER: Record<SampleKind, Category[]> = { oneshot: ONESHOT_ORDER, loop: LO
 
 export function LibraryView() {
   const { libraryVersion } = useApp()
-  const { filter, setFilter, resetFilter, selectedId, select, similarTo, findSimilar } = useLibrary()
+  const { filter, setFilter, resetFilter, selectedId, select, similarTo, findSimilar, showDeleted, setShowDeleted } = useLibrary()
+  const [removed, setRemoved] = useState<RemovedSample[]>([])
   const [items, setItems] = useState<SampleListItem[]>([])
   const [facets, setFacets] = useState<LibraryFacets | null>(null)
   const [playingId, setPlayingId] = useState<number | null>(audition.playingId)
   const [loaded, setLoaded] = useState(false)
+  // ⌘/⇧-click selection of several rows (to delete them together); empty = just `selectedId`.
+  const [marked, setMarked] = useState<Set<number>>(new Set())
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => audition.subscribe(setPlayingId), [])
@@ -31,6 +34,7 @@ export function LibraryView() {
 
   useEffect(() => {
     void api.facets().then(setFacets)
+    void api.listRemoved().then(setRemoved)
   }, [libraryVersion])
 
   // Debounce typing in the search box; other filter changes apply at once.
@@ -56,6 +60,18 @@ export function LibraryView() {
   const index = useMemo(() => items.findIndex((s) => s.id === selectedId), [items, selectedId])
   const selected = index >= 0 ? items[index] : null
 
+  // Marks only cover rows in the current list.
+  useEffect(() => {
+    setMarked((m) => {
+      if (!m.size) return m
+      const ids = new Set(items.map((s) => s.id))
+      const kept = new Set([...m].filter((id) => ids.has(id)))
+      return kept.size === m.size ? m : kept
+    })
+  }, [items])
+  const targets = useMemo(() => (marked.size ? items.filter((s) => marked.has(s.id)) : selected ? [selected] : []),
+    [marked, items, selected])
+
   const updateLocal = useCallback((id: number, patch: Partial<SampleListItem>) => {
     setItems((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))
   }, [])
@@ -74,8 +90,39 @@ export function LibraryView() {
 
   const choose = useCallback((s: SampleListItem, play = true) => {
     select(s.id)
+    setMarked((m) => (m.size ? new Set() : m))
     if (play) void audition.play(s).catch((e) => useApp.getState().toast('error', `Could not play: ${e.message}`))
   }, [select])
+
+  /** Click: select and play. ⌘-click: add/remove a row. ⇧-click: select the range from the current row. */
+  const clickRow = (i: number, e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+    const s = items[i]
+    if (e.metaKey || e.ctrlKey) {
+      const m = new Set(marked.size ? marked : selected ? [selected.id] : [])
+      if (m.has(s.id)) m.delete(s.id)
+      else m.add(s.id)
+      setMarked(m)
+      select(s.id)
+    } else if (e.shiftKey && index >= 0) {
+      const [a, b] = index < i ? [index, i] : [i, index]
+      setMarked(new Set(items.slice(a, b + 1).map((x) => x.id)))
+    } else {
+      choose(s)
+    }
+  }
+
+  const deleteSamples = useCallback(async () => {
+    if (!targets.length) return
+    const ids = new Set(targets.map((s) => s.id))
+    if (audition.playingId != null && ids.has(audition.playingId)) audition.stop()
+    const last = Math.max(...targets.map((s) => items.indexOf(s)))
+    const next = items.slice(last + 1).find((s) => !ids.has(s.id)) ?? [...items].reverse().find((s) => !ids.has(s.id))
+    const deleted = await attempt(() => api.deleteSamples([...ids]))
+    if (deleted == null) return
+    setMarked(new Set())
+    select(next?.id ?? null)
+    useApp.getState().toast('info', `Deleted ${deleted} sample${deleted === 1 ? '' : 's'}. Bring ${deleted === 1 ? 'it' : 'them'} back under Deleted.`)
+  }, [targets, items, select])
 
   // Keyboard: Space play/stop, ↑/↓ next + play, Esc stop, F favourite, 1–5 rating, ⌘F search.
   useEffect(() => {
@@ -91,7 +138,14 @@ export function LibraryView() {
         if (e.key === 'Escape' || e.key === 'ArrowDown') (t as HTMLInputElement).blur()
         if (e.key !== 'ArrowDown') return
       }
-      if (e.key === ' ') {
+      if (useLibrary.getState().showDeleted) return
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setMarked(new Set(items.map((s) => s.id)))
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault()
+        void deleteSamples()
+      } else if (e.key === ' ') {
         e.preventDefault()
         if (selected) audition.toggle(selected)
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -101,6 +155,7 @@ export function LibraryView() {
         choose(items[next])
       } else if (e.key === 'Escape') {
         audition.stop()
+        setMarked(new Set())
       } else if (selected && e.key.toLowerCase() === 'f' && !e.metaKey && !e.ctrlKey) {
         toggleFavorite(selected)
       } else if (selected && /^[1-5]$/.test(e.key)) {
@@ -111,7 +166,7 @@ export function LibraryView() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [items, index, selected, choose, toggleFavorite, setRating, findSimilar])
+  }, [items, index, selected, choose, toggleFavorite, setRating, findSimilar, deleteSamples])
 
   const filtered = !!(filter.kind || filter.categories?.length || filter.keys?.length || filter.bars?.length
     || filter.zipIds?.length || filter.favoritesOnly || filter.search)
@@ -131,6 +186,11 @@ export function LibraryView() {
                   filter.favoritesOnly ? 'border-accent text-accent bg-accent-soft' : 'border-line text-muted hover:text-text')}>
           <IconStar className="w-3.5 h-3.5" filled={filter.favoritesOnly} /> Favourites
         </button>
+        <button onClick={() => setShowDeleted(!showDeleted)} title="Samples you deleted, to bring them back"
+                className={cx('flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-[12px]',
+                  showDeleted ? 'border-accent text-accent bg-accent-soft' : 'border-line text-muted hover:text-text')}>
+          <IconTrash className="w-3.5 h-3.5" /> Deleted{removed.length > 0 && <span className="tabular-nums">{removed.length}</span>}
+        </button>
         <div className="flex-1" />
         <span className="text-muted text-[12px]">
           {items.length.toLocaleString()}{facets && filtered ? ` of ${facets.total.toLocaleString()}` : ''} samples
@@ -145,6 +205,7 @@ export function LibraryView() {
         </select>
       </header>
 
+      {showDeleted ? <DeletedList rows={removed} onBack={() => setShowDeleted(false)} /> : (
       <div className="flex-1 min-h-0 flex">
         <FilterSidebar facets={facets} onReset={() => {
           setSearch('')
@@ -174,9 +235,9 @@ export function LibraryView() {
               renderRow={(i) => (
                 <SampleRow
                   s={items[i]}
-                  selected={items[i].id === selectedId}
+                  selected={marked.size ? marked.has(items[i].id) : items[i].id === selectedId}
                   playing={items[i].id === playingId}
-                  onClick={() => choose(items[i])}
+                  onClick={(e) => clickRow(i, e)}
                   onPlayToggle={() => {
                     select(items[i].id)
                     audition.toggle(items[i])
@@ -187,12 +248,144 @@ export function LibraryView() {
               )}
             />
           )}
-          {selected && <SelectedBar s={selected} onSimilar={() => findSimilar({ id: selected.id, name: selected.name })} onTags={(tags) => {
+          {marked.size > 1 ? (
+            <div className="h-12 shrink-0 border-t border-line bg-panel flex items-center gap-3 px-4 text-[12px]">
+              <span className="font-medium">{marked.size} samples selected</span>
+              <span className="text-faint">⌘-click to add or remove, ⇧-click for a range</span>
+              <div className="flex-1" />
+              <Button variant="ghost" onClick={() => setMarked(new Set())}>Clear selection</Button>
+              <Button variant="danger" title="Delete from the library (⌫)" onClick={() => void deleteSamples()}>Delete {marked.size}</Button>
+            </div>
+          ) : selected && <SelectedBar s={selected} onSimilar={() => findSimilar({ id: selected.id, name: selected.name })} onTags={(tags) => {
             updateLocal(selected.id, { tags: tags || null })
             void attempt(() => api.setSampleMeta(selected.id, { tags }))
-          }} />}
+          }} onDelete={() => void deleteSamples()} />}
         </div>
       </div>
+      )}
+    </div>
+  )
+}
+
+/** Library → Deleted: samples deleted from the library, to listen to and restore. */
+function DeletedList({ rows, onBack }: { rows: RemovedSample[]; onBack: () => void }) {
+  const [marked, setMarked] = useState<Set<number>>(new Set())
+  const [anchor, setAnchor] = useState<number | null>(null)
+  const [playingId, setPlayingId] = useState<number | null>(audition.playingId)
+  useEffect(() => audition.subscribe(setPlayingId), [])
+  useEffect(() => {
+    const ids = new Set(rows.map((r) => r.id))
+    setMarked((m) => new Set([...m].filter((id) => ids.has(id))))
+  }, [rows])
+
+  // Audition ids are negative so they never clash with library sample ids.
+  const play = (r: RemovedSample) => r.trash_path
+    && audition.toggle({ id: -r.id, rel_path: r.trash_path, kind: r.kind, bars: r.bars })
+
+  const click = (i: number, e: React.MouseEvent) => {
+    const r = rows[i]
+    if (e.shiftKey && anchor != null) {
+      const [a, b] = anchor < i ? [anchor, i] : [i, anchor]
+      setMarked(new Set(rows.slice(a, b + 1).map((x) => x.id)))
+      return
+    }
+    setAnchor(i)
+    if (e.metaKey || e.ctrlKey) {
+      const m = new Set(marked)
+      if (m.has(r.id)) m.delete(r.id)
+      else m.add(r.id)
+      setMarked(m)
+    } else {
+      setMarked(new Set([r.id]))
+      play(r)
+    }
+  }
+
+  const restore = async (ids: number[]) => {
+    if (!ids.length) return
+    if (audition.playingId != null && ids.includes(-audition.playingId)) audition.stop()
+    const r = await attempt(() => api.restoreSamples(ids))
+    if (!r) return
+    setMarked(new Set())
+    const parts = [r.restored && `Restored ${r.restored} sample${r.restored === 1 ? '' : 's'}.`,
+      r.pending && `${r.pending} had no saved file and come${r.pending === 1 ? 's' : ''} back when the zip is reprocessed.`]
+    useApp.getState().toast('info', parts.filter(Boolean).join(' '))
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setMarked(new Set(rows.map((r) => r.id)))
+      } else if (e.key === 'Escape') {
+        if (marked.size) setMarked(new Set())
+        else onBack()
+        audition.stop()
+      } else if (e.key === 'Enter' && marked.size) {
+        void restore([...marked])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="shrink-0 flex items-center gap-3 px-6 h-11 border-b border-line text-[12.5px]">
+        <span className="font-medium">Deleted samples</span>
+        <span className="text-faint">Kept out of the library, also when their zip is reprocessed. Restore puts them back.</span>
+        <div className="flex-1" />
+        <Button variant="ghost" onClick={onBack}>Back to the library</Button>
+      </div>
+      {rows.length === 0 ? (
+        <Empty title="Nothing deleted">Samples you delete in the library (⌫) show up here, so you can bring them back.</Empty>
+      ) : (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {rows.map((r, i) => (
+            <div key={r.id} onMouseDown={(e) => e.button === 0 && !(e.target as HTMLElement).closest('button') && click(i, e)}
+                 className={cx('flex items-center gap-3 px-6 border-b border-line/60 cursor-default select-none',
+                   marked.has(r.id) ? 'bg-brand-soft' : 'hover:bg-panel')}
+                 style={{ height: ROW }}>
+              <button disabled={!r.trash_path} onClick={() => play(r)}
+                      className={cx('w-7 h-7 rounded-full flex items-center justify-center shrink-0 disabled:opacity-30',
+                        playingId === -r.id ? 'bg-brand text-on-accent' : 'text-muted hover:text-accent hover:bg-raised')}>
+                {playingId === -r.id ? <IconStop className="w-3.5 h-3.5" /> : <IconPlay className="w-3.5 h-3.5" />}
+              </button>
+              <div className="flex-1 min-w-0">
+                <div className="truncate text-[12.5px]">{r.name}</div>
+                <div className="text-[11px] text-faint truncate">
+                  {r.source_code}
+                  {r.removed_at && ` · deleted ${new Date(r.removed_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`}
+                  {!r.trash_path && ' · no saved file: comes back when the zip is reprocessed'}
+                </div>
+              </div>
+              {r.category && (
+                <span className={cx('w-[92px] inline-flex items-center justify-center rounded-md h-[18px] text-[11px] font-medium text-on-pastel whitespace-nowrap',
+                  KIND_PASTEL[r.kind])}>{CATEGORY_LABELS[r.category]}</span>
+              )}
+              <span className="w-[74px] text-[12px]">
+                {r.key_label ?? <span className="text-faint">NoKey</span>}
+                {r.key_camelot && <span className="text-faint ml-1.5">{r.key_camelot}</span>}
+              </span>
+              <span className="w-[64px] text-[12px] text-muted">
+                {r.kind === 'oneshot' ? (r.duration_s != null ? formatDuration(r.duration_s) : '') : r.bars ? `${r.bars} bar${r.bars === 1 ? '' : 's'}` : ''}
+              </span>
+              <Button variant="ghost" onClick={() => void restore([r.id])}>Restore</Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {marked.size > 1 && (
+        <div className="h-12 shrink-0 border-t border-line bg-panel flex items-center gap-3 px-4 text-[12px]">
+          <span className="font-medium">{marked.size} selected</span>
+          <span className="text-faint">⌘-click to add or remove, ⇧-click for a range</span>
+          <div className="flex-1" />
+          <Button variant="ghost" onClick={() => setMarked(new Set())}>Clear selection</Button>
+          <Button variant="primary" onClick={() => void restore([...marked])}>Restore {marked.size}</Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -201,14 +394,14 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
   s: SampleListItem
   selected: boolean
   playing: boolean
-  onClick: () => void
+  onClick: (e: React.MouseEvent) => void
   onPlayToggle: () => void
   onFavorite: () => void
   onRate: (r: number) => void
 }) {
   return (
     <div
-      onMouseDown={(e) => e.button === 0 && !(e.target as HTMLElement).closest('button') && onClick()}
+      onMouseDown={(e) => e.button === 0 && !(e.target as HTMLElement).closest('button') && onClick(e)}
       draggable
       onDragStart={(e) => {
         e.preventDefault()
@@ -253,7 +446,12 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
   )
 }
 
-function SelectedBar({ s, onTags, onSimilar }: { s: SampleListItem; onTags: (tags: string) => void; onSimilar: () => void }) {
+function SelectedBar({ s, onTags, onSimilar, onDelete }: {
+  s: SampleListItem
+  onTags: (tags: string) => void
+  onSimilar: () => void
+  onDelete: () => void
+}) {
   const [tags, setTags] = useState(s.tags ?? '')
   useEffect(() => setTags(s.tags ?? ''), [s.id, s.tags])
   return (
@@ -274,6 +472,7 @@ function SelectedBar({ s, onTags, onSimilar }: { s: SampleListItem; onTags: (tag
              onBlur={() => tags !== (s.tags ?? '') && onTags(tags)} />
       <Button variant="ghost" title="Find similar sounds (S)" onClick={onSimilar}>Find similar</Button>
       <Button variant="ghost" onClick={() => void api.revealSample(s.rel_path)}>Reveal in Finder</Button>
+      <Button variant="ghost" className="hover:!text-bad" title="Delete from the library (⌫)" onClick={onDelete}>Delete</Button>
     </div>
   )
 }

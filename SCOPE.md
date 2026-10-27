@@ -335,11 +335,21 @@ CREATE TABLE samples (
   created_at TEXT
 );
 
+-- Samples the user deleted (schema v3); reprocessing re-cuts matching ones into the trash.
+CREATE TABLE removed_samples (
+  id INTEGER PRIMARY KEY,
+  zip_id INTEGER REFERENCES zips(id) ON DELETE CASCADE,
+  stem_file TEXT, kind TEXT, bars INTEGER, source_offset_s REAL,
+  sample TEXT,                      -- v4: the sample row (JSON) a restore inserts again
+  fingerprint BLOB,                 -- v4
+  removed_at TEXT                   -- v4
+);
+
 CREATE INDEX idx_samples_cat ON samples(kind, category);
 CREATE INDEX idx_samples_key ON samples(key_label);
 ```
 
-Reprocessing a zip deletes that zip's samples (files + rows) and regenerates them. `favorite`, `rating` and `tags` should survive reprocessing where a regenerated sample matches an old one by stem + offset + length.
+Reprocessing a zip deletes that zip's samples (files + rows) and regenerates them. `favorite`, `rating` and `tags` survive reprocessing where a regenerated sample matches an old one by stem + kind + length + offset (nearest, within a tolerance so a moved bar 1 still matches); samples matching a `removed_samples` row are not written at all.
 
 ### 5.13 Settings (`config.py`, persisted by the app as JSON in the app-data folder)
 
@@ -372,6 +382,8 @@ Requests from the app:
 {"id": "uuid", "method": "rebuild_loops", "params": {"settings": {...}}}
 {"id": "uuid", "method": "cancel", "params": {"job_id": "..."}}
 {"id": "uuid", "method": "grid_preview", "params": {"zip_id": 12, "settings": {...}}}
+{"id": "uuid", "method": "delete_samples", "params": {"sample_ids": [301, 302], "settings": {...}}}
+{"id": "uuid", "method": "restore_samples", "params": {"removed_ids": [7], "settings": {...}}}
 {"id": "uuid", "method": "health", "params": {}}
 ```
 
@@ -382,6 +394,8 @@ Responses and events from the engine:
 {"event": "progress", "job_id": "...", "zip": "...", "stage": "tempo", "pct": 0.4, "message": "Kick: 124.00 BPM (conf 0.97)"}
 {"event": "job_done", "job_id": "...", "zip_id": 12, "status": "done", "counts": {"oneshots": 18, "loops": 41}}
 ```
+
+`delete_samples` answers `{"deleted": n}` and `restore_samples` `{"restored": n, "pending": m}`. Favourites, ratings and tags, and deletions, are matched to the new samples after reprocessing by stem, kind, length and start (within `match_oneshot_tolerance_s` / `match_loop_tolerance_s`, so a moved bar 1 keeps them).
 
 `grid_preview` is not queued behind imports (it runs on its own thread) and answers directly: it sums the zip's drum stems to one mono 16-bit WAV at `grid_preview_sr` in `.drumvault/grid/<zip_id>.wav` and returns its path, sample rate, duration, the zip's BPM, the bar 1 the library is cut on (`bar_one_ms`, and `manual` if it was set by hand) and the stem names. The app reads the file and deletes it. A negative `grid_offset_ms` (hits ahead of the first downbeat) starts the grid one bar later, so cuts never begin before sample 0.
 
@@ -430,6 +444,8 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - **Audition**: click or Space plays the sample, ↑/↓ moves to the next sample and plays it, Esc stops. Loops repeat while auditioning. When the Arrange transport is playing, an auditioned loop starts on the next bar, in sync.
 - "Find similar" action: nearest neighbors by fingerprint within the same category.
 - Drag a sample out to Finder or Logic (Electron `startDrag`) as a bonus.
+- **Cleaning up:** ⌘-click, ⇧-click (range) and ⌘A select several samples; **Delete** / ⌫ removes them at once, without a confirm since they can be restored (engine `delete_samples`: WAV files, peaks and rows). Deleted samples are remembered per zip in `removed_samples`, so reprocessing the zip (also a Grid re-cut or a library BPM rebuild) doesn't bring them back; it re-cuts them into the trash instead, so a restore matches the current grid and BPM. Whole zips are removed from the zip panel (**Delete samples**).
+- **Deleted** (top bar, with a count) lists the deleted samples, newest first: play them, select one or several (⌘/⇧-click, ⌘A) and **Restore** (Enter). Their WAV and peaks wait in `.drumvault/trash/<id>.wav|json`; restoring (engine `restore_samples`) moves them back under their name, or the next free number if a re-cut reused it, with favourite, rating and tags. Deletions from before the trash existed have no file: restoring them only forgets the deletion, and the next reprocess brings them back.
 
 ### 6.4 Arrange view (mini DAW)
 
@@ -445,7 +461,7 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - **Each lane exports as one stem.**
 
 **Clip types**
-1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats.
+1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats. **Move sound** (−1 / +1 in the clip bar, ⇧← / ⇧→) moves the sound a beat later or earlier inside the clip's loop, wrapping around, while the clip stays where it is (e.g. a fill on beat 3 moved to beat 4); pattern clips rotate their steps the same way.
    FX & fills (events) also become audio clips: placed at a bar, they play once over their length; extending one repeats it like a loop.
 2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4".
 

@@ -7,8 +7,10 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expandCompatible } from '../src/lib/camelot'
 import { fileName, parseJsonArray } from '../src/lib/format'
-import type { PeaksFile, StemRow } from '../src/types/engine'
-import type { LibraryFacets, PeakPoints, SampleFilter, SampleListItem, ZipDetail, ZipListItem } from '../src/types/api'
+import type { PeaksFile, SampleKind, StemRow } from '../src/types/engine'
+import type {
+  LibraryFacets, PeakPoints, RemovedSample, SampleFilter, SampleListItem, ZipDetail, ZipListItem,
+} from '../src/types/api'
 
 type Row = Record<string, unknown>
 
@@ -103,6 +105,29 @@ export class LibraryReader {
     const db = this.conn()
     if (!db) return []
     return db.prepare(sql).all(...params).map((r) => ({ ...(r as Row) })) as T[]
+  }
+
+  /** Deleted samples (schema v3+), newest first, with their trashed file if it was kept (v4). */
+  removedSamples(): RemovedSample[] {
+    const cols = this.all<{ name: string }>('PRAGMA table_info(removed_samples)').map((c) => c.name)
+    if (!cols.length || !this.library) return []
+    const v4 = cols.includes('sample')
+    const rows = this.all<{ id: number; zip_id: number; source_code: string; stem_file: string | null; kind: SampleKind
+      bars: number | null; sample: string | null; removed_at: string | null }>(
+      `SELECT r.id, r.zip_id, z.source_code, r.stem_file, r.kind, r.bars,
+              ${v4 ? 'r.sample, r.removed_at' : 'NULL AS sample, NULL AS removed_at'}
+       FROM removed_samples r JOIN zips z ON z.id = r.zip_id ORDER BY r.id DESC`)
+    return rows.map((r) => {
+      const s = r.sample ? JSON.parse(r.sample) as Record<string, never> : null
+      const trash = `.drumvault/trash/${r.id}.wav`
+      return {
+        id: r.id, zip_id: r.zip_id, source_code: r.source_code, kind: r.kind, bars: r.bars,
+        name: s ? fileName(s['rel_path']) : `${r.stem_file ?? 'stem'} (${r.kind})`,
+        category: s?.['category'] ?? null, key_label: s?.['key_label'] ?? null, key_camelot: s?.['key_camelot'] ?? null,
+        duration_s: s?.['duration_s'] ?? null, removed_at: r.removed_at,
+        trash_path: existsSync(join(this.library!, trash)) ? trash : null,
+      }
+    })
   }
 
   listZips(): ZipListItem[] {

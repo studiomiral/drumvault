@@ -114,6 +114,28 @@ export function loopBeats(c: AudioClip): number {
   return Math.max(1, (c.sample.bars ?? 1) * BEATS_PER_BAR)
 }
 
+/**
+ * Move a clip's sound `beats` later (negative: earlier) inside its own loop, wrapping around;
+ * the clip stays where it is. Audio clips rotate their loop (via `trimBeats`), pattern clips
+ * rotate their steps.
+ */
+export function shiftContent(c: Clip, beats: number): Clip {
+  if (c.type === 'audio') {
+    const L = loopBeats(c)
+    return { ...c, trimBeats: (((c.trimBeats - beats) % L) + L) % L }
+  }
+  const n = c.steps.length
+  const k = (((beats * STEPS_PER_BEAT) % n) + n) % n
+  return { ...c, steps: c.steps.map((_, i) => c.steps[(i - k + n) % n]) }
+}
+
+/** How far an audio clip's sound is moved inside its loop, in beats within (-L/2, L/2]. */
+export function contentShift(c: AudioClip): number {
+  const L = loopBeats(c)
+  const s = (((-c.trimBeats) % L) + L) % L
+  return s > L / 2 ? s - L : s
+}
+
 export function makeClip(sample: SampleListItem, laneId: string, start: number): Clip {
   const base = { id: uid('c'), laneId, start, gainDb: 0, sample: sampleRef(sample) }
   // Loops and events (fills, rolls, FX) are whole bars of audio on the grid.

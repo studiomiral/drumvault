@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -17,7 +18,7 @@ from . import classify, events as eventmod, key as keymod, loops as loopmod, nam
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
 from .audioutil import Audio, info as audio_info, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
-from .db import LibraryDB, library_dir, match_key, now_iso
+from .db import LibraryDB, SampleMatcher, library_dir, now_iso
 from .schemas import GridPreview, KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
 
 log = logging.getLogger(__name__)
@@ -380,7 +381,9 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
         with db.transaction():
             # Loops and events depend on the library BPM; one-shots don't.
             kind_filter = ("loop", "event") if loops_only else None
-            meta = db.user_meta(zid, kind_filter)
+            tol = (th.match_oneshot_tolerance_s, th.match_loop_tolerance_s)
+            meta = SampleMatcher(db.user_meta(zid, kind_filter), *tol)
+            removed = SampleMatcher(db.removed_for_zip(zid, kind_filter), *tol)
             old = db.samples_for_zip(zid, kind_filter)
             _delete_sample_files(lib, old)
             db.delete_samples(zid, kind_filter)
@@ -413,43 +416,53 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
 
             def add(stem_name: str, kind: str, category: str, data: np.ndarray, bars: int | None,
                     offset_s: float, fp: np.ndarray, peak_db: float, gain_db: float,
-                    body_bars: int | None = None) -> None:
+                    body_bars: int | None = None) -> bool:
                 ik = (kind, category, bars)
-                index[ik] = index.get(ik, 0) + 1
+                n = index.get(ik, 0) + 1
                 if kind == "oneshot":
-                    rel = naming.oneshot_rel_path(category, key_label, tag, index[ik])
+                    rel = naming.oneshot_rel_path(category, key_label, tag, n)
                 elif kind == "event":
-                    rel = naming.event_rel_path(category, settings.library_bpm, key_label, tag, bars or 0,
-                                                index[ik])
+                    rel = naming.event_rel_path(category, settings.library_bpm, key_label, tag, bars or 0, n)
                 else:
-                    rel = naming.loop_rel_path(category, settings.library_bpm, key_label, tag, bars or 0,
-                                               index[ik])
-                path = lib / rel
-                write_wav(path, data, out_sr, settings.output_format)
-                written.append(path)
-                um = meta.get(match_key(stem_name, kind, bars, offset_s), {})
-                sid = db.insert_sample(
-                    zip_id=zid, stem_id=stem_ids[stem_name], kind=kind, category=category, rel_path=rel,
+                    rel = naming.loop_rel_path(category, settings.library_bpm, key_label, tag, bars or 0, n)
+                fields = dict(
+                    kind=kind, category=category, rel_path=rel,
                     bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars, body_bars=body_bars,
                     key_label=k.label, key_camelot=k.camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
-                    gain_applied_db=gain_db, source_offset_s=offset_s,
-                    fingerprint=fp.astype(np.float32).tobytes(),
-                    favorite=int(um.get("favorite") or 0), rating=um.get("rating"), tags=um.get("tags"),
-                    created_at=created)
+                    gain_applied_db=gain_db, source_offset_s=offset_s, created_at=created)
+                fingerprint = fp.astype(np.float32).tobytes()
                 pk = peakmod.peaks_for(data, out_sr, kind, bars, th)
+                rid = removed.find(stem_name, kind, bars, offset_s)
+                if rid is not None:
+                    # Deleted by the user: re-cut into the trash, so a restore gets this cut.
+                    wav, pj = trash_files(lib, rid)
+                    prev = json.loads(db.get_removed([rid])[0]["sample"] or "{}")
+                    write_wav(wav, data, out_sr, settings.output_format)
+                    peakmod.write_peaks(pj, pk)
+                    db.update_removed(rid, {**fields, **{m: prev.get(m) for m in ("favorite", "rating", "tags")}},
+                                      fingerprint)
+                    return False
+                index[ik] = n
+                path = lib / rel
+                write_wav(path, data, out_sr, settings.output_format)
+                written.append(path)
+                um = meta.find(stem_name, kind, bars, offset_s) or {}
+                sid = db.insert_sample(
+                    zip_id=zid, stem_id=stem_ids[stem_name], **fields, fingerprint=fingerprint,
+                    favorite=int(um.get("favorite") or 0), rating=um.get("rating"), tags=um.get("tags"))
                 ppath = library_dir(lib) / "peaks" / f"{sid}.json"
                 peakmod.write_peaks(ppath, pk)
                 written.append(ppath)
+                return True
 
             for o in outputs:
                 ctx.check()
                 for h in sorted(o.oneshots, key=lambda h: h.start):
                     data = resample(h.data, h.sr, out_sr)
                     data, pk_db, gain = normalize.peak_normalize(data, settings.oneshot_peak_dbfs)
-                    add(o.name, "oneshot", h.category, data, None, h.source_offset_s, h.fingerprint,
-                        pk_db, gain)
-                    counts.oneshots += 1
+                    counts.oneshots += add(o.name, "oneshot", h.category, data, None, h.source_offset_s,
+                                           h.fingerprint, pk_db, gain)
                 for lp in sorted(o.loops, key=lambda lp: (lp.bars, lp.start)):
                     if settings.loop_norm_mode == "lufs":
                         data, pk_db, gain = normalize.loudness_normalize(
@@ -457,14 +470,13 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     else:
                         data, pk_db, gain = normalize.peak_normalize(lp.data, settings.loop_peak_dbfs)
                     offset_s = lp.start / lp.sr / o.loop_factor
-                    add(o.name, "loop", o.category, data, lp.bars, offset_s, lp.fingerprint, pk_db, gain)
-                    counts.loops += 1
+                    counts.loops += add(o.name, "loop", o.category, data, lp.bars, offset_s, lp.fingerprint,
+                                        pk_db, gain)
                 for ev in o.events:
                     data, pk_db, gain = normalize.peak_normalize(ev.data, settings.event_peak_dbfs)
                     offset_s = ev.start / ev.sr / o.loop_factor
-                    add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint, pk_db, gain,
-                        ev.body_bars)
-                    counts.events += 1
+                    counts.events += add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint,
+                                         pk_db, gain, ev.body_bars)
     except BaseException:
         for p in written:  # roll back files written by the aborted transaction
             p.unlink(missing_ok=True)
@@ -495,8 +507,75 @@ def delete_zip(settings: Settings, zip_id: int, delete_files: bool = True) -> di
         samples = db.samples_for_zip(zip_id)
         if delete_files:
             _delete_sample_files(lib, samples)
+        trashed = db.removed_ids_for_zip(zip_id)
         db.delete_zip_rows(zip_id)
+    for rid in trashed:
+        for f in trash_files(lib, rid):
+            f.unlink(missing_ok=True)
     return {"zip_id": zip_id, "deleted_samples": len(samples), "files_deleted": delete_files}
+
+
+def trash_files(lib: Path, removed_id: int) -> tuple[Path, Path]:
+    """Where a deleted sample's WAV and peaks wait until it is restored."""
+    d = library_dir(lib) / "trash"
+    return d / f"{removed_id}.wav", d / f"{removed_id}.json"
+
+
+def delete_samples(settings: Settings, sample_ids: list[int]) -> dict:
+    """Delete single samples from the library into its trash. They stay deleted when the zip is
+    reprocessed (re-cut into the trash instead) until restored."""
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        removed = db.remove_samples(sample_ids)
+    for row, rid in removed:
+        wav, pj = trash_files(lib, rid)
+        wav.parent.mkdir(parents=True, exist_ok=True)
+        src = lib / row["rel_path"]
+        if src.exists():
+            src.replace(wav)
+        peaks = library_dir(lib) / "peaks" / f"{row['id']}.json"
+        if peaks.exists():
+            peaks.replace(pj)
+    return {"deleted": len(removed)}
+
+
+def _free_rel_path(db: LibraryDB, lib: Path, rel: str) -> str:
+    """`rel`, or the same name with the next free number (a re-cut may have reused it)."""
+    m = re.match(r"^(.*_)(\d+)(\.wav)$", rel)
+    candidate, n = rel, 0
+    while db.rel_path_taken(candidate) or (lib / candidate).exists():
+        n += 1
+        candidate = f"{m.group(1)}{int(m.group(2)) + n:02d}{m.group(3)}" if m else f"{rel[:-4]}_{n}.wav"
+    return candidate
+
+
+def restore_samples(settings: Settings, removed_ids: list[int]) -> dict:
+    """Put deleted samples back from the trash. One without a trashed file (deleted before the
+    trash existed) is only forgotten as deleted: the next reprocess of its zip brings it back."""
+    lib = Path(settings.library_path)
+    restored = pending = 0
+    with LibraryDB(lib) as db:
+        for r in db.get_removed(removed_ids):
+            wav, pj = trash_files(lib, r["id"])
+            sample = json.loads(r["sample"] or "null")
+            stem = next((s for s in db.stems_for_zip(r["zip_id"]) if s["file_name"] == r["stem_file"]), None)
+            if not sample or stem is None or not wav.exists():
+                db.delete_removed(r["id"])
+                wav.unlink(missing_ok=True)
+                pj.unlink(missing_ok=True)
+                pending += 1
+                continue
+            rel = _free_rel_path(db, lib, sample["rel_path"])
+            with db.transaction():
+                sid = db.insert_sample(zip_id=r["zip_id"], stem_id=stem["id"], **{**sample, "rel_path": rel},
+                                       fingerprint=r["fingerprint"])
+                db.delete_removed(r["id"])
+                (lib / rel).parent.mkdir(parents=True, exist_ok=True)
+                wav.replace(lib / rel)
+            if pj.exists():
+                pj.replace(library_dir(lib) / "peaks" / f"{sid}.json")
+            restored += 1
+    return {"restored": restored, "pending": pending}
 
 
 def grid_preview(settings: Settings, zip_id: int) -> GridPreview:

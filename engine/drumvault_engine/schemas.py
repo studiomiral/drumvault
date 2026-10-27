@@ -102,7 +102,7 @@ class Overrides(BaseModel):
 # ---------------------------------------------------------------------------
 
 Method = Literal["process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "cancel", "health",
-                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "shutdown"]
+                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -145,6 +145,18 @@ class AnalyzeZipParams(BaseModel):
 class MarkReviewedParams(BaseModel):
     """Clear a zip's needs-review flag (it stays cleared when the zip is reprocessed)."""
     zip_id: int
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteSamplesParams(BaseModel):
+    """Delete single samples from the library; reprocessing their zip doesn't bring them back."""
+    sample_ids: list[int]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class RestoreSamplesParams(BaseModel):
+    """Put deleted samples (removed_samples ids) back into the library from its trash."""
+    removed_ids: list[int]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

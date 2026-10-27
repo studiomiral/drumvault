@@ -25,8 +25,9 @@ from pydantic import ValidationError
 from . import __version__, key as keymod, pipeline, stretch
 from .config import Settings
 from .schemas import (
-    AnalyzeZipParams, CancelParams, DeleteZipParams, GridPreviewParams, HealthResult, JobAccepted, JobDoneEvent, MarkReviewedParams,
-    ProcessZipParams, ProgressEvent, RebuildLoopsParams, ReprocessZipParams, RpcError, RpcRequest,
+    AnalyzeZipParams, CancelParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
+    HealthResult, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
+    RebuildLoopsParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest,
     SampleCounts, SetSampleMetaParams,
 )
 from .db import LibraryDB
@@ -34,6 +35,9 @@ from .db import LibraryDB
 log = logging.getLogger(__name__)
 
 JOB_METHODS = {"process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "analyze_zip"}
+# Answered directly (not queued), each on its own thread.
+DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSamplesParams,
+                  "restore_samples": RestoreSamplesParams}
 
 
 @dataclass
@@ -148,10 +152,11 @@ class RpcServer:
                 self._reply(req.id, {"zip_id": p.zip_id})
             else:
                 self._error(req.id, "not_found", f"No zip with id {p.zip_id}")
-        elif m == "grid_preview":
-            # Not queued behind imports, but off the stdin thread: extracting a zip takes a moment.
-            p = GridPreviewParams.model_validate(req.params)
-            threading.Thread(target=self._grid_preview, args=(req.id, p), daemon=True).start()
+        elif m in DIRECT_METHODS:
+            # Not queued behind imports, but off the stdin thread: extracting a zip takes a moment,
+            # and a delete may wait for a running job's write.
+            p = DIRECT_METHODS[m].model_validate(req.params)
+            threading.Thread(target=self._direct, args=(req.id, m, p), daemon=True).start()
         elif m == "shutdown":
             self._reply(req.id, {"ok": True})
             self._stopping = True
@@ -180,17 +185,23 @@ class RpcServer:
             key_backend="essentia" if keymod.essentia_available() else "fallback",
             queue_length=len(self._queue), current_job=self._current.job_id if self._current else None)
 
-    def _grid_preview(self, req_id: str, p: GridPreviewParams) -> None:
+    def _direct(self, req_id: str, method: str, p: Any) -> None:
+        """A method answered directly (not a job), run on its own thread."""
         settings = Settings.from_dict(p.settings)
         if not settings.library_path:
             self._error(req_id, "no_library", "No library folder configured")
             return
         try:
-            self._reply(req_id, pipeline.grid_preview(settings, p.zip_id))
+            if method == "grid_preview":
+                self._reply(req_id, pipeline.grid_preview(settings, p.zip_id))
+            elif method == "delete_samples":
+                self._reply(req_id, pipeline.delete_samples(settings, p.sample_ids))
+            else:
+                self._reply(req_id, pipeline.restore_samples(settings, p.removed_ids))
         except pipeline.PipelineError as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
-            log.error("grid preview failed:\n%s", traceback.format_exc())
+            log.error("%s failed:\n%s", method, traceback.format_exc())
             self._error(req_id, "internal", f"{type(e).__name__}: {e}")
 
     def cancel(self, job_id: str) -> bool:

@@ -1,9 +1,11 @@
+import json
+
 import numpy as np
 import pytest
 
 from drumvault_engine import audioutil, naming, normalize, peaks
 from drumvault_engine.config import Settings, Thresholds
-from drumvault_engine.db import LibraryDB, match_key
+from drumvault_engine.db import LibraryDB, SampleMatcher
 
 
 def test_slugify():
@@ -77,10 +79,27 @@ def test_db_source_codes_and_cascade(tmp_path):
             sid = db.insert_stem(zip_id=zid, file_name="Kick.wav", category="kick", used_for=["tempo"])
             db.insert_sample(zip_id=zid, stem_id=sid, kind="oneshot", category="kick", rel_path="a.wav",
                              source_offset_s=1.234, favorite=1)
-        meta = db.user_meta(zid)
-        assert meta[match_key("Kick.wav", "oneshot", None, 1.2341)]["favorite"] == 1
+        meta = SampleMatcher(db.user_meta(zid), 0.03, 0.25)
+        assert meta.find("Kick.wav", "oneshot", None, 1.2341)["favorite"] == 1
+        sid2 = db.insert_sample(zip_id=zid, stem_id=sid, kind="oneshot", category="kick", rel_path="b.wav",
+                                source_offset_s=2.0)
+        [(row, rid)] = db.remove_samples([sid2])
+        assert row["rel_path"] == "b.wav"
+        assert db.removed_for_zip(zid) == [("Kick.wav", "oneshot", None, 2.0, rid)]
+        assert json.loads(db.get_removed([rid])[0]["sample"])["rel_path"] == "b.wav"
         db.delete_zip_rows(zid)
-        assert not db.all_samples() and not db.stems_for_zip(zid)
+        assert not db.all_samples() and not db.stems_for_zip(zid) and not db.removed_for_zip(zid)
+
+
+def test_sample_matcher_tolerances():
+    m = SampleMatcher([("Hat.wav", "loop", 2, 10.0, "a"), ("Hat.wav", "loop", 2, 14.0, "b"),
+                       ("Kick.wav", "oneshot", None, 1.0, "k")], 0.03, 0.25)
+    assert m.find("Hat.wav", "loop", 2, 10.022) == "a"      # bar 1 moved 22 ms
+    assert m.find("Hat.wav", "loop", 2, 13.9) == "b"
+    assert m.find("Hat.wav", "loop", 2, 12.0) is None
+    assert m.find("Hat.wav", "loop", 4, 10.0) is None        # other length
+    assert m.find("Kick.wav", "oneshot", None, 1.02) == "k"
+    assert m.find("Kick.wav", "oneshot", None, 1.1) is None  # the next hit, not this one
 
 
 def test_db_transaction_rolls_back(tmp_path):

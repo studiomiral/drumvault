@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { listProjects, projectFileName, readProjectFile, writeProjectFile } from '../electron/fs'
 import {
-  clipsInRange, duplicateClips, formatPosition, formatTime, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
-  resizePattern, serializeProject,
+  clipsInRange, contentShift, duplicateClips, formatPosition, formatTime, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
+  resizePattern, serializeProject, shiftContent,
 } from '../src/lib/project'
 import { SNAP_MIN_PX, snapUnit } from '../src/arrange/geometry'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT } from '../src/store/arrange'
@@ -182,5 +182,33 @@ describe('project files', () => {
     expect((await listProjects(lib)).map((p) => p.name).sort()).toEqual(['Night: mix', 'Song'])
     await expect(readProjectFile(lib, '../x.dvproj')).rejects.toThrow()
     expect(projectFileName('  ')).toBe('Untitled.dvproj')
+  })
+})
+
+describe('moving the sound inside a clip', () => {
+  const sample = (kind: 'loop' | 'oneshot', bars: number | null) => ({
+    id: 1, rel_path: 'x.wav', name: 'x', kind, category: 'fill', bpm: 124, bars, body_bars: null, key_label: null,
+    key_camelot: null, duration_s: 1, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001',
+  }) as SampleListItem
+
+  it('rotates an audio clip\'s loop a beat at a time, wrapping, without moving the clip', () => {
+    const c = makeClip(sample('loop', 1), 'l', 8)
+    const right = shiftContent(c, 1)
+    expect(right.type === 'audio' && right.trimBeats).toBe(3)   // - - O -  ->  - - - O
+    expect(right.start).toBe(8)
+    expect(right.length).toBe(c.length)
+    expect(contentShift(right as never)).toBe(1)
+    const back = shiftContent(shiftContent(right, -1), -1)
+    expect(back.type === 'audio' && back.trimBeats).toBe(1)
+    expect(contentShift(back as never)).toBe(-1)
+    expect(shiftContent(c, 4)).toEqual(c)                       // a whole loop round
+  })
+
+  it('rotates a pattern clip\'s steps by a beat', () => {
+    const c = makeClip(sample('oneshot', null), 'l', 0) as PatternClip
+    const p = { ...c, steps: c.steps.map((_, i) => (i === 8 ? 3 : 0)) } as PatternClip
+    const r = shiftContent(p, 1) as PatternClip
+    expect(r.steps.indexOf(3)).toBe(12)
+    expect((shiftContent(p, -3) as PatternClip).steps.indexOf(3)).toBe(12)
   })
 })

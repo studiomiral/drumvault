@@ -12,6 +12,9 @@ export const IconLibrary = ({ className }: P) => (
 export const IconArrange = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base}><rect x="3" y="4" width="7" height="3" rx="1" /><rect x="8" y="9" width="9" height="3" rx="1" /><rect x="5" y="14" width="6" height="3" rx="1" /></svg>
 )
+export const IconTrash = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M4 6h12M8 6V4.5h4V6M5.5 6l.8 9.6a1.5 1.5 0 0 0 1.5 1.4h4.4a1.5 1.5 0 0 0 1.5-1.4L14.5 6M8.5 9v5M11.5 9v5" /></svg>
+)
 export const IconGrid = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base}><path d="M3 15.5h14M4.5 4v13M10 4v13M15.5 4v13" /><path d="M6.5 11.5c.6-3 1.2-3 1.8 0M12 11.5c.6-3 1.2-3 1.8 0" strokeWidth={1.3} /></svg>
 )
