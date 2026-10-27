@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -432,12 +433,18 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
                     gain_applied_db=gain_db, source_offset_s=offset_s, created_at=created)
                 fingerprint = fp.astype(np.float32).tobytes()
-                pk = peakmod.peaks_for(data, out_sr, kind, bars, th)
                 rid = removed.find(stem_name, kind, bars, offset_s)
+                prev = json.loads(db.get_removed([rid])[0]["sample"] or "{}") if rid is not None else None
+                um = prev if prev is not None else (meta.find(stem_name, kind, bars, offset_s) or {})
+                # "Move sound" set in the Library: the new cut gets the same rotation.
+                shift = int(um.get("shift_beats") or 0) if kind != "oneshot" else 0
+                if shift:
+                    data = rotate_beats(data, out_sr, settings.library_bpm, shift)
+                fields["shift_beats"] = shift
+                pk = peakmod.peaks_for(data, out_sr, kind, bars, th)
                 if rid is not None:
                     # Deleted by the user: re-cut into the trash, so a restore gets this cut.
                     wav, pj = trash_files(lib, rid)
-                    prev = json.loads(db.get_removed([rid])[0]["sample"] or "{}")
                     write_wav(wav, data, out_sr, settings.output_format)
                     peakmod.write_peaks(pj, pk)
                     db.update_removed(rid, {**fields, **{m: prev.get(m) for m in ("favorite", "rating", "tags")}},
@@ -447,7 +454,6 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 path = lib / rel
                 write_wav(path, data, out_sr, settings.output_format)
                 written.append(path)
-                um = meta.find(stem_name, kind, bars, offset_s) or {}
                 sid = db.insert_sample(
                     zip_id=zid, stem_id=stem_ids[stem_name], **fields, fingerprint=fingerprint,
                     favorite=int(um.get("favorite") or 0), rating=um.get("rating"), tags=um.get("tags"))
@@ -513,6 +519,76 @@ def delete_zip(settings: Settings, zip_id: int, delete_files: bool = True) -> di
         for f in trash_files(lib, rid):
             f.unlink(missing_ok=True)
     return {"zip_id": zip_id, "deleted_samples": len(samples), "files_deleted": delete_files}
+
+
+def rotate_beats(data: np.ndarray, sr: int, bpm: float, beats: int) -> np.ndarray:
+    """The sound moved `beats` later (negative: earlier), wrapping around the end of the loop."""
+    return np.roll(data, int(round(beats * sr * 60.0 / bpm)), axis=0)
+
+
+def shift_sample(settings: Settings, sample_id: int, beats: int) -> dict:
+    """Library "Move sound": rotate a loop or event `beats` later inside itself (rewrites the WAV
+    and peaks). The total shift is stored, so reprocessing applies it to the new cut too."""
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        row = db.get_sample(sample_id)
+        if row is None:
+            raise PipelineError("not_found", f"No sample with id {sample_id}")
+        if row["kind"] == "oneshot" or not row["bars"] or not row["bpm"]:
+            raise PipelineError("not_a_loop", "Only loops, fills and FX can be moved by a beat")
+        length = int(row["bars"]) * 4
+        old = int(row["shift_beats"] or 0)
+        new = (old + beats) % length
+        path = lib / row["rel_path"]
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        beat = sr * 60.0 / float(row["bpm"])
+        # Rotate by the difference of the rounded totals, so repeated moves never drift.
+        moved = np.roll(data, int(round(new * beat)) - int(round(old * beat)), axis=0)
+        tmp = path.with_name(f".{path.name}.part")
+        sf.write(str(tmp), moved, sr, subtype=sf.info(str(path)).subtype, format="WAV")
+        tmp.replace(path)
+        peakmod.write_peaks(library_dir(lib) / "peaks" / f"{sample_id}.json",
+                            peakmod.peaks_for(moved, sr, row["kind"], row["bars"], settings.thresholds))
+        db.set_shift(sample_id, new)
+    return {"sample_id": sample_id, "shift_beats": new}
+
+
+def stretch_samples(settings: Settings, rel_paths: list[str], bpm: float) -> dict:
+    """Time-stretch library samples (FX, which can't be sliced) to a project tempo, keeping the
+    pitch (Rubber Band, like processing). Cached under .drumvault/tempo/<bpm>/ and redone only
+    when the sample is newer. Returns {"paths": {rel_path: path to play}}."""
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        rows = {r: db.sample_by_path(r) for r in dict.fromkeys(rel_paths)}
+    out: dict[str, str] = {}
+    todo: list[tuple[str, float, Path, Path]] = []
+    for rel, row in rows.items():
+        src = lib / rel
+        if row is None or not src.exists():
+            raise PipelineError("not_found", f"No sample {rel}")
+        source_bpm = float(row["bpm"] or settings.library_bpm)
+        if abs(source_bpm - bpm) < 1e-6:
+            out[rel] = rel
+            continue
+        dst_rel = naming.tempo_rel_path(rel, bpm)
+        dst = lib / dst_rel
+        out[rel] = dst_rel
+        if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+            todo.append((rel, source_bpm, src, dst))
+
+    def one(job: tuple[str, float, Path, Path]) -> None:
+        _rel, source_bpm, src, dst = job
+        data, sr = sf.read(str(src), dtype="float32", always_2d=True)
+        s = dataclasses.replace(settings, library_bpm=bpm, output_sample_rate=sr)
+        y, _, _ = stretch.stretch_stem(data, sr, source_bpm, s)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name(f".{dst.name}.part")
+        sf.write(str(tmp), y, sr, subtype=sf.info(str(src)).subtype, format="WAV")
+        tmp.replace(dst)
+
+    with ThreadPoolExecutor(max_workers=max(1, settings.workers)) as pool:
+        list(pool.map(one, todo))
+    return {"paths": out}
 
 
 def trash_files(lib: Path, removed_id: int) -> tuple[Path, Path]:

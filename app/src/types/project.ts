@@ -12,6 +12,8 @@ export interface SampleRef {
   category: Category
   bars: number | null
   durationS: number
+  /** Tempo the file is cut at (the library BPM for loops and events; null for one-shots). */
+  bpm?: number | null
 }
 
 export interface Lane {
@@ -44,6 +46,9 @@ interface ClipBase {
   gainDb: number
   sample: SampleRef
   filter?: ClipFilter
+  /** Fade-in / fade-out lengths in beats: linear gain ramps from the clip's edges. */
+  fadeIn?: number
+  fadeOut?: number
 }
 
 /** A loop on the bar grid; extending it repeats the loop. */

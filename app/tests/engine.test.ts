@@ -36,6 +36,9 @@ const fakeCtx = {
   },
 }
 
+// The app bridge (window.drumvault) doesn't exist here; nothing in these projects needs stretching.
+vi.mock('../src/api', () => ({ api: {} }))
+
 vi.mock('../src/audio/context', () => ({
   audioContext: () => fakeCtx,
   buffers: {

@@ -242,6 +242,19 @@ function registerIpc(): void {
     send('library-changed')
     return r
   })
+  ipcMain.handle('samples:shift', async (_e, sampleId: number, beats: number) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request<{ shift_beats: number }>(
+      'shift_sample', { sample_id: sampleId, beats, settings: engineSettings() }, 60_000)
+    reader.forgetPeaks(sampleId)
+    send('library-changed')
+    return r.shift_beats
+  })
+  ipcMain.handle('lib:shift', (_e, sampleId: number) => reader.sampleShift(sampleId))
+  ipcMain.handle('samples:stretch', async (_e, relPaths: string[], bpm: number) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('stretch_samples', { rel_paths: relPaths, bpm, settings: engineSettings() }, 600_000)
+  })
   ipcMain.handle('lib:removed', () => reader.removedSamples())
   ipcMain.handle('zip:gridPreview', async (_e, zipId: number) => {
     if (!sidecar) throw new Error('Engine is not running')

@@ -66,7 +66,7 @@ export function newProject(name: string, bpm: number): Project {
 export function sampleRef(s: SampleListItem): SampleRef {
   return {
     relPath: s.rel_path, id: s.id, name: s.name, kind: s.kind, category: s.category, bars: s.bars,
-    durationS: s.duration_s,
+    durationS: s.duration_s, bpm: s.bpm,
   }
 }
 

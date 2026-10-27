@@ -102,7 +102,7 @@ class Overrides(BaseModel):
 # ---------------------------------------------------------------------------
 
 Method = Literal["process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "cancel", "health",
-                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shutdown"]
+                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -157,6 +157,20 @@ class DeleteSamplesParams(BaseModel):
 class RestoreSamplesParams(BaseModel):
     """Put deleted samples (removed_samples ids) back into the library from its trash."""
     removed_ids: list[int]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShiftSampleParams(BaseModel):
+    """Library "Move sound": rotate a loop or event `beats` later (negative: earlier) inside itself."""
+    sample_id: int
+    beats: int
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class StretchSamplesParams(BaseModel):
+    """Time-stretch samples (library-relative paths) to a project tempo, cached per tempo."""
+    rel_paths: list[str]
+    bpm: float = Field(gt=40, lt=250)
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

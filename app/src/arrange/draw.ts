@@ -234,6 +234,7 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
   const bodyH = y + h - bodyTop - 3
   if (c.type === 'audio') drawLoopBody(g, c, x0, x1, bodyTop, bodyH, px, color, W)
   else drawPatternBody(g, c, x0, x1, bodyTop, bodyH, px, color, W)
+  drawFades(g, c, x0, x1, y, h, px, color, selected)
 
   if (h >= 34 && w >= 40) {
     g.fillStyle = missing ? C.missing : '#ecebe8'
@@ -251,6 +252,33 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
     g.stroke()
   }
   g.restore()
+}
+
+/** Fade-in / fade-out: the faded-away part is shaded above a line from the edge to the handle. */
+function drawFades(g: CanvasRenderingContext2D, c: Clip, x0: number, x1: number, y: number, h: number,
+                   px: number, color: string, selected: boolean): void {
+  const sides: [number, number][] = []
+  if (c.fadeIn) sides.push([x0, x0 + c.fadeIn * px])
+  if (c.fadeOut) sides.push([x1, x1 - c.fadeOut * px])
+  for (const [edge, handle] of sides) {
+    g.beginPath()
+    g.moveTo(edge, y)
+    g.lineTo(handle, y)
+    g.lineTo(edge, y + h)
+    g.closePath()
+    g.fillStyle = 'rgba(12,12,14,0.55)'
+    g.fill()
+    g.beginPath()
+    g.moveTo(edge, y + h)
+    g.lineTo(handle, y)
+    g.strokeStyle = color
+    g.lineWidth = 1.25
+    g.stroke()
+    if (selected) {
+      g.fillStyle = color
+      g.fillRect(Math.round(handle) - 3, y + 1, 6, 6)
+    }
+  }
 }
 
 function shortName(name: string): string {

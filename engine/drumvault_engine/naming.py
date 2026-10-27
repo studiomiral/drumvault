@@ -58,6 +58,11 @@ def format_bpm(bpm: float) -> str:
     return f"{bpm:g}"
 
 
+def tempo_rel_path(rel_path: str, bpm: float) -> str:
+    """A sample time-stretched to a project tempo (cache, SCOPE.md §6.4a); the app computes the same path."""
+    return f".drumvault/tempo/{format_bpm(round(bpm, 2))}/{rel_path}"
+
+
 def oneshot_rel_path(category: str, key_label: str, tag: str, index: int) -> str:
     folder = ONESHOT_FOLDERS[category]
     return f"One-Shots/{folder}/OS_{CATEGORY_LABELS[category]}_{key_label}_{tag}_{index:02d}.wav"

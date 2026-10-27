@@ -215,6 +215,17 @@ export class LibraryReader {
     }
   }
 
+  /** Library "Move sound" of a loop/event, in beats (0 before schema v5). */
+  sampleShift(sampleId: number): number {
+    const cols = this.all<{ name: string }>('PRAGMA table_info(samples)')
+    if (!cols.some((c) => c.name === 'shift_beats')) return 0
+    return this.all<{ shift_beats: number | null }>('SELECT shift_beats FROM samples WHERE id = ?', sampleId)[0]?.shift_beats ?? 0
+  }
+
+  forgetPeaks(sampleId: number): void {
+    for (const k of [...this.peakCache.keys()]) if (k.startsWith(`${sampleId}:`)) this.peakCache.delete(k)
+  }
+
   /** Waveform peaks downsampled to `points` [min, max] pairs (cached). */
   async peaks(sampleId: number, points: number): Promise<PeakPoints | null> {
     if (!this.library) return null

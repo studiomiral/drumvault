@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
+import { forgetPeaks } from '../arrange/peaks'
 import { audition } from '../audio/audition'
+import { buffers } from '../audio/context'
+import { forgetTempo } from '../audio/tempo'
 import { IconPlay, IconStar, IconStop, IconTrash } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle, Segmented } from '../components/ui'
 import { VirtualList } from '../components/VirtualList'
-import { Waveform } from '../components/Waveform'
+import { forgetWaveform, Waveform } from '../components/Waveform'
 import { ALL_KEYS, expandCompatible } from '../lib/camelot'
 import { CATEGORY_LABELS, EVENT_CATEGORIES, formatBpm, formatDuration, KIND_LABELS, KIND_PASTEL, lengthLabel } from '../lib/format'
 import { attempt, useApp } from '../store/app'
@@ -13,6 +16,26 @@ import type { LibraryFacets, RemovedSample, SampleListItem, SampleSort } from '.
 import type { Category, SampleKind } from '../types/engine'
 
 const ROW = 46
+
+// Moves run one after another: each rewrites the sample file the next one reads.
+let shiftQueue: Promise<unknown> = Promise.resolve()
+const shiftListeners = new Set<(id: number, shift: number) => void>()
+
+/** Library "Move sound": rotate a loop/fill/FX a beat inside itself (the file changes). */
+function moveSound(s: SampleListItem, beats: number): void {
+  if (s.kind === 'oneshot') return
+  shiftQueue = shiftQueue.then(async () => {
+    const wasPlaying = audition.playingId === s.id
+    const shift = await attempt(() => api.shiftSample(s.id, beats))
+    if (shift == null) return
+    buffers.forget(s.rel_path)
+    forgetTempo(s.rel_path)
+    forgetWaveform(s.id)
+    forgetPeaks(s.rel_path)
+    for (const fn of shiftListeners) fn(s.id, shift)
+    if (wasPlaying) void audition.play(s)
+  })
+}
 const ONESHOT_ORDER: Category[] = ['kick', 'snare', 'clap', 'hat_closed', 'hat_open', 'ride', 'cymbal', 'shaker', 'perc']
 const LOOP_ORDER: Category[] = ['snare', 'clap', 'hat', 'hat_closed', 'hat_open', 'ride', 'shaker', 'perc', 'top', 'groove', 'drums']
 const ORDER: Record<SampleKind, Category[]> = { oneshot: ONESHOT_ORDER, loop: LOOP_ORDER, event: EVENT_CATEGORIES }
@@ -160,6 +183,9 @@ export function LibraryView() {
         toggleFavorite(selected)
       } else if (selected && /^[1-5]$/.test(e.key)) {
         setRating(selected, Number(e.key))
+      } else if (selected && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        moveSound(selected, e.key === 'ArrowLeft' ? -1 : 1)
       } else if (selected && e.key.toLowerCase() === 's' && !e.metaKey && !e.ctrlKey) {
         findSimilar({ id: selected.id, name: selected.name })
       }
@@ -470,10 +496,37 @@ function SelectedBar({ s, onTags, onSimilar, onDelete }: {
                }
              }}
              onBlur={() => tags !== (s.tags ?? '') && onTags(tags)} />
+      {s.kind !== 'oneshot' && <MoveSound s={s} />}
       <Button variant="ghost" title="Find similar sounds (S)" onClick={onSimilar}>Find similar</Button>
       <Button variant="ghost" onClick={() => void api.revealSample(s.rel_path)}>Reveal in Finder</Button>
       <Button variant="ghost" className="hover:!text-bad" title="Delete from the library (⌫)" onClick={onDelete}>Delete</Button>
     </div>
+  )
+}
+
+/** −1 / +1 beat for the selected loop, fill or FX, with how far it is moved now. */
+function MoveSound({ s }: { s: SampleListItem }) {
+  const [shift, setShift] = useState(0)
+  useEffect(() => {
+    let alive = true
+    void api.sampleShift(s.id).then((v) => alive && setShift(v))
+    const fn = (id: number, v: number) => id === s.id && setShift(v)
+    shiftListeners.add(fn)
+    return () => {
+      alive = false
+      shiftListeners.delete(fn)
+    }
+  }, [s.id])
+  const L = (s.bars ?? 1) * 4
+  const signed = shift > L / 2 ? shift - L : shift
+  return (
+    <span className="flex items-center gap-1 text-muted"
+          title="Move the sound a beat earlier or later inside the sample; what falls off one end comes back at the other (← / →)">
+      Move sound
+      <Button variant="ghost" className="px-1.5" onClick={() => moveSound(s, -1)}>−1</Button>
+      <Button variant="ghost" className="px-1.5" onClick={() => moveSound(s, 1)}>+1</Button>
+      <span className="w-14 tabular-nums">{signed ? `${signed > 0 ? '+' : '−'}${Math.abs(signed)} beat${Math.abs(signed) === 1 ? '' : 's'}` : ''}</span>
+    </span>
   )
 }
 

@@ -5,7 +5,7 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
-import { generate, type Generation, type Keep, type Role } from '../generate/generator'
+import { applyMix, generate, LANES, type Generation, type Keep, type Mix, type Role } from '../generate/generator'
 import { randomSeed } from '../generate/rng'
 import { newProject } from '../lib/project'
 import type { SampleListItem } from '../types/api'
@@ -17,6 +17,39 @@ export interface GenerateSettings {
   maxMinutes: number
   zipIds: number[] | null
   useRatings: boolean
+  /** Lane volume sliders (dB on top of the starting mix), per lane role. */
+  mix: Mix
+  /** Tempo per track: null = the library BPM, else a whole BPM from min–max (equal: fixed). */
+  tempo: { min: number; max: number } | null
+}
+
+const TEMPO_KEY = 'drumvault.generate.tempo'
+
+function savedTempo(): GenerateSettings['tempo'] {
+  try {
+    return JSON.parse(localStorage.getItem(TEMPO_KEY) ?? 'null') as GenerateSettings['tempo']
+  } catch {
+    return null
+  }
+}
+
+/** Remember the tempo option between sessions. */
+export function saveTempo(tempo: GenerateSettings['tempo']): void {
+  try {
+    localStorage.setItem(TEMPO_KEY, JSON.stringify(tempo))
+  } catch {
+    // not remembered
+  }
+}
+
+const MIX_KEY = 'drumvault.generate.laneMix'
+
+function savedMix(): Mix {
+  try {
+    return JSON.parse(localStorage.getItem(MIX_KEY) ?? '{}') as Mix
+  } catch {
+    return {}
+  }
 }
 
 export interface KeepToggles {
@@ -40,7 +73,7 @@ export const useGenerate = create<GenerateState>((set) => ({
   samples: null,
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo() },
   keep: { structure: false, key: false, lanes: [] },
   pending: null,
   set: (patch) => set(patch),
@@ -75,6 +108,25 @@ function prefetch(): void {
   const next = make()
   useGenerate.getState().set({ pending: next })
   if (next) void playback.preload(next.project)
+}
+
+/**
+ * Move a lane's volume slider to `volumeDb`: the current, earlier and prefetched generations
+ * follow at once (no re-roll), and the next ones are made with it. Remembered between sessions.
+ */
+export function setLaneVolume(role: Role, volumeDb: number): void {
+  const { settings, history, pending, set } = useGenerate.getState()
+  const base = LANES.find((l) => l.role === role)?.volumeDb ?? 0
+  const mix = { ...settings.mix, [role]: volumeDb - base }
+  set({ settings: { ...settings, mix } })
+  for (const g of [...history, pending]) if (g) applyMix(g.project, mix)
+  const g = current()
+  if (g) playback.syncLanes(g.project.lanes)
+  try {
+    localStorage.setItem(MIX_KEY, JSON.stringify(mix))
+  } catch {
+    // private window or blocked storage: the mix just isn't remembered
+  }
 }
 
 /** Options or keep toggles changed: the prefetched generation no longer fits. */

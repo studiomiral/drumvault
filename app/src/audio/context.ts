@@ -23,6 +23,15 @@ class BufferCache {
   private loading = new Map<string, Promise<AudioBuffer>>()
   private bytes = 0
 
+  /** The file changed on disk: decode it again next time. */
+  forget(relPath: string): void {
+    const b = this.buffers.get(relPath)
+    if (b) {
+      this.buffers.delete(relPath)
+      this.bytes -= size(b)
+    }
+  }
+
   /** Already decoded (no I/O). */
   get(relPath: string): AudioBuffer | undefined {
     const b = this.buffers.get(relPath)

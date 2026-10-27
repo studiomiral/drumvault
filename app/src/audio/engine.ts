@@ -9,6 +9,7 @@ import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
 import { applyLane, createLaneNodes, laneAudible, playEvent, type LaneNodes } from './graph'
 import { eventsInRange, metronomeTicks } from './schedule'
+import { ensureTempo, projectSounds } from './tempo'
 
 const TICK_MS = 25
 const LOOKAHEAD = 0.12      // seconds scheduled ahead
@@ -93,9 +94,14 @@ class PlaybackEngine {
     }
   }
 
-  /** Decode everything the project uses up front, so pressing play starts at once. */
-  preload(project: Project): Promise<string[]> {
-    return buffers.loadAll(project.clips.map((c) => c.sample.relPath))
+  /** Decode everything the project uses up front (stretched FX first), so pressing play starts at once. */
+  async preload(project: Project): Promise<string[]> {
+    try {
+      await ensureTempo(project)
+    } catch (e) {
+      console.error('stretching for the project tempo failed', e)  // those FX stay silent
+    }
+    return buffers.loadAll(projectSounds(project))
   }
 
   async play(fromBeat = this.stoppedAt): Promise<void> {
@@ -104,7 +110,7 @@ class PlaybackEngine {
     if (ctx.state === 'suspended') await ctx.resume()
     const project = this.getProject()
     this.syncLanes(project.lanes)
-    const missing = project.clips.some((c) => !buffers.get(c.sample.relPath))
+    const missing = projectSounds(project).some((p) => !buffers.get(p))
     if (missing) {
       this.loading = true
       this.emit()
@@ -252,7 +258,11 @@ class PlaybackEngine {
     if (kind === 'loop') {
       src.loop = true
       src.loopStart = 0
-      src.loopEnd = Math.min(buffer.duration, beatToSec((bars ?? 1) * BEATS_PER_BAR, p.bpm))
+      // Project at another tempo than the library: the preview runs at the project's speed
+      // (a slight pitch change, audition only; clips in the project are sliced instead).
+      const loopBpm = ((bars ?? 1) * BEATS_PER_BAR * 60) / buffer.duration
+      if (Math.abs(loopBpm - p.bpm) > 0.01) src.playbackRate.value = p.bpm / loopBpm
+      src.loopEnd = buffer.duration
     }
     src.connect(this.out())
     src.onended = () => {

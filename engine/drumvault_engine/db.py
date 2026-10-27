@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS samples (
   source_offset_s REAL,
   fingerprint BLOB,
   favorite INTEGER DEFAULT 0, rating INTEGER, tags TEXT,
+  shift_beats INTEGER DEFAULT 0,    -- loops/events: sound rotated this many beats later (v5)
   created_at TEXT
 );
 
@@ -110,6 +111,8 @@ class LibraryDB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(samples)")}
         if "body_bars" not in cols:  # v2: event body length (filled on the next reprocess)
             self.conn.execute("ALTER TABLE samples ADD COLUMN body_bars INTEGER")
+        if "shift_beats" not in cols:  # v5: "Move sound" in the Library
+            self.conn.execute("ALTER TABLE samples ADD COLUMN shift_beats INTEGER DEFAULT 0")
         removed_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(removed_samples)")}
         for col, typ in (("sample", "TEXT"), ("fingerprint", "BLOB"), ("removed_at", "TEXT")):
             if col not in removed_cols:  # v4: restorable deleted samples
@@ -234,6 +237,16 @@ class LibraryDB:
             self._update("samples", sample_id, fields)
         return True
 
+    def get_sample(self, sample_id: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM samples WHERE id = ?", (sample_id,)).fetchone()
+
+    def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()
+
+    def set_shift(self, sample_id: int, shift_beats: int) -> None:
+        with self._lock:
+            self._update("samples", sample_id, {"shift_beats": shift_beats})
+
     def delete_samples(self, zip_id: int, kind: Kinds = None) -> None:
         sql, args = _kind_filter(kind)
         self.conn.execute(f"DELETE FROM samples WHERE zip_id = ?{sql}", (zip_id, *args))
@@ -241,12 +254,12 @@ class LibraryDB:
     def user_meta(self, zip_id: int, kind: Kinds = None) -> list[MatchEntry]:
         """favorite/rating/tags of a zip's samples, for matching after reprocessing."""
         where, args = _kind_filter(kind, "s.kind")
-        sql = ("SELECT s.kind, s.bars, s.source_offset_s, s.favorite, s.rating, s.tags, st.file_name "
+        sql = ("SELECT s.kind, s.bars, s.source_offset_s, s.favorite, s.rating, s.tags, s.shift_beats, st.file_name "
                f"FROM samples s JOIN stems st ON st.id = s.stem_id WHERE s.zip_id = ?{where}")
         return [(r["file_name"], r["kind"], r["bars"], r["source_offset_s"] or 0.0,
-                 {"favorite": r["favorite"], "rating": r["rating"], "tags": r["tags"]})
+                 {"favorite": r["favorite"], "rating": r["rating"], "tags": r["tags"], "shift_beats": r["shift_beats"]})
                 for r in self.conn.execute(sql, (zip_id, *args))
-                if r["favorite"] or r["rating"] is not None or r["tags"]]
+                if r["favorite"] or r["rating"] is not None or r["tags"] or r["shift_beats"]]
 
     def remove_samples(self, sample_ids: list[int]) -> list[tuple[sqlite3.Row, int]]:
         """Move samples from the index to `removed_samples`, so reprocessing doesn't bring them
@@ -303,7 +316,7 @@ def _kind_filter(kind: Kinds, column: str = "kind") -> tuple[str, tuple[str, ...
 # Sample columns kept for a restore (ids, the stem link and the fingerprint are handled apart).
 RESTORE_COLUMNS = ("kind", "category", "rel_path", "bpm", "bars", "body_bars", "key_label", "key_camelot",
                    "duration_s", "sample_rate", "channels", "peak_db", "gain_applied_db", "source_offset_s",
-                   "favorite", "rating", "tags", "created_at")
+                   "favorite", "rating", "tags", "shift_beats", "created_at")
 
 
 def _restorable(row: sqlite3.Row) -> dict[str, Any]:

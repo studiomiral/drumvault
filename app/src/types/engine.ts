@@ -131,6 +131,8 @@ export type RpcRequest =
   | { id: string; method: "mark_reviewed"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "delete_samples"; params: { sample_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "restore_samples"; params: { removed_ids: number[]; settings: EngineSettings } }
+  | { id: string; method: "shift_sample"; params: { sample_id: number; beats: number; settings: EngineSettings } }
+  | { id: string; method: "stretch_samples"; params: { rel_paths: string[]; bpm: number; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
   | { id: string; method: "shutdown"; params: Record<string, never> };

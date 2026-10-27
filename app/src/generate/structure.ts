@@ -7,7 +7,7 @@ import type { Rng } from './rng'
 export type SectionKind = 'intro' | 'build' | 'drop' | 'break' | 'outro'
 
 /** What the kick does in a breakdown. */
-export type KickMode = 'out' | 'filtered' | 'sweep' | 'halftime' | 'downbeats' | 'kept'
+export type KickMode = 'out' | 'filtered' | 'sweep' | 'thin' | 'downbeats' | 'kept'
 
 /** How a build brings the elements in. */
 export type BuildStyle = 'layered' | 'all' | 'doubletime' | 'filter'
@@ -32,7 +32,7 @@ const LIMITS: Record<SectionKind, [number, number]> = {
 }
 
 export const KICK_MODE_LABEL: Record<KickMode, string> = {
-  out: 'no kick', filtered: 'filtered kick', sweep: 'kick filter sweep', halftime: 'half-time kick',
+  out: 'no kick', filtered: 'filtered kick', sweep: 'kick filter sweep', thin: 'high-passed kick',
   downbeats: 'kick on the one', kept: 'kick kept',
 }
 
@@ -41,7 +41,8 @@ export const BUILD_LABEL: Record<BuildStyle, string> = {
 }
 
 export function pickKickMode(rng: Rng): KickMode {
-  return rng.weighted([['out', 5], ['filtered', 3], ['sweep', 2], ['halftime', 2], ['downbeats', 1.5], ['kept', 1]])
+  // Low-passed kicks are kept rare; a thin high-passed kick is the more common filtered one.
+  return rng.weighted([['out', 5], ['thin', 2.5], ['filtered', 1], ['sweep', 1], ['downbeats', 1.5], ['kept', 1]])
 }
 
 export function pickBuildStyle(rng: Rng): BuildStyle {

@@ -190,6 +190,12 @@ export interface DrumvaultAPI {
 
   /** Delete samples (files and index); reprocessing their zip doesn't bring them back. Returns the count. */
   deleteSamples(sampleIds: number[]): Promise<number>
+  /** Library "Move sound": rotate a loop/event `beats` later inside itself. Returns the total shift. */
+  shiftSample(sampleId: number, beats: number): Promise<number>
+  /** A loop/event's current shift in beats (0..length-1). */
+  sampleShift(sampleId: number): Promise<number>
+  /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
+  stretchSamples(relPaths: string[], bpm: number): Promise<void>
   /** Deleted samples, newest first. */
   listRemoved(): Promise<RemovedSample[]>
   /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */

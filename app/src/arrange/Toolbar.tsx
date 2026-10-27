@@ -47,9 +47,7 @@ export function Toolbar() {
               onClick={() => edit('Toggle metronome', (d) => {
                 d.metronome = !d.metronome
               })}>Click</Toggle>
-      <span className="text-[12px] text-muted ml-2" title="Project tempo = library BPM">
-        <span className="font-semibold text-text">{formatBpm(project.bpm)}</span> BPM
-      </span>
+      <TempoField />
       <label className="flex items-center gap-1.5 text-[12px] text-muted ml-2" title="Project length in bars">
         <input type="number" min={1} max={999} className={cx(inputClass, 'w-16 h-7')} value={project.lengthBars}
                onChange={(e) => {
@@ -125,6 +123,50 @@ function PositionDisplay() {
     return () => cancelAnimationFrame(raf)
   }, [])
   return <span ref={ref} title="Bar.beat.16th" className="w-[74px] font-mono text-[13px] tabular-nums text-center rounded-md bg-panel-2 border border-line h-7 leading-7">1.1.1</span>
+}
+
+/**
+ * Project tempo. Samples are cut at the library BPM; at another tempo loops, fills and rolls
+ * are sliced onto the grid and FX are stretched (pitch stays), see SCOPE.md §6.4a.
+ */
+function TempoField() {
+  const bpm = useProject((s) => s.project.bpm)
+  const edit = useProject((s) => s.edit)
+  const library = useApp((s) => s.settings?.engine.library_bpm ?? 124)
+  const [text, setText] = useState(formatBpm(bpm))
+  useEffect(() => setText(formatBpm(bpm)), [bpm])
+  const commit = () => {
+    const v = Math.round(Number(text.replace(',', '.')) * 100) / 100
+    if (!(v >= 60 && v <= 200) || v === bpm) {
+      setText(formatBpm(bpm))
+      return
+    }
+    const at = playback.position()
+    const wasPlaying = playback.playing
+    edit('Tempo', (d) => {
+      d.bpm = v
+    })
+    // Same bar after the change; stretched FX for the new tempo load before playing on.
+    if (wasPlaying) void playback.play(at)
+    else playback.setPosition(at)
+  }
+  return (
+    <label className={cx('flex items-center gap-1.5 text-[12px] ml-2', bpm !== library ? 'text-accent' : 'text-muted')}
+           title={bpm !== library
+             ? `Library tempo is ${formatBpm(library)} BPM: loops are sliced onto this tempo and FX are stretched (pitch stays)`
+             : 'Project tempo (the library BPM). Change it to play the arrangement faster or slower; pitch stays.'}>
+      <input className={cx(inputClass, 'w-16 h-7 tabular-nums')} value={text} inputMode="decimal"
+             onChange={(e) => setText(e.target.value)} onBlur={commit}
+             onKeyDown={(e) => {
+               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+               if (e.key === 'Escape') {
+                 setText(formatBpm(bpm))
+                 ;(e.target as HTMLInputElement).blur()
+               }
+             }} />
+      BPM
+    </label>
+  )
 }
 
 function ProjectMenu() {

@@ -76,10 +76,8 @@ export function App() {
   return (
     <div className="h-full flex bg-bg">
       <nav className="w-[224px] shrink-0 bg-panel border-r border-line flex flex-col">
-        <div className="app-drag h-10 shrink-0" />
-        <div className="app-drag px-5 pb-4 border-b border-line">
-          <div className="font-display text-[19px] font-medium leading-tight">Drumvault</div>
-        </div>
+        {/* Room for the window buttons; lines up with the views' top bars. */}
+        <div className="app-drag h-14 shrink-0 border-b border-line" />
         <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-5 space-y-6">
           {NAV_GROUPS.map((g) => (
             <div key={g.label}>

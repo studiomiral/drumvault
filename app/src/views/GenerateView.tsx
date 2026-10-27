@@ -4,11 +4,12 @@ import { playback } from '../audio/engine'
 import { openGenerated } from '../arrange/persistence'
 import { IconPlay, IconStop } from '../components/icons'
 import { Button, cx, Empty, PageTitle, SectionTitle } from '../components/ui'
-import { KEEPABLE, LANES, type Generation, type Role } from '../generate/generator'
+import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
+import { KEEPABLE, LANES, laneRole, type Generation, type Role } from '../generate/generator'
 import { markerColor } from '../lib/project'
 import { useApp } from '../store/app'
 import {
-  attachPlayback, current, invalidate, loadSamples, next, playSection, previous, useGenerate, type KeepToggles,
+  attachPlayback, current, invalidate, loadSamples, next, playSection, previous, saveTempo, setLaneVolume, useGenerate, type KeepToggles,
 } from '../store/generate'
 import type { ZipListItem } from '../types/api'
 
@@ -126,6 +127,55 @@ export function GenerateView() {
   )
 }
 
+/** Tempo per track: the library BPM, a fixed BPM, or a random whole BPM from a range. */
+function TempoOption({ sel }: { sel: string }) {
+  const { settings, set } = useGenerate()
+  const library = useApp((s) => s.settings?.engine.library_bpm ?? 124)
+  const t = settings.tempo
+  const mode = !t ? 'library' : t.min === t.max ? 'fixed' : 'range'
+  const update = (tempo: typeof t) => {
+    set({ settings: { ...settings, tempo } })
+    saveTempo(tempo)
+    invalidate()
+  }
+  const num = (v: string, fallback: number) => {
+    const n = Math.round(Number(v))
+    return n >= 60 && n <= 200 ? n : fallback
+  }
+  const field = 'w-14 h-7 rounded-lg bg-[rgb(0_0_0/0.25)] px-2 text-text text-[12px] outline-none shadow-[0_0_0_1px_rgb(255_255_255/0.08)] tabular-nums'
+  return (
+    <span className="flex items-center gap-1.5 ml-2"
+          title="Other tempos keep the pitch: loops are sliced onto the grid, FX are stretched by the engine">
+      Tempo
+      <select className={sel} value={mode} onChange={(e) => {
+        const m = e.target.value
+        update(m === 'library' ? null : m === 'fixed' ? { min: t?.min ?? library, max: t?.min ?? library }
+          : { min: Math.min(t?.min ?? library - 4, library - 4), max: Math.max(t?.max ?? library + 4, library + 4) })
+      }}>
+        <option value="library">Library ({library})</option>
+        <option value="fixed">Fixed</option>
+        <option value="range">Range</option>
+      </select>
+      {t && mode === 'fixed' && (
+        <input key={`f${t.min}`} className={field} defaultValue={t.min}
+               onBlur={(e) => { const v = num(e.target.value, t.min); update({ min: v, max: v }) }}
+               onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+      )}
+      {t && mode === 'range' && (
+        <>
+          <input key={`a${t.min}`} className={field} defaultValue={t.min}
+                 onBlur={(e) => { const v = num(e.target.value, t.min); update({ min: Math.min(v, t.max - 1), max: t.max }) }}
+                 onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+          –
+          <input key={`b${t.max}`} className={field} defaultValue={t.max}
+                 onBlur={(e) => { const v = num(e.target.value, t.max); update({ min: t.min, max: Math.max(v, t.min + 1) }) }}
+                 onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+        </>
+      )}
+    </span>
+  )
+}
+
 /** Length, sources and favourites bias. */
 function Options() {
   const { settings, set } = useGenerate()
@@ -156,6 +206,7 @@ function Options() {
       }}>
         {minutes.map((m) => <option key={m} value={m}>{m} min</option>)}
       </select>
+      <TempoOption sel={sel} />
       <Button variant="secondary" className="ml-2" onClick={() => setOpen(!open)}>
         Sources: {settings.zipIds ? `${settings.zipIds.length} zip${settings.zipIds.length === 1 ? '' : 's'}` : 'all zips'}
       </Button>
@@ -199,9 +250,11 @@ function Overview({ g }: { g: Generation }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(900)
-  const LABEL_W = 84
+  const LABEL_W = 214
   const BAND = 30
-  const ROW = 22
+  const ROW = 26
+  useGenerate((s) => s.settings.mix)  // redraw the sliders when a volume changes
+  const dragging = useRef(false)
   const h = BAND + g.project.lanes.length * ROW + 8
   const totalBeats = g.project.lengthBars * 4
 
@@ -249,8 +302,6 @@ function Overview({ g }: { g: Generation }) {
       // Lanes
       g.project.lanes.forEach((lane, li) => {
         const y = BAND + li * ROW + 4
-        x.fillStyle = '#a5a5a1'
-        x.fillText(lane.name, 8, y + ROW / 2 - 2)
         x.fillStyle = 'rgba(255,255,255,0.03)'
         x.fillRect(LABEL_W, y, w - LABEL_W - 8, ROW - 4)
         for (const c of g.project.clips) {
@@ -295,8 +346,23 @@ function Overview({ g }: { g: Generation }) {
   }
 
   return (
-    <section ref={wrap} className="rounded-2xl border border-line bg-panel-2 overflow-hidden">
+    <section ref={wrap} className="relative rounded-2xl border border-line bg-panel-2 overflow-hidden">
       <canvas ref={ref} style={{ width: w, height: h }} className="block cursor-pointer" onClick={onClick} />
+      {/* Lane names and volume sliders, as in Arrange's lane headers. */}
+      {g.project.lanes.map((lane, li) => {
+        const role = laneRole(lane.name)
+        return (
+          <div key={lane.id} className="absolute left-0 flex items-center gap-2 pl-3 pr-3 text-[11.5px]"
+               style={{ top: BAND + li * ROW + 4, height: ROW - 4, width: LABEL_W }}>
+            <span className="w-[52px] truncate text-muted" title={lane.name}>{lane.name}</span>
+            <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb}
+                       reset={LANES.find((l) => l.role === role)?.volumeDb ?? 0} color={lane.color} dragging={dragging}
+                       title={`Volume ${fmtDb(lane.volumeDb)} (double-click: starting level)`}
+                       onChange={(v) => role && setLaneVolume(role, v)} />
+            <span className="w-10 text-right text-[10.5px] tabular-nums text-faint">{fmtDb(lane.volumeDb)}</span>
+          </div>
+        )
+      })}
     </section>
   )
 }

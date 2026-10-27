@@ -6,6 +6,7 @@ import type { Project } from '../types/project'
 import { buffers } from './context'
 import { createLaneNodes, playEvent } from './graph'
 import { eventsInRange } from './schedule'
+import { ensureTempo } from './tempo'
 
 export interface RenderRange {
   startBeat: number
@@ -38,6 +39,7 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
   const from = beatToSec(range.startBeat, project.bpm)
   const to = beatToSec(range.endBeat, project.bpm)
   const events = eventsInRange(project, from, to, { includeOngoing: true, laneIds: wanted })
+  await ensureTempo(project)
   await buffers.loadAll(events.map((e) => e.relPath))
   for (const ev of events) {
     const buf = buffers.get(ev.relPath)

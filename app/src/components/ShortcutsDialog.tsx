@@ -9,7 +9,7 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
   {
     title: 'Library',
     rows: [['Click / Space', 'Play / stop the selected sample'], ['↑ / ↓', 'Previous / next sample, and play it'],
-      ['Esc', 'Stop'], ['F', 'Favourite'], ['1 – 5', 'Rate (again to clear)'], ['S', 'Find similar sounds'],
+      ['Esc', 'Stop'], ['← / →', 'Move the sound of a loop, fill or FX a beat earlier / later'], ['F', 'Favourite'], ['1 – 5', 'Rate (again to clear)'], ['S', 'Find similar sounds'],
       ['⌘F', 'Search'], ['Drag a row', 'Drop the WAV into Finder or Logic'],
       ['⌘-click / ⇧-click / ⌘A', 'Select several samples (Esc clears)'], ['⌫', 'Delete the selected samples from the library'],
       ['Deleted → Enter', 'Restore the selected deleted samples']],
@@ -33,7 +33,7 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
       ['Click, ⇧-click, drag on empty space', 'Select clips'], ['⌘A', 'Select all'],
       ['Drag', 'Move / resize (snaps to the grid: finer when zoomed in, down to 16ths)'],
       ['⌥ while dragging', 'Snap 4× finer'], ['⌥ when clicking, then drag', 'Copy'],
-      ['Drag a clip edge', 'Extend (repeats) / trim'], ['R / ⌘D', 'Duplicate after the selection (or the selected section)'],
+      ['Drag a clip edge (bottom half)', 'Extend (repeats) / trim'], ['Drag a clip edge (top half)', 'Fade in / fade out'], ['R / ⌘D', 'Duplicate after the selection (or the selected section)'],
       ['← / →', 'Nudge a bar (⌥: a beat)'], ['⇧← / ⇧→', 'Move the sound a beat inside its loop (the clip stays)'], ['⌫', 'Delete'], ['⌘Z / ⇧⌘Z', 'Undo / redo'],
       ['Double-click a pattern', 'Step editor (click cycles full → medium → soft → off)'],
       ['Drag in the top band', 'Add a section marker; click it to select its clips'],

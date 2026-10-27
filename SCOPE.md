@@ -332,6 +332,7 @@ CREATE TABLE samples (
   source_offset_s REAL,             -- position in the original stem
   fingerprint BLOB,                 -- for dedupe + "similar sounds"
   favorite INTEGER DEFAULT 0, rating INTEGER, tags TEXT,
+  shift_beats INTEGER DEFAULT 0,    -- loops/events: Library "Move sound", beats later (schema v5)
   created_at TEXT
 );
 
@@ -384,6 +385,8 @@ Requests from the app:
 {"id": "uuid", "method": "grid_preview", "params": {"zip_id": 12, "settings": {...}}}
 {"id": "uuid", "method": "delete_samples", "params": {"sample_ids": [301, 302], "settings": {...}}}
 {"id": "uuid", "method": "restore_samples", "params": {"removed_ids": [7], "settings": {...}}}
+{"id": "uuid", "method": "shift_sample", "params": {"sample_id": 301, "beats": 1, "settings": {...}}}
+{"id": "uuid", "method": "stretch_samples", "params": {"rel_paths": ["FX/Risers/..."], "bpm": 128, "settings": {...}}}
 {"id": "uuid", "method": "health", "params": {}}
 ```
 
@@ -412,7 +415,7 @@ uv run python -m drumvault_engine cli analyze <zip>        # prints classificati
 
 ### 6.1 Layout
 
-A single window with a left nav: **Process**, **Library**, **Grid**, **Generate**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark matte theme modelled on the NeuroNest dashboard reference: charcoal surfaces with thin borders and large rounded cards, a grouped sidebar (Samples: Process, Library, Grid · Create: Generate, Arrange · Settings: Settings, Shortcuts) with the library and engine status at the bottom, pastels for kinds (blue one-shots, mint loops, lavender FX & fills), and a subtle yellow accent for primary actions and selection. Process opens with a gradient hero banner beside the drop box. Page titles in the top bar are heavy display capitals (Bricolage Grotesque ExtraBold). The Drumvault name, the Process banner and dialog titles use a book serif (Newsreader); the UI uses a grotesk (Hanken Grotesk). All fonts are bundled locally.
+A single window with a left nav: **Process**, **Library**, **Grid**, **Generate**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark matte theme modelled on the NeuroNest dashboard reference: charcoal surfaces with thin borders and large rounded cards, a grouped sidebar without a logo or name (the top holds the window buttons; Samples: Process, Library, Grid · Create: Generate, Arrange · Settings: Settings, Shortcuts) with the library and engine status at the bottom, pastels for kinds (blue one-shots, mint loops, lavender FX & fills), and a subtle yellow accent for primary actions and selection. Process opens with a gradient hero banner beside the drop box. Page titles in the top bar are heavy display capitals (Bricolage Grotesque ExtraBold). The Process banner and dialog titles use a book serif (Newsreader); the UI uses a grotesk (Hanken Grotesk). All fonts are bundled locally.
 
 ### 6.2 Process view
 
@@ -445,6 +448,7 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - "Find similar" action: nearest neighbors by fingerprint within the same category.
 - Drag a sample out to Finder or Logic (Electron `startDrag`) as a bonus.
 - **Cleaning up:** ⌘-click, ⇧-click (range) and ⌘A select several samples; **Delete** / ⌫ removes them at once, without a confirm since they can be restored (engine `delete_samples`: WAV files, peaks and rows). Deleted samples are remembered per zip in `removed_samples`, so reprocessing the zip (also a Grid re-cut or a library BPM rebuild) doesn't bring them back; it re-cuts them into the trash instead, so a restore matches the current grid and BPM. Whole zips are removed from the zip panel (**Delete samples**).
+- **Move sound** (selected loop, fill or FX: −1 / +1 in the bottom bar, or ← / →): rotates the sample file a beat earlier or later inside itself, wrapping around (e.g. a fill on beat 3 of its bar moved to beat 4). Engine `shift_sample` rewrites the WAV and peaks and stores the total in `samples.shift_beats`; reprocessing applies it to the new cut (matched like favourites). Arrange clips using the sample change with it.
 - **Deleted** (top bar, with a count) lists the deleted samples, newest first: play them, select one or several (⌘/⇧-click, ⌘A) and **Restore** (Enter). Their WAV and peaks wait in `.drumvault/trash/<id>.wav|json`; restoring (engine `restore_samples`) moves them back under their name, or the next free number if a re-cut reused it, with favourite, rating and tags. Deletions from before the trash existed have no file: restoring them only forgets the deletion, and the next reprocess brings them back.
 
 ### 6.4 Arrange view (mini DAW)
@@ -461,7 +465,7 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - **Each lane exports as one stem.**
 
 **Clip types**
-1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats. **Move sound** (−1 / +1 in the clip bar, ⇧← / ⇧→) moves the sound a beat later or earlier inside the clip's loop, wrapping around, while the clip stays where it is (e.g. a fill on beat 3 moved to beat 4); pattern clips rotate their steps the same way.
+1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats. **Fades:** dragging the top half of a clip's edge (or the fade handle inside it) sets a linear fade-in or fade-out, snapped like everything else; the bottom half still resizes. Fades follow the edges when a clip is resized, never overlap, apply to pattern clips too, and are scheduled in `schedule.ts` (`fadeAt`), so playback and export match. **Move sound** (−1 / +1 in the clip bar, ⇧← / ⇧→) moves the sound a beat later or earlier inside the clip's loop, wrapping around, while the clip stays where it is (e.g. a fill on beat 3 moved to beat 4); pattern clips rotate their steps the same way.
    FX & fills (events) also become audio clips: placed at a bar, they play once over their length; extending one repeats it like a loop.
 2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4".
 
@@ -482,6 +486,17 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - Lookahead scheduler: a 25 ms timer tick schedules everything in the next 120 ms with `AudioBufferSourceNode.start(when, offset, duration)`.
 - Graph: source → clip gain → lane gain/pan → master gain → destination.
 - Playback must be sample-accurate: no drift over 192 bars.
+
+### 6.4a Project tempo
+
+Samples are cut at the library BPM. A project (Arrange, or a generation) can run at another tempo without changing pitch, like warping in Ableton or Logic:
+- **Drum loops, fills and rolls** play as 16th slices: each slice starts on the project's grid with its own piece of the loop (Ableton's Beats mode), so transients and pitch are untouched. Faster: a slice is cut at the next one (3 ms fade); slower: a tiny gap after it. Done in `schedule.ts`, so playback and export match; at the library tempo a loop is one event as before (bit-exact).
+- **FX** (risers, downlifters, impacts, sweeps, atmos) would break up when sliced: the engine stretches them with Rubber Band (`stretch_samples`) into `.drumvault/tempo/<bpm>/<rel_path>`, once per tempo, redone only when the sample changes. Playback and export make sure they exist before loading (`audio/tempo.ts`).
+- **One-shot patterns** just land on the new grid.
+- Clips store their sample's tempo (`SampleRef.bpm`; older projects derive it from the length).
+- **Arrange:** the BPM field in the toolbar (60–200) sets the project tempo; positions stay in beats, the playhead stays on its bar. It shows in the accent colour when it differs from the library BPM.
+- **Generate:** a Tempo option: Library (default), Fixed, or a Range from which every track picks a whole BPM (seeded). Remembered between sessions.
+- Auditioning a library loop in sync while a project plays at another tempo speeds the preview up or down (audition only, slight pitch change).
 
 ### 6.5 Export
 
@@ -504,11 +519,12 @@ A view of its own (sidebar: Create → **Generate**) that instantly builds compl
 - Shown per generation: length, BPM, the track key, its structure (e.g. "Intro 32 · Build 16 · Drop 32 · Break 8 · …"), the variation choices made, and which zips the samples come from.
 - **Keep** toggles hold parts while cycling: keep the structure, keep the kick, keep a lane's sample, keep the key. Everything not kept is re-rolled.
 - Options: length range (default 4–6 min), sources (all zips or a selection), favourites/ratings bias (on), and a seed field (the same seed + library + options gives the same generation).
+- **Volume** slider on every lane of the overview, the same control as Arrange's lane headers (double-click: the starting level): it changes the current generation at once (no re-roll), applies to the next ones and to what is sent to Arrange, and is remembered between sessions (per lane: Kick, Clap 2, Tops 3, …). The starting mix has the kick at −2 dB.
 - **Send to Arrange** (Enter) creates a new project ("Generated 01", …), opens it in Arrange and keeps the Generate history, so you can go back and send another. The current Arrange project is never overwritten.
 
 **Structure: a grammar, not a template**
 An arrangement is a sequence of sections, each a whole number of 8-bar phrases, generated from weighted rules and then fitted to the chosen length. Hard constraints only where DJs need them:
-- **Always:** a mix-in intro and a mix-out outro of ≥ 16 bars each, with a steady kick and hats (beatmatchable, nothing tonal); the track starts and ends on a bar line.
+- **Always:** a mix-in intro and a mix-out outro of ≥ 16 bars each, with a steady kick and hats (beatmatchable, nothing tonal); the kick there is subtly high-passed (60–110 Hz) so it mixes over another track, and top loops come in (intro) and thin out (outro); the track starts and ends on a bar line.
 - **Everything else varies.** Examples of what the rules can produce:
   - Intro → build → drop → break → drop → long break → drop → outro (the classic shape).
   - One long breakdown in the middle, or three short ones (no "false drops": every breakdown runs into a real drop or the outro).
@@ -516,10 +532,17 @@ An arrangement is a sequence of sections, each a whole number of 8-bar phrases, 
   - Builds of 8–32 bars: layered slowly one element per phrase, all at once, or in **double time** (hats/perc/snare density doubling 8ths → 16ths → 32nds towards the drop).
 - Weights favour the classic shape, so most generations are sensible and some are surprising.
 
-**Variation dimensions** (each chosen per generation, some per section)
-- **Kick in breakdowns:** fully out; filtered (low-pass, fixed or sweeping open into the drop); half-time; only on the downbeat of each bar; kept. Each breakdown chooses on its own.
+**Track rules: random between tracks, consistent within one**
+Every variation below is decided once per track and applied to every section of the same kind, so a track has its own logic and doesn't feel random: if drop 1 has a crash (or four kicks out, or a fill) every 16 bars, so does every drop, and the intro and outro crash on the same 16-bar rule. All drops share the kick variation at 8-bar ends, clap ghost notes and rolls, the number of top loops (the last drop adds one), when groove and the second perc come in, and the halfway loop switch. Every way into a drop is the same (four kicks out or just the last kick, roll or fill, riser, impact, the beats of silence, a crash on the 1), and so is every way into a breakdown. One fill, roll, riser, impact and downlifter sample per track, reused (another only where it doesn't fit). The outro mirrors the intro: tops, claps and perc leave the way they came in. Breakdowns are the exception: a break is a break from the rest, so each one chooses its own kick treatment and content.
+
+**Variation dimensions** (each chosen per generation as one of the track's rules; breakdowns per section)
+- **Kick in breakdowns:** fully out; thin (high-passed at 180–350 Hz, the common filtered one); low-passed (fixed or sweeping open into the drop, kept rare); only on the downbeat of each bar; kept (no half-time kick: it sounded off).
+- **Announcing parts:** usually the last bar before a drop has no kick (four kicks out), and inside drops the bar before bar 17, 33, … often too; the next bar starts with a crash. Most tracks also go silent for one or two beats right before each drop, except FX, fills and hits (risers, rolls and impacts ring through).
+- **Crashes** (their own lane) on the 1 of key moments: every drop, after a four-kicks-out bar, where a ride comes in, usually the outro and sometimes a breakdown.
+- **Rides** (their own lane, never in intros or outros): coming in later in the first drop, all through from the second drop, or both. Each breakdown chooses on its own.
 - **Drum patterns:** kick dropouts at phrase ends (e.g. the last beat or two of an 8-bar phrase), skipped kicks before a drop, clap/snare rolls, ghost notes, open-hat accents, offbeat vs 16th hats, perc swaps between sections. Applied through pattern clips (one-shots) and by gaps/edits on loop clips.
 - **Fills and FX:** drum fills at phrase ends (more often before breaks and drops); a riser or snare roll that **ends** on the drop downbeat; downlifters and impacts that **start** on a section downbeat; atmos in breakdowns. FX density varies from sparse to busy.
+- **Layering:** more of the same stem where it makes sense, each layer on its own lane a little quieter: two to four **top loops** (several at once in drops, all of them in the last drop, one more per phrase in layered builds), up to three **claps** stacked on the backbeat in drops, a second hat loop and a second perc loop in drops. Never a second kick.
 - **Sample picks:** one main sample per lane for the track (so it sounds like one record), variations for later drops; picks come from different zips while the library allows it (the same zip may repeat once there are fewer zips than lanes); favourites and ratings bias the picks.
 - **Key:** one key per track. Tonal FX and atmos are picked from that key or its Camelot neighbours; drums ignore key.
 

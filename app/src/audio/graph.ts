@@ -5,7 +5,7 @@
 
 import { dbToGain } from '../lib/project'
 import type { Lane } from '../types/project'
-import type { ScheduledEvent } from './schedule'
+import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
 export interface LaneNodes {
   gain: GainNode
@@ -58,15 +58,35 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   src.buffer = buffer
   const g = ctx.createGain()
   g.gain.value = ev.gain
+  let head: AudioNode = g
+  if (ev.declick && duration > 0.006) {
+    // Tempo slices: 1 ms in, 3 ms out, so cutting a loop into 16ths doesn't click.
+    const d = ctx.createGain()
+    d.gain.setValueAtTime(0, when)
+    d.gain.linearRampToValueAtTime(1, when + 0.001)
+    d.gain.setValueAtTime(1, when + duration - 0.003)
+    d.gain.linearRampToValueAtTime(0, when + duration)
+    d.connect(g)
+    head = d
+  }
+  if (ev.fade) {
+    // Clip fades: gain ramps between the fade's corner points (in project time from ev.start).
+    const pts = fadeBreakpoints(ev.fade, ev.start, ev.start + duration)
+    pts.forEach((t, i) => {
+      const v = ev.gain * fadeAt(ev.fade!, t)
+      if (i === 0) g.gain.setValueAtTime(v, when)
+      else g.gain.linearRampToValueAtTime(v, when + (t - ev.start))
+    })
+  }
   if (ev.filter) {
     const f = ctx.createBiquadFilter()
     f.type = ev.filter.type
     f.Q.value = ev.filter.q
     f.frequency.setValueAtTime(ev.filter.f0, when)
     if (ev.filter.f1 !== ev.filter.f0) f.frequency.exponentialRampToValueAtTime(ev.filter.f1, when + duration)
-    src.connect(f).connect(g)
+    src.connect(f).connect(head)
   } else {
-    src.connect(g)
+    src.connect(head)
   }
   g.connect(dest)
   src.start(when, offset, duration)

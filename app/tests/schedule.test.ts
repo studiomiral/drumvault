@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { eventsInRange, metronomeTicks } from '../src/audio/schedule'
+import { eventsInRange, fadeAt, fadeBreakpoints, metronomeTicks, sampleBpm, soundPath, tempoPath } from '../src/audio/schedule'
 import { newProject } from '../src/lib/project'
 import type { AudioClip, PatternClip, Project, SampleRef, Velocity } from '../src/types/project'
 
@@ -137,5 +137,82 @@ describe('clip filter', () => {
     expect(ev.map((e) => Math.round(e.filter!.f0))).toEqual([1000, 562, 316, 178])
     expect(ev.every((e) => e.filter!.f0 === e.filter!.f1)).toBe(true)
     expect(eventsInRange(project([pattern(0, 4, four())]), 0, 1000)[0].filter).toBeUndefined()
+  })
+})
+
+describe('clip fades', () => {
+  it('ramps the gain linearly from each edge and carries the fade on every event of the clip', () => {
+    const clip = { ...audio(4, 16), fadeIn: 4, fadeOut: 2 }
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev.length).toBe(2)
+    const f = ev[0].fade!
+    expect(ev[1].fade).toEqual(f)
+    expect(f.inStart).toBeCloseTo(4 * BEAT)
+    expect(f.inEnd).toBeCloseTo(8 * BEAT)
+    expect(f.outStart).toBeCloseTo(18 * BEAT)
+    expect(f.outEnd).toBeCloseTo(20 * BEAT)
+    expect(fadeAt(f, 4 * BEAT)).toBeCloseTo(0)
+    expect(fadeAt(f, 6 * BEAT)).toBeCloseTo(0.5)
+    expect(fadeAt(f, 12 * BEAT)).toBe(1)
+    expect(fadeAt(f, 19 * BEAT)).toBeCloseTo(0.5)
+    expect(fadeAt(f, 20 * BEAT)).toBeCloseTo(0)
+    // Corner points inside each event, so ramping between them is exact.
+    expect(fadeBreakpoints(f, ev[0].start, ev[0].start + ev[0].duration!).map((t) => t / BEAT))
+      .toEqual([4, 8, 12].map((b) => expect.closeTo(b, 9)))
+    expect(fadeBreakpoints(f, ev[1].start, ev[1].start + ev[1].duration!).map((t) => t / BEAT))
+      .toEqual([12, 18, 20].map((b) => expect.closeTo(b, 9)))
+  })
+
+  it('fades pattern hits too, and leaves clips without fades untouched', () => {
+    const ev = eventsInRange(project([{ ...pattern(0, 4, four()), fadeOut: 4 }]), 0, 1000)
+    expect(ev.map((e) => fadeAt(e.fade!, e.start))).toEqual([1, 0.75, 0.5, 0.25].map((v) => expect.closeTo(v, 9)))
+    expect(eventsInRange(project([audio(0, 8)]), 0, 1000).every((e) => e.fade === undefined)).toBe(true)
+  })
+})
+
+describe('projects at another tempo than the library', () => {
+  const at = (bpm: number, clips: (AudioClip | PatternClip)[]): Project => ({ ...newProject('t', bpm), clips })
+  const fxRef: SampleRef = { relPath: 'FX/Risers/FX_Riser.wav', id: 3, name: 'riser', kind: 'event', category: 'fx_riser', bars: 4, durationS: 16 * BEAT, bpm: 124 }
+
+  it('plays a loop as 16th slices on the faster grid, each with its own piece of the loop', () => {
+    const ev = eventsInRange(at(128, [audio(0, 8, 2)]), 0, 1000)
+    expect(ev.length).toBe(32)
+    ev.forEach((e, j) => {
+      expect(e.start).toBeCloseTo((j / 4) * (60 / 128), 9)
+      expect(e.offset).toBeCloseTo((j / 4) * BEAT, 9)          // the loop's own 16th j
+      expect(e.duration).toBeCloseTo(0.25 * (60 / 128), 9)     // cut to the shorter slot
+      expect(e.declick).toBe(true)
+      expect(e.relPath).toBe('Loops/Tops/LP_2.wav')
+    })
+  })
+
+  it('leaves a short gap after each slice when slower, and keeps trims and repeats', () => {
+    const ev = eventsInRange(at(120, [audio(0, 16, 2, 2)]), 0, 1000)
+    expect(ev.length).toBe(64)
+    expect(ev[0].duration).toBeCloseTo(0.25 * BEAT, 9)          // the whole slice, then a gap
+    expect(ev[0].offset).toBeCloseTo(2 * BEAT, 9)               // trimmed 2 beats
+    expect(ev[24].offset).toBeCloseTo(0, 9)                     // wrapped to the loop start after 6 beats
+    expect(ev[24].start).toBeCloseTo(6 * (60 / 120), 9)
+  })
+
+  it('plays FX from a stretched copy, and everything as before at the library tempo', () => {
+    const riser: AudioClip = { id: 'f', laneId: 'F', type: 'audio', start: 4, length: 16, trimBeats: 0, gainDb: 0, sample: fxRef }
+    const [ev] = eventsInRange(at(128, [riser]), 0, 1000)
+    expect(ev.relPath).toBe(tempoPath('FX/Risers/FX_Riser.wav', 128))
+    expect(ev.relPath).toBe('.drumvault/tempo/128/FX/Risers/FX_Riser.wav')
+    expect(ev.start).toBeCloseTo(4 * (60 / 128), 9)
+    expect(ev.duration).toBeCloseTo(16 * (60 / 128), 9)
+    expect(soundPath(riser, 124)).toBe('FX/Risers/FX_Riser.wav')
+    const native = eventsInRange(at(124, [audio(0, 8, 2)]), 0, 1000)
+    expect(native.length).toBe(1)
+    expect(native[0].declick).toBeUndefined()
+    // Pattern hits just land on the new grid.
+    const hits = eventsInRange(at(128, [pattern(0, 4, four())]), 0, 1000)
+    expect(hits.map((e) => e.start)).toEqual([0, 1, 2, 3].map((b) => expect.closeTo(b * 60 / 128, 9)))
+  })
+
+  it('knows a sample\'s tempo from its length when older projects did not store it', () => {
+    expect(sampleBpm(loopRef(2))).toBe(124)
+    expect(sampleBpm(shotRef)).toBeNull()
   })
 })

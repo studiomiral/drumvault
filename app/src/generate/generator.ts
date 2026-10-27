@@ -14,21 +14,53 @@ import type { AudioClip, Clip, ClipFilter, PatternClip, Project, Velocity } from
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
 
-export type Role = 'kick' | 'clap' | 'hats' | 'perc' | 'top' | 'groove' | 'fills' | 'fx' | 'hits' | 'atmos'
+export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
+  | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'fills' | 'fx' | 'crash' | 'hits' | 'atmos'
 
-/** Lanes of a generated project, in order, with a starting mix. */
+/** Volume per lane (dB on top of the starting mix), set with the Generate view's lane sliders. */
+export type Mix = Partial<Record<Role, number>>
+
+/**
+ * Lanes of a generated project, in order, with a starting mix. Layers of the same kind (up to
+ * three claps, four top loops, …) get their own lane, each a little quieter.
+ */
 export const LANES: { role: Role; name: string; volumeDb: number; color: string }[] = [
-  { role: 'kick', name: 'Kick', volumeDb: 0, color: '#e2c35f' },
+  { role: 'kick', name: 'Kick', volumeDb: -2, color: '#e2c35f' },
   { role: 'clap', name: 'Clap', volumeDb: -3, color: '#f472b6' },
+  { role: 'clap2', name: 'Clap 2', volumeDb: -7, color: '#f9a8d4' },
+  { role: 'clap3', name: 'Clap 3', volumeDb: -9, color: '#fbcfe8' },
   { role: 'hats', name: 'Hats', volumeDb: -6, color: '#22d3ee' },
+  { role: 'hats2', name: 'Hats 2', volumeDb: -9, color: '#67e8f9' },
+  { role: 'ride', name: 'Ride', volumeDb: -9, color: '#5eead4' },
   { role: 'perc', name: 'Perc', volumeDb: -7, color: '#4ee3a6' },
+  { role: 'perc2', name: 'Perc 2', volumeDb: -9, color: '#86efac' },
   { role: 'top', name: 'Tops', volumeDb: -6, color: '#60a5fa' },
+  { role: 'top2', name: 'Tops 2', volumeDb: -8, color: '#7dd3fc' },
+  { role: 'top3', name: 'Tops 3', volumeDb: -9, color: '#93c5fd' },
+  { role: 'top4', name: 'Tops 4', volumeDb: -10, color: '#a5b4fc' },
   { role: 'groove', name: 'Groove', volumeDb: -8, color: '#a3e635' },
   { role: 'fills', name: 'Fills', volumeDb: -5, color: '#fb923c' },
   { role: 'fx', name: 'FX', volumeDb: -9, color: '#a78bfa' },
-  { role: 'hits', name: 'Hits', volumeDb: -6, color: '#fbcfe8' },
+  { role: 'crash', name: 'Crash', volumeDb: -8, color: '#fef08a' },
+  { role: 'hits', name: 'Hits', volumeDb: -6, color: '#fde68a' },
   { role: 'atmos', name: 'Atmos', volumeDb: -11, color: '#94a3b8' },
 ]
+/** Lanes that keep playing in the beat or two of silence before a drop. */
+const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'hits'])
+
+export function laneRole(laneName: string): Role | undefined {
+  return LANES.find((x) => x.name === laneName)?.role
+}
+const TOP_ROLES: Role[] = ['top', 'top2', 'top3', 'top4']
+const CLAP_ROLES: Role[] = ['clap', 'clap2', 'clap3']
+
+/** Lane volumes = the starting mix + the Generate view's sliders (dB per group). */
+export function applyMix(project: Project, mix: Mix): void {
+  for (const lane of project.lanes) {
+    const l = LANES.find((x) => x.name === lane.name)
+    if (l) lane.volumeDb = l.volumeDb + (mix[l.role] ?? 0)
+  }
+}
 
 /** Lanes whose main sample can be kept while cycling. */
 export const KEEPABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove']
@@ -41,6 +73,13 @@ export interface GenerateOptions {
   zipIds: number[] | null
   /** Favourites and ratings make samples more likely. */
   useRatings: boolean
+  /** Volume per lane in dB, on top of the starting mix. */
+  mix?: Mix
+  /**
+   * Project tempo: a whole BPM from this range per track (min = max for a fixed one); null or
+   * left out = the library BPM (`bpm`). Loops are sliced and FX stretched to it in playback.
+   */
+  tempo?: { min: number; max: number } | null
 }
 
 export interface Keep {
@@ -179,6 +218,32 @@ class Lanes {
     this.segs.get(role)!.push(seg)
   }
 
+  /**
+   * Silence [from, to) beats on every lane but `keep`: pattern steps are cleared, loops end
+   * early (a drop's moment of silence).
+   */
+  silence(from: number, to: number, keep: Set<Role>): void {
+    for (const [role, bars] of this.bars) {
+      if (keep.has(role)) continue
+      for (let b = Math.floor(from / BEATS_PER_BAR); b * BEATS_PER_BAR < to; b++) {
+        const p = bars[b]
+        if (!p) continue
+        const s0 = Math.max(0, Math.round((from - b * BEATS_PER_BAR) * 4))
+        const s1 = Math.min(STEPS_PER_BAR, Math.round((to - b * BEATS_PER_BAR) * 4))
+        const steps = p.steps.map((v, i) => (i >= s0 && i < s1 ? 0 : v)) as Steps
+        bars[b] = steps.some((v) => v) ? { ...p, steps } : null
+      }
+    }
+    for (const [role, segs] of this.segs) {
+      if (keep.has(role)) continue
+      this.segs.set(role, segs.flatMap((s) => {
+        const end = s.start + s.length
+        if (end <= from || s.start >= to) return [s]
+        return s.start < from ? [{ ...s, length: from - s.start }] : []
+      }))
+    }
+  }
+
   /** Bar patterns become pattern clips (runs of identical bars merge); segments become audio clips. */
   clips(laneIds: Map<Role, string>): Clip[] {
     const out: Clip[] = []
@@ -239,8 +304,10 @@ class Lanes {
 export function generate(all: SampleListItem[], opts: GenerateOptions, seed: number, keep: Keep = {}): Generation {
   const rng = new Rng(seed)
   const samples = opts.zipIds ? all.filter((s) => opts.zipIds!.includes(s.zip_id)) : all
+  const bpm = !opts.tempo ? opts.bpm
+    : opts.tempo.max > opts.tempo.min ? rng.int(Math.round(opts.tempo.min), Math.round(opts.tempo.max)) : opts.tempo.min
   const minutes = opts.minMinutes + rng.next() * Math.max(0, opts.maxMinutes - opts.minMinutes)
-  const sections = keep.structure ? structuredClone(keep.structure) : makeStructure(rng, barsFor(minutes, opts.bpm))
+  const sections = keep.structure ? structuredClone(keep.structure) : makeStructure(rng, barsFor(minutes, bpm))
   const total = sections.reduce((n, s) => n + s.bars, 0)
   const key = keep.key !== undefined ? keep.key : chooseKey(rng, samples)
   const picker = new Picker(rng, opts.useRatings, key)
@@ -252,16 +319,37 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const loopsOf = (...cats: Category[]) => pool(of('loop', ...cats))
   const preferShort = (s: SampleListItem) => ((s.bars ?? 1) <= 4 ? 2 : 1)
 
+  /** Up to `n` different samples: `first`, then others from `cands`. */
+  const layers = (first: SampleListItem | null, cands: SampleListItem[], n: number) => {
+    const out = first ? [first] : []
+    while (out.length < n) {
+      const left = cands.filter((s) => !out.some((o) => o.id === s.id))
+      const s = left.length ? picker.pick(left) : null
+      if (!s) break
+      out.push(s)
+    }
+    return out
+  }
+
   const kick = kept('kick') ?? picker.pick(pool(of('oneshot', 'kick')))
-  const clap = kept('clap') ?? picker.pick(pool(of('oneshot', 'clap', 'snare')))
-  const hatLoops = loopsOf('hat', 'hat_closed', 'hat_open', 'ride', 'shaker')
+  const clapShots = pool(of('oneshot', 'clap', 'snare'))
+  const clap = kept('clap') ?? picker.pick(clapShots)
+  // Layered claps (never a second kick): played together on the backbeat in drops.
+  const claps = layers(clap, clapShots, rng.weighted([[1, 2], [2, 3], [3, 2]] as const))
+  const hatLoops = loopsOf('hat', 'hat_closed', 'hat_open', 'shaker')
+  // Rides come in later (drops only), never in intros and outros.
+  const ride = picker.pick(loopsOf('ride')) ?? picker.pick(pool(of('oneshot', 'ride')))
+  const rideSteps = steps(rng.chance(0.5) ? FOUR.map((s) => s + 2) : EIGHTHS, 2)
   const hats = kept('hats') ?? (picker.pick(hatLoops, { weight: preferShort })
     ?? picker.pick(pool(of('oneshot', 'hat_closed', 'hat', 'hat_open'))))
+  const hats2 = hats?.kind === 'loop' && rng.chance(0.55) ? picker.pick(hatLoops, { not: hats }) : null
   const percLoops = loopsOf('perc')
   const perc = kept('perc') ?? (picker.pick(percLoops, { weight: preferShort }) ?? picker.pick(pool(of('oneshot', 'perc', 'shaker'))))
-  const perc2 = perc?.kind === 'loop' && rng.chance(0.5) ? picker.pick(percLoops, { not: perc }) : null
-  const top = kept('top') ?? picker.pick(loopsOf('top'))
-  const top2 = top ? picker.pick(loopsOf('top'), { not: top }) : null
+  const perc2 = perc?.kind === 'loop' && rng.chance(0.6) ? picker.pick(percLoops, { not: perc }) : null
+  const topLoops = loopsOf('top')
+  // Top loops fill the track up: two to four of them, layered in drops and builds.
+  const tops = layers(kept('top') ?? picker.pick(topLoops), topLoops, rng.weighted([[2, 2], [3, 3], [4, 2]] as const))
+  const top = tops[0] ?? null
   const groove = kept('groove') ?? picker.pick(loopsOf('groove'))
   const groove2 = groove ? picker.pick(loopsOf('groove'), { not: groove }) : null
   const picks: Partial<Record<Role, SampleListItem>> = {}
@@ -279,20 +367,57 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const crash = picker.pick(pool(of('oneshot', 'cymbal')))
   const atmos = picker.pick(atmoses, { tonal: true })
 
-  // ---- per-track style ----
-  const style = {
-    dropouts: rng.weighted([[0, 2], [0.3, 3], [0.6, 2]] as const),
-    clapGhost: rng.chance(0.3),
-    clapRolls: rng.chance(0.35),
-    preDropGap: rng.chance(0.4),
-    fillRate: rng.pick([0.25, 0.5, 0.75]),
+  // ---- the track's rules ----
+  // Decided once per track and applied to every section of the same kind, so a track has its
+  // own logic instead of sounding random: if drop 1 has a crash every 16 bars, so does drop 2.
+  // Breakdowns are the exception: a break is a break from the rest, so they vary on their own.
+  const rules = {
     fx: rng.weighted([['sparse', 1], ['normal', 3], ['busy', 1.5]] as const),
+    // Every 16 bars in drops (crashes also in intro and outro): a crash on the 1, the bar before
+    // it without kick ("four kicks out"), and/or a fill into it.
+    phraseCrash: rng.chance(0.75),
+    phraseKickOut: rng.chance(0.5),
+    phraseFill: fills.length > 0 && rng.chance(0.55),
+    // The same kick variation at the other 8-bar phrase ends of every drop (or none).
+    kickEnd8: rng.chance(0.55) ? rng.weighted(KICK_PHRASE_ENDS) : null,
+    clapGhost: rng.chance(0.3) ? rng.pick([7, 15, 14]) : null,
+    clapRolls: rng.weighted([['none', 3], ['16', 2], ['8', 1]] as const),
+    // Into every drop: four kicks out (or just the last kick), roll or fill, riser, impact,
+    // a beat or two of silence, and always a crash on the 1.
+    dropKickOut: rng.chance(0.75),
+    dropLastKick: rng.chance(0.5),
+    dropFill: rolls.length && rng.chance(0.45) ? 'roll' as const : fills.length && rng.chance(0.85) ? 'fill' as const : null,
+    dropRiser: risers.length > 0 && rng.chance(0.8),
+    dropImpact: impacts.length > 0 && rng.chance(0.5),
+    dropSilence: rng.weighted([[0, 1], [1, 2], [2, 2]] as const),
+    // Into every breakdown.
+    breakFill: fills.length > 0 && rng.chance(0.7),
+    breakCrash: rng.chance(0.5),
+    breakLastKick: rng.chance(0.4),
+    breakDownlifter: downs.length > 0 && rng.chance(0.6),
+    breakSweep: sweeps.length > 0 && rng.chance(0.35),
+    loopGap: rng.weighted([[0, 3], [1, 1], [2, 1]] as const),
+    // Drops: how many top loops (the last drop one more), groove and second perc from which drop,
+    // a later groove variation, a switch of loops halfway.
+    dropTops: Math.max(1, Math.min(tops.length, rng.int(2, 3))),
+    grooveFrom: rng.chance(0.6) ? 0 : 1,
+    grooveSwap: !!groove2 && rng.chance(0.4),
+    perc2From: rng.chance(0.4) ? 0 : 1,
+    switchHalfway: rng.chance(0.25),
+    // Rides: later in the first drop, and/or all through the later ones.
+    ride: rng.weighted([['late', 2], ['second', 2], ['both', 3]] as const),
+    // Intro and outro mirror each other: tops, claps and perc come in the same way they leave.
+    ioTopFirst: rng.chance(0.65) ? 0 : 0.5,
+    ioTopSecond: tops.length > 1 && rng.chance(0.75) ? rng.pick([0.5, 0.75]) : null,
+    ioClaps: rng.chance(0.3),
+    ioPerc: rng.chance(0.6),
+    outroFill: fills.length > 0 && rng.chance(0.5),
+    outroCrash: rng.chance(0.8),
+    // The kick's sub thinned out a little in intro and outro, so it mixes over another track.
+    ioKickHp: rng.int(60, 110),
     hatsInBreaks: rng.chance(0.5),
-    percIntro: rng.chance(0.6),
-    loopGaps: rng.chance(0.4),
-    groovyFirstDrop: rng.chance(0.6),
   }
-  const fxChance = { sparse: 0.45, normal: 0.75, busy: 0.95 }[style.fx]
+  const fxChance = { sparse: 0.45, normal: 0.75, busy: 0.95 }[rules.fx]
 
   const lanes = new Lanes(total)
   const loop = (role: Role, s: SampleListItem | null, fromBar: number, toBar: number, filter?: ClipFilter, gapBeats = 0) => {
@@ -307,53 +432,84 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const place = (role: Role, s: SampleListItem | null, startBeat: number) => {
     if (s) lanes.add(role, { sample: s, start: startBeat, length: (s.bars ?? 1) * 4 })
   }
+  /** One sample per job for the whole track (the track's fill, roll, riser, …); another only if it doesn't fit. */
+  const chosen = new Map<string, SampleListItem>()
+  const trackPick = (job: string, cands: SampleListItem[], tonal = false) => {
+    let s = chosen.get(job) ?? null
+    if (!s || !cands.some((c) => c.id === s!.id)) {
+      s = picker.pick(cands, { tonal })
+      if (s && !chosen.has(job)) chosen.set(job, s)
+    }
+    return s
+  }
   /** An event (riser, roll, fill) whose main sound ends exactly on `endBeat`, if one fits in `room` beats. */
-  const endOn = (role: Role, cands: SampleListItem[], endBeat: number, room: number, want: number, tonal = false) => {
+  const endOn = (job: string, role: Role, cands: SampleListItem[], endBeat: number, room: number, want: number, tonal = false) => {
     const fit = cands.filter((s) => bodyBars(s) * 4 <= room)
-    const s = picker.pick(fit, { tonal, weight: (x) => 1 / (1 + Math.abs(bodyBars(x) - want)) })
+    let s = chosen.get(job) ?? null
+    if (!s || !fit.some((c) => c.id === s!.id)) {
+      s = picker.pick(fit, { tonal, weight: (x) => 1 / (1 + Math.abs(bodyBars(x) - want)) })
+      if (s && !chosen.has(job)) chosen.set(job, s)
+    }
     if (s) place(role, s, endBeat - bodyBars(s) * 4)
     return s
   }
 
+  const crashAt = new Set<number>()
+  const tracks = { tops: Math.min(tops.length, rules.dropTops) }
   let dropIndex = 0
   sections.forEach((sec, i) => {
     const a = sec.start
     const z = sec.start + sec.bars
     const next = sections[i + 1]
     const intoDrop = next?.kind === 'drop'
+    const intoBreak = next?.kind === 'break'
     const half = a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE || a + sec.bars / 2
+    /** Bars where a 16-bar part starts inside this section (bar 17, 33, …). */
+    const marks: number[] = []
+    for (let b = a + 2 * PHRASE; b < z; b += 2 * PHRASE) marks.push(b)
 
     // ---- kick ----
     const kickBar = (b: number, s: Steps, filter?: ClipFilter) => kick && lanes.setBar('kick', b, { sample: kick, steps: s, filter })
     if (sec.kind === 'break') {
       const mode = sec.kick ?? 'out'
       const filter: ClipFilter | undefined = mode === 'filtered' ? { type: 'lowpass', from: rng.int(150, 400), to: null, q: 0.9 }
-        : mode === 'sweep' ? { type: 'lowpass', from: 120, to: 16000, q: 1.2 } : undefined
-      const pat = mode === 'halftime' ? steps([0, 8]) : mode === 'downbeats' ? steps([0]) : steps(FOUR)
+        : mode === 'sweep' ? { type: 'lowpass', from: 120, to: 16000, q: 1.2 }
+          : mode === 'thin' ? { type: 'highpass', from: rng.int(180, 350), to: null, q: 0.7 } : undefined
+      const pat = mode === 'downbeats' ? steps([0]) : steps(FOUR)
       if (mode !== 'out') for (let b = a; b < z; b++) kickBar(b, pat, filter)
-      if (mode !== 'out' && mode !== 'sweep' && intoDrop && style.preDropGap) kickBar(z - 1, steps([0, 4, 8]), filter)
+      if (mode !== 'out' && intoDrop && rules.dropKickOut) lanes.setBar('kick', z - 1, null)
+      else if (mode !== 'out' && mode !== 'sweep' && intoDrop && rules.dropLastKick) kickBar(z - 1, steps([0, 4, 8]), filter)
+    } else if (sec.kind === 'intro' || sec.kind === 'outro') {
+      // DJ intro/outro: a steady, slightly high-passed kick; crashes follow the track's 16-bar rule.
+      for (let b = a; b < z; b++) kickBar(b, steps(FOUR), { type: 'highpass', from: rules.ioKickHp, to: null, q: 0.7 })
+      if (rules.phraseCrash) for (const m of marks) crashAt.add(m)
     } else {
       for (let b = a; b < z; b++) kickBar(b, steps(FOUR))
-      if (sec.kind === 'drop' || sec.kind === 'build') {
-        for (let b = a + PHRASE - 1; b < z - 1; b += PHRASE) {
-          if (sec.kind === 'drop' && rng.chance(style.dropouts)) kickBar(b, rng.weighted(KICK_PHRASE_ENDS))
+      if (sec.kind === 'drop') {
+        for (let b = a + PHRASE; b < z; b += PHRASE) {
+          if (marks.includes(b)) {
+            if (rules.phraseKickOut) lanes.setBar('kick', b - 1, null)
+            if (rules.phraseKickOut || rules.phraseCrash) crashAt.add(b)
+          } else if (rules.kickEnd8 && b < z) {
+            kickBar(b - 1, rules.kickEnd8)
+          }
         }
-        if ((intoDrop && style.preDropGap) || (next?.kind === 'break' && rng.chance(0.4))) kickBar(z - 1, steps([0, 4, 8]))
       }
+      if (intoDrop && rules.dropKickOut) lanes.setBar('kick', z - 1, null)
+      else if ((intoDrop && rules.dropLastKick) || (intoBreak && rules.breakLastKick)) kickBar(z - 1, steps([0, 4, 8]))
     }
 
     // ---- clap ----
     const clapBar = (b: number, s: Steps) => clap && lanes.setBar('clap', b, { sample: clap, steps: s })
-    const backbeat = () => {
-      const s = steps(TWO_FOUR)
-      if (style.clapGhost) s[rng.pick([7, 15, 14])] = 1
-      return s
-    }
+    /** All clap layers together (drops). */
+    const clapsBar = (b: number, s: Steps) => claps.forEach((c, i) => lanes.setBar(CLAP_ROLES[i], b, { sample: c, steps: s }))
     if (sec.kind === 'drop') {
-      const s = backbeat()
-      for (let b = a; b < z; b++) clapBar(b, s)
-      for (let b = a + PHRASE - 1; b < z; b += PHRASE) {
-        if (style.clapRolls && rng.chance(0.5)) clapBar(b, [0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 3])
+      const s = steps(TWO_FOUR)
+      if (rules.clapGhost != null) s[rules.clapGhost] = 1
+      for (let b = a; b < z; b++) clapsBar(b, s)
+      const every = rules.clapRolls === '8' ? PHRASE : 2 * PHRASE
+      if (rules.clapRolls !== 'none') {
+        for (let b = a + every - 1; b < z; b += every) clapsBar(b, [0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 3])
       }
     } else if (sec.kind === 'build') {
       const style_ = sec.build ?? 'layered'
@@ -368,85 +524,139 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       }
     } else if (sec.kind === 'break' && rng.chance(0.3)) {
       for (let b = a; b < z; b++) clapBar(b, steps(TWO_FOUR, 2))
-    } else if (sec.kind === 'outro') {
-      for (let b = a; b < half; b++) clapBar(b, steps(TWO_FOUR))
-    } else if (sec.kind === 'intro' && rng.chance(0.25)) {
+    } else if (sec.kind === 'intro' && rules.ioClaps) {
       for (let b = half; b < z; b++) clapBar(b, steps(TWO_FOUR, 2))
+    } else if (sec.kind === 'outro' && rules.ioClaps) {
+      for (let b = a; b < half; b++) clapBar(b, steps(TWO_FOUR, 2))
     }
 
-    // ---- hats: always in intro and outro (DJ mixing), in breaks by style ----
+    // ---- hats: always in intro and outro (DJ mixing), in breaks by the track's rule ----
     const hatShot = (v: Velocity = 3) => steps(OFFBEAT, v)
     if (sec.kind === 'break') {
-      if (style.hatsInBreaks) layer('hats', hats, a, z, hatShot(2), { type: 'highpass', from: 900, to: null, q: 0.7 })
+      if (rules.hatsInBreaks) layer('hats', hats, a, z, hatShot(2), { type: 'highpass', from: 900, to: null, q: 0.7 })
     } else {
       layer('hats', hats, a, z, hatShot())
+      // A second hat loop on top in drops (and the second half of long builds).
+      if (sec.kind === 'drop') loop('hats2', hats2, a, z)
+      else if (sec.kind === 'build' && sec.bars >= 2 * PHRASE) loop('hats2', hats2, z - PHRASE, z)
+    }
+
+    // ---- ride: drops only, later in the first one and/or all through the later ones ----
+    if (sec.kind === 'drop' && ride) {
+      const late = dropIndex === 0 && rules.ride !== 'second'
+      const full = dropIndex >= 1 && rules.ride !== 'late'
+      const from = late ? a + Math.max(PHRASE, Math.floor(sec.bars / 2 / PHRASE) * PHRASE) : full ? a : z
+      if (from < z) layer('ride', ride, from, z, rideSteps)
+      if (late && from < z && rules.phraseCrash) crashAt.add(from)  // only if the track crashes on new parts
     }
 
     // ---- perc ----
-    const p = sec.kind === 'drop' && dropIndex >= 1 && perc2 ? perc2 : perc
     const percShot = steps([3, 7, 10, 14], 2)
-    if (sec.kind === 'intro') { if (style.percIntro) layer('perc', p, half, z, percShot) }
-    else if (sec.kind === 'build') layer('perc', p, sec.build === 'layered' ? a + Math.min(PHRASE, sec.bars / 2) : a, z, percShot)
-    else if (sec.kind === 'drop') layer('perc', p, a, z, percShot)
-    else if (sec.kind === 'break') { if (rng.chance(0.6)) layer('perc', p, a, z, percShot, rng.chance(0.5) ? { type: 'highpass', from: 400, to: null, q: 0.7 } : undefined) }
-    else if (sec.kind === 'outro') layer('perc', p, a, half, percShot)
-
-    // ---- tops and groove ----
-    const gap = next?.kind === 'break' && style.loopGaps ? rng.pick([1, 2]) : 0
     if (sec.kind === 'drop') {
-      const t1 = dropIndex >= 1 && top2 && rng.chance(0.6) ? top2 : top
-      const g1 = dropIndex >= 1 && groove2 && rng.chance(0.5) ? groove2 : groove
-      const mid = sec.switchHalfway && sec.bars >= 2 * PHRASE ? a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE : z
-      loop('top', t1, a, mid, undefined, mid === z ? gap : 0)
-      if (mid < z) loop('top', t1 === top ? top2 ?? top : top, mid, z, undefined, gap)
-      if (sec.peak || dropIndex > 0 || style.groovyFirstDrop) {
+      layer('perc', perc, a, z, percShot)
+      if (dropIndex >= rules.perc2From || sec.peak) loop('perc2', perc2, a, z)
+    } else if (sec.kind === 'intro') { if (rules.ioPerc) layer('perc', perc, half, z, percShot) }
+    else if (sec.kind === 'outro') { if (rules.ioPerc) layer('perc', perc, a, half, percShot) }
+    else if (sec.kind === 'build') layer('perc', perc, sec.build === 'layered' ? a + Math.min(PHRASE, sec.bars / 2) : a, z, percShot)
+    else if (sec.kind === 'break' && rng.chance(0.6)) {
+      layer('perc', perc, a, z, percShot, rng.chance(0.5) ? { type: 'highpass', from: 400, to: null, q: 0.7 } : undefined)
+    }
+
+    // ---- tops (layered, each top loop on its own lane) and groove ----
+    const gap = intoBreak ? rules.loopGap : 0
+    const topLayer = (j: number, from: number, to: number, filter?: ClipFilter, gapBeats = 0) =>
+      loop(TOP_ROLES[j], tops[j] ?? null, from, to, filter, gapBeats)
+    /** The phrase boundary nearest `frac` of the section; strictly inside it for 0 < frac < 1. */
+    const phraseAt = (frac: number) => {
+      if (frac <= 0) return a
+      if (frac >= 1) return z
+      const n = sec.bars / PHRASE
+      return a + Math.max(1, Math.min(n - 1, Math.round(n * frac))) * PHRASE
+    }
+    if (sec.kind === 'drop') {
+      // The same top loops in every drop; the last drop adds one more.
+      const count = Math.min(tops.length, tracks.tops + (sec.peak ? 1 : 0))
+      const mid = rules.switchHalfway && sec.bars >= 2 * PHRASE ? a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE : z
+      for (let j = 0; j < count; j++) topLayer(j, a, z, undefined, gap)
+      const g1 = dropIndex >= 1 && rules.grooveSwap ? groove2 : groove
+      if (dropIndex >= rules.grooveFrom || sec.peak) {
         loop('groove', g1, a, mid, undefined, mid === z ? gap : 0)
         if (mid < z) loop('groove', g1 === groove ? groove2 ?? groove : groove, mid, z, undefined, gap)
       }
       dropIndex++
     } else if (sec.kind === 'build') {
-      if (sec.build === 'filter') loop('top', top, a, z, { type: 'lowpass', from: 300, to: 18000, q: 1 })
-      else if (sec.build === 'all') { loop('top', top, a, z); loop('groove', groove, Math.max(a, z - PHRASE), z) }
-      else if (sec.build === 'doubletime') loop('top', top, a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE, z)
-      else if (sec.bars >= 2 * PHRASE) loop('top', top, z - PHRASE, z)
-    } else if (sec.kind === 'break' && rng.chance(0.25)) {
-      loop('top', top, a, z, { type: 'lowpass', from: 600, to: null, q: 0.7 })
+      if (sec.build === 'filter') {
+        for (let j = 0; j < Math.min(2, tops.length); j++) topLayer(j, a, z, { type: 'lowpass', from: 300, to: 18000, q: 1 })
+      } else if (sec.build === 'all') {
+        for (let j = 0; j < tracks.tops; j++) topLayer(j, a, z)
+        loop('groove', groove, Math.max(a, z - PHRASE), z)
+      } else {
+        // Layered and double-time builds: one more top loop per phrase towards the drop.
+        const startAt = sec.build === 'doubletime' ? a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE : a
+        const phrases = Math.max(1, (z - startAt) / PHRASE)
+        for (let j = 0; j < tracks.tops; j++) {
+          const from = startAt + Math.floor((j * phrases) / tracks.tops) * PHRASE
+          if (from < z) topLayer(j, from, z)
+        }
+      }
+    } else if (sec.kind === 'break' && rng.chance(0.35)) {
+      topLayer(0, a, z, { type: 'lowpass', from: 600, to: null, q: 0.7 })
+    } else if (sec.kind === 'intro') {
+      // Mix-in intro: a top loop from the start (or halfway), a second one joining later …
+      topLayer(0, phraseAt(rules.ioTopFirst), z)
+      if (rules.ioTopSecond != null) topLayer(1, phraseAt(rules.ioTopSecond), z)
     } else if (sec.kind === 'outro') {
-      loop('top', top, a, Math.min(z, a + PHRASE))
+      // … and the outro mirrors it: the tops leave the way they came in.
+      topLayer(0, a, phraseAt(1 - rules.ioTopFirst))
+      if (rules.ioTopSecond != null) topLayer(1, a, phraseAt(1 - rules.ioTopSecond))
     }
 
     // ---- atmos in breakdowns ----
     if (sec.kind === 'break' && atmos && rng.chance(0.85)) loop('atmos', atmos, a, z)
 
-    // ---- transitions: fills, rolls, risers, downlifters, impacts, crashes ----
+    // ---- transitions: the track's own way into drops, breakdowns and the outro ----
     if (next) {
       const end = z * 4
       if (intoDrop) {
-        let roll: SampleListItem | null = null
-        if (rolls.length && rng.chance(0.45)) roll = endOn('fills', rolls, end, sec.bars * 4, sec.long ? 8 : 4)
-        if (!roll && fills.length && rng.chance(0.85)) endOn('fills', fills, end, 8, 1)
-        if (risers.length && rng.chance(fxChance)) endOn('fx', risers, end, sec.bars * 4, sec.long ? 8 : sec.bars >= 16 ? 4 : 2, true)
-        if (impacts.length && rng.chance(fxChance * 0.6)) place('hits', picker.pick(impacts), end)
-        else if (crash && rng.chance(0.6)) lanes.setBar('hits', z, { sample: crash, steps: steps([0]) })
-      } else if (next.kind === 'break') {
-        if (fills.length && rng.chance(0.7)) endOn('fills', fills, end, 8, 1)
-        if (downs.length && rng.chance(fxChance * 0.7)) place('hits', picker.pick(downs, { tonal: true }), end)
-        if (sweeps.length && rng.chance(style.fx === 'busy' ? 0.5 : 0.2)) place('fx', picker.pick(sweeps), end)
+        if (rules.dropFill === 'roll') {
+          if (!endOn(sec.long ? 'roll-long' : 'roll', 'fills', rolls, end, sec.bars * 4, sec.long ? 8 : 4) && fills.length) {
+            endOn('fill', 'fills', fills, end, 8, 1)
+          }
+        } else if (rules.dropFill === 'fill') {
+          endOn('fill', 'fills', fills, end, 8, 1)
+        }
+        if (rules.dropRiser) endOn(sec.long ? 'riser-long' : 'riser', 'fx', risers, end, sec.bars * 4, sec.long ? 8 : sec.bars >= 16 ? 4 : 2, true)
+        if (rules.dropImpact) place('hits', trackPick('impact', impacts), end)
+        crashAt.add(z)  // every drop starts with a crash
+      } else if (intoBreak) {
+        if (rules.breakFill) endOn('fill', 'fills', fills, end, 8, 1)
+        if (rules.breakCrash) crashAt.add(z)
+        if (rules.breakDownlifter && rng.chance(fxChance)) place('hits', trackPick('downlifter', downs, true), end)
+        if (rules.breakSweep) place('fx', trackPick('sweep', sweeps), end)
       } else if (next.kind === 'outro') {
-        if (fills.length && rng.chance(0.5)) endOn('fills', fills, end, 8, 1)
-        if (crash && rng.chance(0.5)) lanes.setBar('hits', z, { sample: crash, steps: steps([0]) })
+        if (rules.outroFill) endOn('fill', 'fills', fills, end, 8, 1)
+        if (rules.outroCrash) crashAt.add(z)
       }
     }
-    // Fills inside drops, at 16-bar phrase ends.
-    if (sec.kind === 'drop' && fills.length) {
-      for (let b = a + 2 * PHRASE; b < z; b += 2 * PHRASE) if (rng.chance(style.fillRate)) endOn('fills', fills, b * 4, 8, 1)
-    }
+    // The track's fill into every 16-bar part of a drop.
+    if (sec.kind === 'drop' && rules.phraseFill) for (const m of marks) endOn('fill', 'fills', fills, m * 4, 8, 1)
   })
 
+  // ---- crashes on the 1 of key moments ----
+  if (crash) for (const b of crashAt) if (b < total) lanes.setBar('crash', b, { sample: crash, steps: steps([0]) })
+
+  // ---- the track's beat or two of silence before every drop (FX, fills and hits ring through) ----
+  if (rules.dropSilence) {
+    for (const s of sections) {
+      if (s.kind === 'drop' && s.start > 0) lanes.silence(s.start * 4 - rules.dropSilence, s.start * 4, THROUGH_SILENCE)
+    }
+  }
+
   // ---- the project ----
-  const project = newProject('Generated', opts.bpm)
+  const project = newProject('Generated', bpm)
   project.lengthBars = total
   project.lanes = LANES.map((l, i) => ({ ...makeLane(l.name, i), color: l.color, volumeDb: l.volumeDb }))
+  applyMix(project, opts.mix ?? {})
   const laneIds = new Map(LANES.map((l, i) => [l.role, project.lanes[i].id]))
   project.clips = lanes.clips(laneIds)
   const used = new Set(project.clips.map((c) => c.laneId))
@@ -460,11 +670,20 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (s.kind === 'build') choices.push(BUILD_LABEL[s.build ?? 'layered'])
     if (s.kind === 'break') choices.push(`${s.label}: ${KICK_MODE_LABEL[s.kick ?? 'out']}${s.long ? ' (long)' : ''}`)
   }
-  if (style.dropouts) choices.push('kick drop-outs at phrase ends')
-  if (style.clapRolls) choices.push('clap rolls')
-  if (style.clapGhost) choices.push('ghost claps')
-  if (style.loopGaps) choices.push('loops stop before breaks')
-  choices.push(`${style.fx} FX`)
+  if (bpm !== opts.bpm) choices.push(`${bpm} BPM (library ${opts.bpm})`)
+  if (rules.phraseCrash) choices.push('crash every 16 bars')
+  if (rules.phraseKickOut) choices.push('four kicks out every 16 bars')
+  if (rules.phraseFill) choices.push('fill every 16 bars')
+  if (rules.kickEnd8) choices.push('kick variation every 8 bars')
+  if (rules.clapRolls !== 'none') choices.push(`clap rolls every ${rules.clapRolls} bars`)
+  if (rules.clapGhost != null) choices.push('ghost claps')
+  if (rules.loopGap) choices.push('loops stop before breaks')
+  if (tops.length > 1) choices.push(`${Math.min(tops.length, tracks.tops + 1)} top loops`)
+  if (claps.length > 1) choices.push(`${claps.length} layered claps`)
+  if (ride) choices.push({ late: 'ride later in drop 1', second: 'ride from drop 2', both: 'ride late in drop 1, then all through' }[rules.ride])
+  if (rules.dropKickOut) choices.push('four kicks out before drops')
+  if (rules.dropSilence) choices.push(`${rules.dropSilence} beat${rules.dropSilence > 1 ? 's' : ''} of silence before drops`)
+  choices.push(`${rules.fx} FX`)
 
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()

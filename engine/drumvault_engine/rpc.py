@@ -27,8 +27,8 @@ from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
     HealthResult, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
-    RebuildLoopsParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest,
-    SampleCounts, SetSampleMetaParams,
+    RebuildLoopsParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts,
+    SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 JOB_METHODS = {"process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "analyze_zip"}
 # Answered directly (not queued), each on its own thread.
 DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSamplesParams,
-                  "restore_samples": RestoreSamplesParams}
+                  "restore_samples": RestoreSamplesParams, "shift_sample": ShiftSampleParams,
+                  "stretch_samples": StretchSamplesParams}
 
 
 @dataclass
@@ -196,8 +197,12 @@ class RpcServer:
                 self._reply(req_id, pipeline.grid_preview(settings, p.zip_id))
             elif method == "delete_samples":
                 self._reply(req_id, pipeline.delete_samples(settings, p.sample_ids))
-            else:
+            elif method == "restore_samples":
                 self._reply(req_id, pipeline.restore_samples(settings, p.removed_ids))
+            elif method == "shift_sample":
+                self._reply(req_id, pipeline.shift_sample(settings, p.sample_id, p.beats))
+            else:
+                self._reply(req_id, pipeline.stretch_samples(settings, p.rel_paths, p.bpm))
         except pipeline.PipelineError as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:

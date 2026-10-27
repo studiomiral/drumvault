@@ -4,6 +4,13 @@ import type { PeakPoints } from '../types/api'
 
 const cache = new Map<string, PeakPoints | null>()
 const inflight = new Map<string, Promise<PeakPoints | null>>()
+const changed = new Set<(id: number) => void>()
+
+/** The sample's audio changed (Library "Move sound"): drop its peaks and redraw it. */
+export function forgetWaveform(id: number): void {
+  for (const k of [...cache.keys()]) if (k.startsWith(`${id}:`)) cache.delete(k)
+  for (const fn of changed) fn(id)
+}
 
 function loadPeaks(id: number, points: number): Promise<PeakPoints | null> {
   const key = `${id}:${points}`
@@ -30,6 +37,14 @@ export function Waveform({ id, width, height, color = '#6a6863', points = 120 }:
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [peaks, setPeaks] = useState<PeakPoints | null | undefined>(cache.get(`${id}:${points}`))
+  const [rev, setRev] = useState(0)
+  useEffect(() => {
+    const fn = (changedId: number) => changedId === id && setRev((r) => r + 1)
+    changed.add(fn)
+    return () => {
+      changed.delete(fn)
+    }
+  }, [id])
 
   useEffect(() => {
     let alive = true
@@ -39,7 +54,7 @@ export function Waveform({ id, width, height, color = '#6a6863', points = 120 }:
     return () => {
       alive = false
     }
-  }, [id, points])
+  }, [id, points, rev])
 
   useEffect(() => {
     const c = ref.current

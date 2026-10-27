@@ -15,6 +15,7 @@ export const SAMPLE_MIME = 'application/x-drumvault-sample'
 type Drag =
   | { kind: 'move'; x0: number; y0: number; lane0: number; ids: string[]; primary: Clip; copy: boolean; moved: boolean }
   | { kind: 'resize-r' | 'resize-l'; x0: number; ids: string[]; primary: Clip }
+  | { kind: 'fade'; side: 'l' | 'r'; ids: string[]; primary: Clip }
   | { kind: 'marquee'; x0: number; y0: number; additive: string[] }
   | { kind: 'ruler'; x0: number; beat0: number; moved: boolean }
   | { kind: 'marker-new'; x0: number; beat0: number }
@@ -26,6 +27,8 @@ interface Preview {
   copy: boolean
   resize: 'l' | 'r' | null
   alt: boolean
+  /** Dragging a fade: its new length in beats. */
+  fade?: { side: 'l' | 'r'; beats: number }
 }
 
 export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number) => void }) {
@@ -68,7 +71,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
 
   // ---- display model (drag previews applied) ---------------------------------
   const { clips, ghosts } = useMemo(() => {
-    if (!preview || (!preview.dBeats && !preview.dLanes)) return { clips: project.clips, ghosts: [] as Clip[] }
+    if (!preview || (!preview.dBeats && !preview.dLanes && !preview.fade)) return { clips: project.clips, ghosts: [] as Clip[] }
     const moved = selSet
     const lanes = project.lanes
     const transformed = project.clips.filter((c) => moved.has(c.id)).map((c) => transformClip(c, preview, lanes))
@@ -156,7 +159,11 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
   }, [])
 
   // ---- hit testing -----------------------------------------------------------
-  const clipAt = (x: number, y: number): { clip: Clip; edge: 'l' | 'r' | null } | null => {
+  /**
+   * The clip under the pointer. Near an edge, the top half drags that side's fade (also at the
+   * fade's own handle inside the clip) and the bottom half resizes.
+   */
+  const clipAt = (x: number, y: number): { clip: Clip; edge: 'l' | 'r' | null; fade: 'l' | 'r' | null } | null => {
     const box = laneAt(boxes, y)
     if (!box || y < TOP) return null
     for (let i = project.clips.length - 1; i >= 0; i--) {
@@ -165,9 +172,17 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
       const x0 = beatToX(c.start, px, sx)
       const x1 = beatToX(clipEnd(c), px, sx)
       if (x >= x0 && x <= x1) {
-        const edge = x1 - x <= EDGE_PX && x1 - x0 > 3 * EDGE_PX ? 'r'
-          : x - x0 <= EDGE_PX && c.type === 'audio' && x1 - x0 > 3 * EDGE_PX ? 'l' : null
-        return { clip: c, edge }
+        const wide = x1 - x0 > 3 * EDGE_PX
+        if (y < box.y + box.h / 2 && wide) {
+          const fi = x0 + (c.fadeIn ?? 0) * px
+          const fo = x1 - (c.fadeOut ?? 0) * px
+          const fade = Math.abs(x - fi) <= EDGE_PX || x - x0 <= EDGE_PX ? 'l'
+            : Math.abs(x - fo) <= EDGE_PX || x1 - x <= EDGE_PX ? 'r' : null
+          if (fade) return { clip: c, edge: null, fade }
+        }
+        const edge = x1 - x <= EDGE_PX && wide ? 'r'
+          : x - x0 <= EDGE_PX && c.type === 'audio' && wide ? 'l' : null
+        return { clip: c, edge, fade: null }
       }
     }
     return null
@@ -223,7 +238,9 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
         ids = [hit.clip.id]
         st.select(ids)
       }
-      if (hit.edge) {
+      if (hit.fade) {
+        drag.current = { kind: 'fade', side: hit.fade, ids, primary: hit.clip }
+      } else if (hit.edge) {
         drag.current = { kind: hit.edge === 'r' ? 'resize-r' : 'resize-l', x0: x, ids, primary: hit.clip }
       } else {
         const lane0 = laneAt(boxes, y)?.index ?? 0
@@ -243,7 +260,10 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
       const c = over.current!
       if (y < MARKER_H) c.style.cursor = markerAt(x)?.edge ? 'ew-resize' : 'default'
       else if (y < TOP) c.style.cursor = 'text'
-      else c.style.cursor = clipAt(x, y)?.edge ? 'ew-resize' : 'default'
+      else {
+        const hit = clipAt(x, y)
+        c.style.cursor = hit?.fade === 'l' ? 'nesw-resize' : hit?.fade === 'r' ? 'nwse-resize' : hit?.edge ? 'ew-resize' : 'default'
+      }
       return
     }
     const beat = xToBeat(x, px, sx)
@@ -267,6 +287,14 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
         const start = Math.min(clipEnd(d.primary) - Math.min(u, d.primary.length),
           Math.max(0, snap(d.primary.start + (x - d.x0) / px, u)))
         setPreview({ dBeats: start - d.primary.start, dLanes: 0, copy: false, resize: 'l', alt: e.altKey })
+        break
+      }
+      case 'fade': {
+        const c = d.primary
+        const raw = d.side === 'l' ? beat - c.start : clipEnd(c) - beat
+        const other = (d.side === 'l' ? c.fadeOut : c.fadeIn) ?? 0
+        const beats = Math.max(0, Math.min(c.length - other, snap(raw, u)))
+        setPreview({ dBeats: 0, dLanes: 0, copy: false, resize: null, alt: e.altKey, fade: { side: d.side, beats } })
         break
       }
       case 'marquee': {
@@ -332,6 +360,15 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
               for (const c of dr.clips) if (d.ids.includes(c.id)) Object.assign(c, transformClip(c as Clip, p, lanes))
             })
           }
+        }
+        break
+      }
+      case 'fade': {
+        if (preview?.fade) {
+          const p = preview
+          st.edit(p.fade!.side === 'l' ? 'Fade in' : 'Fade out', (dr) => {
+            for (const c of dr.clips) if (d.ids.includes(c.id)) Object.assign(c, transformClip(c as Clip, p, project.lanes))
+          })
         }
         break
       }
@@ -474,16 +511,31 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
 export const dragSample: { current: { kind: string; bars: number | null } | null } = { current: null }
 
 function transformClip(c: Clip, p: Preview, lanes: { id: string }[]): Clip {
-  if (p.resize === 'r') return { ...c, length: Math.max(MIN_SNAP_BEATS, c.length + p.dBeats) }
+  if (p.fade) {
+    // The same fade length on every selected clip, as far as each one is long enough.
+    const key = p.fade.side === 'l' ? 'fadeIn' : 'fadeOut'
+    const other = (p.fade.side === 'l' ? c.fadeOut : c.fadeIn) ?? 0
+    const beats = Math.max(0, Math.min(c.length - other, p.fade.beats))
+    return { ...c, [key]: beats || undefined }
+  }
+  if (p.resize === 'r') return fitFades({ ...c, length: Math.max(MIN_SNAP_BEATS, c.length + p.dBeats) })
   if (p.resize === 'l') {
     const d = Math.min(p.dBeats, c.length - MIN_SNAP_BEATS)
-    if (c.type !== 'audio') return { ...c, start: Math.max(0, c.start + d), length: c.length - d }
+    if (c.type !== 'audio') return fitFades({ ...c, start: Math.max(0, c.start + d), length: c.length - d })
     const L = loopBeats(c)
-    return { ...c, start: Math.max(0, c.start + d), length: c.length - d, trimBeats: (((c.trimBeats + d) % L) + L) % L }
+    return fitFades({ ...c, start: Math.max(0, c.start + d), length: c.length - d, trimBeats: (((c.trimBeats + d) % L) + L) % L })
   }
   const li = lanes.findIndex((l) => l.id === c.laneId)
   const lane = lanes[Math.max(0, Math.min(lanes.length - 1, li + p.dLanes))]
   return { ...c, start: Math.max(0, c.start + p.dBeats), laneId: lane.id }
+}
+
+/** Fades never overlap: a shortened clip shortens its fades (fade-out first). */
+function fitFades<T extends Clip>(c: T): T {
+  if (!c.fadeIn && !c.fadeOut) return c
+  const fadeOut = Math.min(c.fadeOut ?? 0, c.length)
+  const fadeIn = Math.min(c.fadeIn ?? 0, c.length - fadeOut)
+  return { ...c, fadeIn: fadeIn || undefined, fadeOut: fadeOut || undefined }
 }
 
 function HScrollbar({ width, contentWidth }: { width: number; contentWidth: number }) {

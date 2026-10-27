@@ -256,3 +256,73 @@ def test_deleted_samples_stay_deleted_after_reprocessing(engine, fixtures, tmp_p
     assert pipeline.restore_samples(s, [rid]) == {"restored": 0, "pending": 1}
     pipeline.process_zip(None, s, zip_id=r.zip_id)
     assert len(rows()) == len(before)
+
+
+def test_shift_sample_moves_the_sound_a_beat_and_survives_reprocessing(engine, fixtures, tmp_path):
+    """Library "Move sound": the WAV rotates by whole beats (no drift), and a reprocess keeps it."""
+    import sqlite3
+
+    import numpy as np
+    import soundfile as sf
+
+    from drumvault_engine import pipeline
+    from drumvault_engine.config import Settings
+    lib = tmp_path / "lib"
+    s = Settings(library_path=str(lib))
+    r = pipeline.process_zip(fixtures.zip("deep_groove"), s)
+    db = sqlite3.connect(lib / ".drumvault" / "library.sqlite")
+    sid, rel, bars, offset = db.execute(
+        "SELECT id, rel_path, bars, source_offset_s FROM samples WHERE kind = 'event' ORDER BY id").fetchone()
+    orig, sr = sf.read(lib / rel, dtype="float32", always_2d=True)
+    beat = sr * 60.0 / s.library_bpm
+
+    def shift(beats, req):
+        engine.send(id=req, method="shift_sample",
+                    params={"sample_id": sid, "beats": beats, "settings": {"library_path": str(lib)}})
+        return engine.until(lambda o: o.get("id") == req)
+
+    assert shift(1, "s1")["result"] == {"sample_id": sid, "shift_beats": 1}
+    moved, _ = sf.read(lib / rel, dtype="float32", always_2d=True)
+    assert np.allclose(moved, np.roll(orig, int(round(beat)), axis=0), atol=1e-4)
+    assert shift(-1, "s2")["result"]["shift_beats"] == 0
+    back, _ = sf.read(lib / rel, dtype="float32", always_2d=True)
+    assert np.allclose(back, orig, atol=1e-4)
+    assert shift(-1, "s3")["result"]["shift_beats"] == bars * 4 - 1   # wraps: one beat earlier
+
+    pipeline.process_zip(None, s, zip_id=r.zip_id)
+    sid2, rel2, kept = db.execute("SELECT id, rel_path, shift_beats FROM samples WHERE kind = 'event' "
+                                  "AND bars = ? AND abs(source_offset_s - ?) < 0.01", (bars, offset)).fetchone()
+    assert kept == bars * 4 - 1
+    recut, _ = sf.read(lib / rel2, dtype="float32", always_2d=True)
+    assert np.allclose(recut, np.roll(orig, int(round(-beat)), axis=0), atol=1e-4)
+
+    shot = db.execute("SELECT id FROM samples WHERE kind = 'oneshot'").fetchone()[0]
+    engine.send(id="s4", method="shift_sample", params={"sample_id": shot, "beats": 1, "settings": {"library_path": str(lib)}})
+    assert engine.until(lambda o: o.get("id") == "s4")["error"]["code"] == "not_a_loop"
+
+
+def test_stretch_samples_to_a_project_tempo(engine, fixtures, tmp_path):
+    """FX stretched to another tempo keep their bars (exact length at the new BPM) and are cached."""
+    import os
+    import sqlite3
+
+    import soundfile as sf
+
+    from drumvault_engine import pipeline
+    from drumvault_engine.config import Settings
+    lib = tmp_path / "lib"
+    s = Settings(library_path=str(lib))
+    pipeline.process_zip(fixtures.zip("deep_groove"), s)
+    db = sqlite3.connect(lib / ".drumvault" / "library.sqlite")
+    rel, bars = db.execute("SELECT rel_path, bars FROM samples WHERE kind = 'event' ORDER BY id").fetchone()
+
+    engine.send(id="t1", method="stretch_samples",
+                params={"rel_paths": [rel], "bpm": 128, "settings": {"library_path": str(lib)}})
+    out = engine.until(lambda o: o.get("id") == "t1", timeout=300)["result"]["paths"][rel]
+    assert out == f".drumvault/tempo/128/{rel}"
+    info = sf.info(lib / out)
+    assert abs(info.frames - bars * 4 * 60 / 128 * info.samplerate) <= 2
+    mtime = os.stat(lib / out).st_mtime_ns
+    assert pipeline.stretch_samples(s, [rel], 128)["paths"][rel] == out
+    assert os.stat(lib / out).st_mtime_ns == mtime                     # cached
+    assert pipeline.stretch_samples(s, [rel], s.library_bpm)["paths"][rel] == rel  # native: the file itself

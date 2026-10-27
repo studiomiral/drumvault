@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bodyBars, generate, type GenerateOptions, type Generation } from '../src/generate/generator'
+import { applyMix, bodyBars, generate, LANES, type GenerateOptions, type Generation } from '../src/generate/generator'
 import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
 import type { SampleListItem } from '../src/types/api'
@@ -26,6 +26,7 @@ function library(): SampleListItem[] {
     for (const c of ['kick', 'clap', 'snare', 'hat_closed', 'hat_open', 'perc', 'cymbal'] as Category[]) add(z, 'oneshot', c)
     add(z, 'loop', 'hat', 1); add(z, 'loop', 'hat', 2); add(z, 'loop', 'perc', 2); add(z, 'loop', 'top', 2)
     add(z, 'loop', 'top', 4); add(z, 'loop', 'groove', 4)
+    if (z % 2) add(z, 'loop', 'ride', 2)
     add(z, 'event', 'fill', 2, 1); add(z, 'event', 'roll', 5, 4); add(z, 'event', 'roll', 9, 8)
     add(z, 'event', 'fx_riser', 5, 4); add(z, 'event', 'fx_riser', 9, 8); add(z, 'event', 'fx_downlifter', 6, 5)
     add(z, 'event', 'fx_impact', 2, 1); add(z, 'event', 'fx_atmos', 8, 8); add(z, 'event', 'fx_sweep', 3, 2)
@@ -80,11 +81,134 @@ describe('generator: rules every generation keeps', () => {
       expect(outro.kind).toBe('outro')
       for (const s of [intro, outro]) {
         expect(s.bars).toBeGreaterThanOrEqual(16)
-        for (let beat = s.start * 4; beat < (s.start + s.bars) * 4; beat++) {
+        // An intro straight into a drop may go quiet for its last two beats (the pre-drop silence).
+        const end = (s.start + s.bars) * 4 - (s === intro && g.sections[1].kind === 'drop' ? 2 : 0)
+        for (let beat = s.start * 4; beat < end; beat++) {
           expect(hitAt(g, 'Kick', beat * 4)).toBe(3)
           expect(covers(g, 'Hats', beat)).toBe(true)
         }
       }
+    }
+  })
+
+  it('high-passes the kick a little in the intro and outro, and only there', () => {
+    for (const g of gens) {
+      const io = g.sections.filter((s) => s.kind === 'intro' || s.kind === 'outro')
+      for (const c of clipsOn(g, 'Kick')) {
+        const inIO = io.some((s) => c.start >= s.start * 4 && c.start < (s.start + s.bars) * 4)
+        if (inIO) {
+          expect(c.filter?.type).toBe('highpass')
+          expect(c.filter!.from).toBeGreaterThanOrEqual(60)
+          expect(c.filter!.from).toBeLessThanOrEqual(110)
+        } else if (c.filter?.type === 'highpass') {
+          // Elsewhere only the "thin" breakdown kick is high-passed, clearly higher.
+          expect(c.filter.from).toBeGreaterThanOrEqual(180)
+        }
+      }
+    }
+  })
+
+  it('layers top loops (each on its own lane) and claps, never two kicks', () => {
+    const topLanes = (g: Generation) => g.project.lanes.filter((l) => l.name.startsWith('Tops')).length
+    expect(gens.some((g) => topLanes(g) >= 3)).toBe(true)
+    expect(gens.filter((g) => topLanes(g) >= 2).length).toBeGreaterThan(gens.length * 0.8)
+    for (const g of gens) {
+      expect(g.project.lanes.filter((l) => l.name.startsWith('Kick')).length).toBe(1)
+      // In the peak drop at least two top loops play at once.
+      const peak = g.sections.filter((s) => s.kind === 'drop').at(-1)!
+      const mid = (peak.start + peak.bars / 2) * 4
+      const playing = g.project.lanes.filter((l) => l.name.startsWith('Tops') && covers(g, l.name, mid))
+      expect(playing.length).toBeGreaterThanOrEqual(Math.min(2, topLanes(g)))
+    }
+    const layered = gens.find((g) => g.project.lanes.some((l) => l.name === 'Clap 3'))!
+    expect(layered).toBeDefined()
+    const drop = layered.sections.find((s) => s.kind === 'drop')!
+    for (const name of ['Clap', 'Clap 2', 'Clap 3']) expect(hitAt(layered, name, drop.start * 16 + 4)).toBe(3)
+    // Intros and outros carry top loops too.
+    expect(gens.filter((g) => covers(g, 'Tops', (g.sections[0].start + g.sections[0].bars - 1) * 4)).length)
+      .toBeGreaterThan(gens.length * 0.8)
+  })
+
+  it('applies the lane volume sliders on top of the starting mix', () => {
+    const g = generate(LIB, { ...OPTS, mix: { top: -3, kick: 2 } }, 1234)
+    const vol = (name: string) => g.project.lanes.find((l) => l.name === name)?.volumeDb
+    const base = (name: string) => LANES.find((l) => l.name === name)!.volumeDb
+    expect(vol('Kick')).toBe(base('Kick') + 2)
+    expect(vol('Tops')).toBe(base('Tops') - 3)
+    if (vol('Tops 2') != null) expect(vol('Tops 2')).toBe(base('Tops 2'))  // its own slider
+    applyMix(g.project, {})
+    expect(vol('Kick')).toBe(base('Kick'))
+    expect(base('Kick')).toBeLessThan(0)  // the kick starts a little lower than before
+  })
+
+  it('brings rides in only in drops: later in the first one and/or all through later ones', () => {
+    let seen = 0
+    for (const g of gens) {
+      const drops = g.sections.filter((s) => s.kind === 'drop')
+      for (const c of clipsOn(g, 'Ride')) {
+        const d = drops.findIndex((s) => c.start >= s.start * 4 && c.start < (s.start + s.bars) * 4)
+        expect(d).toBeGreaterThanOrEqual(0)
+        if (d === 0) expect(c.start).toBeGreaterThan(drops[0].start * 4)
+        seen++
+      }
+    }
+    expect(seen).toBeGreaterThan(50)
+  })
+
+  it('announces drops: a crash on the 1, often four kicks out and a beat or two of silence before', () => {
+    let kickOuts = 0
+    let silences = 0
+    for (const g of gens) {
+      for (const s of g.sections.filter((x) => x.kind === 'drop')) {
+        const one = s.start * 16  // 16th step of the drop's downbeat
+        expect(hitAt(g, 'Crash', one)).toBe(3)
+        if ([0, 4, 8, 12].every((k) => hitAt(g, 'Kick', one - 16 + k) === 0)) kickOuts++
+        // Silence: nothing but FX, fills and hits sounds in the last beat before the drop.
+        const quiet = g.project.lanes.filter((l) => !['FX', 'Fills', 'Hits', 'Crash'].includes(l.name))
+          .every((l) => !g.project.clips.some((c) => c.laneId === l.id && c.start < s.start * 4 && c.start + c.length > s.start * 4 - 1
+            && (c.type !== 'pattern' || c.steps.slice(12).some((v) => v))))
+        if (quiet) silences++
+      }
+    }
+    const drops = gens.reduce((n, g) => n + g.sections.filter((x) => x.kind === 'drop').length, 0)
+    expect(kickOuts).toBeGreaterThan(drops * 0.5)
+    expect(silences).toBeGreaterThan(drops * 0.5)
+  })
+
+  it('gives every drop the same rules: 16-bar marks, top loops, the same fill', () => {
+    const at16 = (g: Generation, s: Generation['sections'][number]) => {
+      const marks = []
+      for (let b = s.start + 16; b < s.start + s.bars; b += 16) marks.push(b)
+      return marks.map((b) => [hitAt(g, 'Crash', b * 16) > 0,
+        [0, 4, 8, 12].every((k) => hitAt(g, 'Kick', b * 16 - 16 + k) === 0)].join())
+    }
+    let compared = 0
+    for (const g of gens) {
+      const drops = g.sections.filter((s) => s.kind === 'drop')
+      const marks = new Set(drops.flatMap((s) => at16(g, s)))
+      expect(marks.size).toBeLessThanOrEqual(1)  // crash and kicks-out the same at every 16-bar mark
+      const tops = (s: Generation['sections'][number]) =>
+        g.project.lanes.filter((l) => l.name.startsWith('Tops') && covers(g, l.name, (s.start + 1) * 4)).length
+      const counts = new Set(drops.filter((s) => !s.peak).map(tops))
+      expect(counts.size).toBeLessThanOrEqual(1)
+      // One fill sample per track for the one-bar fills into drops and 16-bar parts.
+      const fillLane = g.project.lanes.find((l) => l.name === 'Fills')
+      const oneBar = g.project.clips.filter((c) => c.laneId === fillLane?.id && c.sample.category === 'fill' && c.sample.bars === 2)
+      expect(new Set(oneBar.map((c) => c.sample.relPath)).size).toBeLessThanOrEqual(1)
+      if (drops.length > 1 && marks.size) compared++
+    }
+    expect(compared).toBeGreaterThan(20)
+  })
+
+  it('mirrors the intro in the outro', () => {
+    for (const g of gens) {
+      const intro = g.sections[0]
+      const outro = g.sections[g.sections.length - 1]
+      const lanesIn = (s: Generation['sections'][number]) => g.project.lanes
+        .filter((l) => ['Tops', 'Tops 2', 'Clap', 'Perc'].includes(l.name)
+          && g.project.clips.some((c) => c.laneId === l.id && c.start < (s.start + s.bars) * 4 && c.start + c.length > s.start * 4))
+        .map((l) => l.name).sort()
+      expect(lanesIn(outro)).toEqual(lanesIn(intro))
     }
   })
 
@@ -113,6 +237,16 @@ describe('generator: rules every generation keeps', () => {
     }
   })
 
+  it('picks a whole tempo per track from the range, the same for the same seed', () => {
+    const bpms = Array.from({ length: 40 }, (_, i) => generate(LIB, { ...OPTS, tempo: { min: 120, max: 128 } }, 300 + i).project.bpm)
+    expect(bpms.every((b) => Number.isInteger(b) && b >= 120 && b <= 128)).toBe(true)
+    expect(new Set(bpms).size).toBeGreaterThan(4)
+    expect(generate(LIB, { ...OPTS, tempo: { min: 120, max: 128 } }, 7).project.bpm)
+      .toBe(generate(LIB, { ...OPTS, tempo: { min: 120, max: 128 } }, 7).project.bpm)
+    expect(generate(LIB, { ...OPTS, tempo: { min: 126, max: 126 } }, 7).project.bpm).toBe(126)
+    expect(generate(LIB, OPTS, 7).project.bpm).toBe(BPM)
+  })
+
   it('gives the same arrangement for the same seed', () => {
     expect(strip(generate(LIB, OPTS, 42))).toBe(strip(generate(LIB, OPTS, 42)))
     expect(strip(generate(LIB, OPTS, 42))).not.toBe(strip(generate(LIB, OPTS, 43)))
@@ -124,7 +258,7 @@ describe('generator: variety', () => {
     const shapes = new Set(gens.map((g) => g.sections.map((s) => `${s.kind}${s.bars}`).join(' ')))
     expect(shapes.size).toBeGreaterThan(60)
     const kicks = new Set(gens.flatMap((g) => g.sections.map((s) => s.kick).filter(Boolean)))
-    expect([...kicks].sort()).toEqual(['downbeats', 'filtered', 'halftime', 'kept', 'out', 'sweep'])
+    expect([...kicks].sort()).toEqual(['downbeats', 'filtered', 'kept', 'out', 'sweep', 'thin'])  // no half-time kick
     const builds = new Set(gens.flatMap((g) => g.sections.map((s) => s.build).filter(Boolean)))
     expect([...builds].sort()).toEqual(['all', 'doubletime', 'filter', 'layered'])
     expect(gens.some((g) => g.sections.filter((s) => s.kind === 'break').length === 1)).toBe(true)

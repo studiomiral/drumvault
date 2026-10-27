@@ -6,7 +6,7 @@
 // accumulating durations, so there is no drift: bar 192 is as exact as bar 1.
 
 import { BEATS_PER_BAR, beatToSec, clipEnd, dbToGain, loopBeats, STEPS_PER_BEAT, VELOCITY_GAIN } from '../lib/project'
-import type { AudioClip, Clip, PatternClip, Project } from '../types/project'
+import type { AudioClip, Clip, PatternClip, Project, SampleRef } from '../types/project'
 
 export interface ScheduledEvent {
   laneId: string
@@ -22,6 +22,77 @@ export interface ScheduledEvent {
   gain: number
   /** Clip filter, with its cutoff at the event's start and end (Hz). */
   filter?: { type: BiquadFilterType; q: number; f0: number; f1: number }
+  /** The clip's fades (project seconds); the gain follows `fadeAt` over the event. */
+  fade?: EventFade
+  /** A 16th slice of a loop played at another tempo: tiny fades at both ends against clicks. */
+  declick?: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Tempo (SCOPE.md §6.4a): samples are cut at the library BPM; a project may run at another.
+// Drum loops, fills and rolls are then played as 16th slices on the project's grid (like
+// Ableton's Beats mode: pitch and transients untouched); FX play a copy the engine stretched to
+// the project tempo with Rubber Band.
+// ---------------------------------------------------------------------------
+
+/** Sustained sounds that slicing would break up: they get a stretched file instead. */
+export const STRETCHED_CATEGORIES = new Set<string>(['fx_riser', 'fx_downlifter', 'fx_impact', 'fx_sweep', 'fx_atmos', 'fx'])
+
+/** Tempo a sample file is cut at (older projects don't store it: derived from its length). */
+export function sampleBpm(s: SampleRef): number | null {
+  if (s.bpm) return s.bpm
+  if (s.kind === 'oneshot' || !s.bars || !s.durationS) return null
+  return Math.round(((s.bars * BEATS_PER_BAR * 60) / s.durationS) * 100) / 100
+}
+
+export type TempoMode = 'native' | 'sliced' | 'stretched'
+
+export function tempoMode(clip: Clip, bpm: number): TempoMode {
+  const sb = sampleBpm(clip.sample)
+  if (clip.type !== 'audio' || sb == null || Math.abs(sb - bpm) < 1e-6) return 'native'
+  return STRETCHED_CATEGORIES.has(clip.sample.category) ? 'stretched' : 'sliced'
+}
+
+/** Library-relative path of a sample stretched to `bpm` (the engine's naming.tempo_rel_path). */
+export function tempoPath(relPath: string, bpm: number): string {
+  return `.drumvault/tempo/${Math.round(bpm * 100) / 100}/${relPath}`
+}
+
+/** The file a clip plays at the project tempo. */
+export function soundPath(clip: Clip, bpm: number): string {
+  return tempoMode(clip, bpm) === 'stretched' ? tempoPath(clip.sample.relPath, bpm) : clip.sample.relPath
+}
+
+/** A clip's fade-in [inStart, inEnd] and fade-out [outStart, outEnd] in project seconds. */
+export interface EventFade {
+  inStart: number
+  inEnd: number
+  outStart: number
+  outEnd: number
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
+
+/** Fade gain (0…1) at project time `t`: linear ramps; silent before the clip and after it. */
+export function fadeAt(f: EventFade, t: number): number {
+  const a = f.inEnd > f.inStart ? clamp01((t - f.inStart) / (f.inEnd - f.inStart)) : t >= f.inStart - EPS ? 1 : 0
+  const b = f.outEnd > f.outStart ? clamp01((f.outEnd - t) / (f.outEnd - f.outStart)) : t <= f.outEnd + EPS ? 1 : 0
+  return a * b
+}
+
+/** Times in [t0, t1] where the fade gain changes slope: ramping linearly between them is exact. */
+export function fadeBreakpoints(f: EventFade, t0: number, t1: number): number[] {
+  const ts = [t0, f.inStart, f.inEnd, f.outStart, f.outEnd, t1].filter((t) => t >= t0 - EPS && t <= t1 + EPS)
+  return [...new Set(ts.map((t) => Math.min(t1, Math.max(t0, t))))].sort((a, b) => a - b)
+}
+
+function clipFade(clip: Clip, bpm: number): EventFade | undefined {
+  const fi = Math.max(0, clip.fadeIn ?? 0)
+  const fo = Math.max(0, clip.fadeOut ?? 0)
+  if (!fi && !fo) return undefined
+  const s = beatToSec(clip.start, bpm)
+  const e = beatToSec(clipEnd(clip), bpm)
+  return { inStart: s, inEnd: s + beatToSec(fi, bpm), outStart: e - beatToSec(fo, bpm), outEnd: e }
 }
 
 export interface ScheduleOptions {
@@ -36,6 +107,8 @@ export interface ScheduleOptions {
 }
 
 const EPS = 1e-9
+/** Slice length (beats) when a loop plays at another tempo. */
+const SLICE = 1 / 4
 
 /** Events whose start lies in [from, to) (seconds), ordered by start time. */
 export function eventsInRange(project: Project, from: number, to: number, opts: ScheduleOptions = {}): ScheduledEvent[] {
@@ -65,16 +138,23 @@ function withFilter(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent
   }
 }
 
+function withFade(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
+  const fade = clipFade(clip, bpm)
+  return fade ? { ...ev, fade } : ev
+}
+
 function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
-              gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number): void {
+              gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number,
+              relPath = clip.sample.relPath, declick = false): void {
+  const extra = declick ? { declick: true } : {}
   if (start >= from - EPS && start < to - EPS) {
-    out.push(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath: clip.sample.relPath, start, offset, duration, gain }, clip, bpm))
+    out.push(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
-    out.push(withFilter({
-      laneId: clip.laneId, clipId: clip.id, relPath: clip.sample.relPath, start: from, offset: offset + late,
-      duration: duration == null ? null : duration - late, gain,
-    }, clip, bpm))
+    out.push(withFade(withFilter({
+      laneId: clip.laneId, clipId: clip.id, relPath, start: from, offset: offset + late,
+      duration: duration == null ? null : duration - late, gain, ...extra,
+    }, clip, bpm), clip, bpm))
   }
 }
 
@@ -87,6 +167,9 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
   const L = loopBeats(clip)
   const trim = ((clip.trimBeats % L) + L) % L
   const end = clipEnd(clip)
+  const mode = tempoMode(clip, bpm)
+  const sb = sampleBpm(clip.sample)
+  const rel = soundPath(clip, bpm)
   const gain = dbToGain(clip.gainDb)
   const fromBeat = (from * bpm) / 60
   const toBeat = (to * bpm) / 60
@@ -100,9 +183,24 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
     const s = segStart(k)
     if (s >= end || s >= toBeat + EPS) break
     const e = Math.min(end, k === 0 ? firstEnd : s + L)
+    const off = k === 0 ? trim : 0  // beats into the loop at s
+    if (mode === 'sliced') {
+      // One 16th slice at a time, each starting on the project's grid with its own piece of the loop.
+      const sliceSrc = (SLICE * 60) / sb!
+      const first = Math.max(0, Math.floor((fromBeat - s) / SLICE) - 1)
+      for (let j = first; s + j * SLICE < e - EPS; j++) {
+        const at = s + j * SLICE
+        if (at >= toBeat + EPS) break
+        const slot = beatToSec(Math.min(SLICE, e - at), bpm)
+        const dur = Math.min(sliceSrc, slot)
+        push(out, clip, bpm, beatToSec(at, bpm), ((off + j * SLICE) * 60) / sb!, dur, gain, from, to, ongoing, dur, rel, true)
+      }
+      continue
+    }
+    // Native or stretched: the file runs at the project tempo, one event per repetition.
     const startSec = beatToSec(s, bpm)
     const durSec = beatToSec(e - s, bpm)
-    push(out, clip, bpm, startSec, beatToSec(k === 0 ? trim : 0, bpm), durSec, gain, from, to, ongoing, durSec)
+    push(out, clip, bpm, startSec, beatToSec(off, bpm), durSec, gain, from, to, ongoing, durSec, rel)
   }
 }
 

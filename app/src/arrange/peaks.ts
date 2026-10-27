@@ -32,6 +32,12 @@ export function onPeaks(fn: () => void): () => void {
   return () => listeners.delete(fn)
 }
 
+/** The sample's audio changed: fetch its peaks again and redraw. */
+export function forgetPeaks(relPath: string): void {
+  cache.delete(relPath)
+  for (const fn of listeners) fn()
+}
+
 export function clearPeaks(): void {
   cache.clear()
 }

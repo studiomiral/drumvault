@@ -161,7 +161,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
  * A rectangle filled up to the value (from `origin`, default the minimum): click or drag
  * to set it, double-click to reset. Marks `dragging` so the lane strip doesn't move along.
  */
-function BarSlider({ min, max, step, value, reset, origin = min, color, title, className, dragging, onChange }: {
+export function BarSlider({ min, max, step, value, reset, origin = min, color, title, className, dragging, onChange }: {
   min: number
   max: number
   step: number
@@ -236,7 +236,7 @@ function ColorPalette({ anchor, value, onPick, onClose }: {
   )
 }
 
-function fmtDb(db: number): string {
+export function fmtDb(db: number): string {
   return db <= -60 ? '-∞ dB' : `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`
 }
 
