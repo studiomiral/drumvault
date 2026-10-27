@@ -7,7 +7,7 @@ import type { Clip, LoopRegion, Marker, Project } from '../types/project'
 import { beatToX, MARKER_H, RULER_H, rulerStep, TOP, type LaneBox } from './geometry'
 import { clipPeaks } from './peaks'
 
-// Translucent fills: the timeline sits on a dark glass card and lets it show through.
+// Translucent fills over the dark background, so lanes, grid and ruler stay subtle.
 const C = {
   bg: 'rgba(0, 0, 0, 0)',
   laneA: 'rgba(255, 255, 255, 0.035)',
@@ -132,6 +132,12 @@ export function drawBase(g: CanvasRenderingContext2D, d: BaseInput): void {
   // ---- markers band ------------------------------------------------------
   g.fillStyle = C.markerBand
   g.fillRect(0, 0, W, MARKER_H)
+  if (!d.markers.length) {
+    g.fillStyle = '#707070'
+    g.font = `11px ${UI_FONT}`
+    g.textBaseline = 'middle'
+    g.fillText('Sections — click or drag here to add one (Intro, Build, Drop, Break, Outro …)', 8, MARKER_H / 2 + 0.5)
+  }
   for (const m of d.markers) {
     const x0 = beatToX(m.start, px, sx)
     const x1 = beatToX(m.end, px, sx)
@@ -233,7 +239,8 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
     g.fillStyle = missing ? C.missing : '#ecebe8'
     g.font = `${selected ? 600 : 500} 11px ${UI_FONT}`
     g.textBaseline = 'top'
-    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name)
+    const filt = c.filter ? ` · ${c.filter.type === 'lowpass' ? 'LP' : 'HP'}${c.filter.to != null ? ' sweep' : ''}` : ''
+    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name) + filt
     g.fillText(label, Math.max(x0 + 6, 4), y + 3)
   }
   if (d.editing === c.id) {

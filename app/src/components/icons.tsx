@@ -12,6 +12,9 @@ export const IconLibrary = ({ className }: P) => (
 export const IconArrange = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base}><rect x="3" y="4" width="7" height="3" rx="1" /><rect x="8" y="9" width="9" height="3" rx="1" /><rect x="5" y="14" width="6" height="3" rx="1" /></svg>
 )
+export const IconGrid = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M3 15.5h14M4.5 4v13M10 4v13M15.5 4v13" /><path d="M6.5 11.5c.6-3 1.2-3 1.8 0M12 11.5c.6-3 1.2-3 1.8 0" strokeWidth={1.3} /></svg>
+)
 export const IconSettings = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base}><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>
 )
@@ -34,4 +37,20 @@ export const IconFolder = ({ className }: P) => (
 )
 export const IconDrop = ({ className }: P) => (
   <svg viewBox="0 0 40 40" className={className} {...base} strokeWidth={1.4}><path d="M20 6v18m0 0-6-6m6 6 6-6M8 26v4a3 3 0 0 0 3 3h18a3 3 0 0 0 3-3v-4" /></svg>
+)
+export const IconKeyboard = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><rect x="2.5" y="5" width="15" height="10" rx="2" /><path d="M5.5 8h.01M8.5 8h.01M11.5 8h.01M14.5 8h.01M6.5 12h7" /></svg>
+)
+/** Kind glyphs for the Process banner: a hit, a loop, a sparkle (FX), a key. */
+export const IconHit = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><ellipse cx="10" cy="7" rx="6.5" ry="2.5" /><path d="M3.5 7v6c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V7" /></svg>
+)
+export const IconLoop = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M4 9.5V8.5A3 3 0 0 1 7 5.5h8.5m0 0L13 3m2.5 2.5L13 8M16 10.5v1a3 3 0 0 1-3 3H4.5m0 0L7 17m-2.5-2.5L7 12" /></svg>
+)
+export const IconSparkle = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M10 3c.6 3.6 1.9 5 5.5 5.5-3.6.6-4.9 1.9-5.5 5.5-.6-3.6-1.9-4.9-5.5-5.5C8.1 8 9.4 6.6 10 3zM15.5 13.5c.2 1.2.6 1.6 1.8 1.8-1.2.2-1.6.6-1.8 1.8-.2-1.2-.6-1.6-1.8-1.8 1.2-.2 1.6-.6 1.8-1.8z" /></svg>
+)
+export const IconKey = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M7.5 3.5v9.5M12.5 3.5v9.5" /><rect x="3" y="3.5" width="14" height="13" rx="2" /><path d="M10 13v3.5" /></svg>
 )

@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+import soundfile as sf
 
 from . import classify, events as eventmod, key as keymod, loops as loopmod, naming, normalize
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
 from .audioutil import Audio, info as audio_info, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
 from .db import LibraryDB, library_dir, match_key, now_iso
-from .schemas import KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
+from .schemas import GridPreview, KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +107,13 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
         mono, sr, settings, source_stem=" + ".join(src_names), source_category=src_cat,
         names_for_bpm=[ex.zip_path.name, *names], bpm_override=overrides.bpm,
         grid_offset_ms=overrides.grid_offset_ms)
+    if tres.grid_warning and overrides.grid_offset_ms is None:
+        # Bar 1 moved off sample 0: check the other drum stems before believing the kick.
+        others = [n for n, s in stems.items()
+                  if s.category in DRUM_CATEGORIES and s.category != "kick" and n not in src_names]
+        offsets = [o for n in others if (o := tempomod.stem_grid_offset(
+            ex.audio(n).mono(), ex.audio(n).sr, stems[n].category, tres.bpm, settings)) is not None]
+        tres = tempomod.keep_bar_one(tres, offsets, th)
     for n in src_names:
         stems[n].used_for.append("tempo")
     ctx.progress("tempo", 0.2, f"{src_cat.title()}: {tres.bpm:.2f} BPM")
@@ -276,7 +284,8 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
                                 original_path=str(zip_path.resolve()), status="processing")
             ov = overrides or Overrides()
         try:
-            return _process(db, lib, zid, code, zip_path, settings, ov, loops_only, ctx)
+            reviewed = bool(existing is not None and existing["reviewed"])
+            return _process(db, lib, zid, code, zip_path, settings, ov, loops_only, ctx, reviewed)
         except Cancelled:
             if existing is None:
                 db.delete_zip_rows(zid)  # nothing was written for a new zip
@@ -289,7 +298,7 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
 
 
 def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, settings: Settings,
-             ov: Overrides, loops_only: bool, ctx: JobContext) -> ProcessResult:
+             ov: Overrides, loops_only: bool, ctx: JobContext, reviewed: bool = False) -> ProcessResult:
     th = settings.thresholds
     tag = naming.source_tag(code, naming.slugify(zip_path.name))
     with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
@@ -335,6 +344,9 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
             warnings += o.warnings
         warnings = list(dict.fromkeys(warnings))  # de-duplicate, keep order
         ctx.check()
+
+        if reviewed and status == "needs_review":
+            status = "done"  # the user marked this zip as reviewed; warnings stay visible
 
         # ---- write ---------------------------------------------------------
         ctx.progress("write", 0.86, "Writing samples")
@@ -400,7 +412,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
             created = now_iso()
 
             def add(stem_name: str, kind: str, category: str, data: np.ndarray, bars: int | None,
-                    offset_s: float, fp: np.ndarray, peak_db: float, gain_db: float) -> None:
+                    offset_s: float, fp: np.ndarray, peak_db: float, gain_db: float,
+                    body_bars: int | None = None) -> None:
                 ik = (kind, category, bars)
                 index[ik] = index.get(ik, 0) + 1
                 if kind == "oneshot":
@@ -417,7 +430,7 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 um = meta.get(match_key(stem_name, kind, bars, offset_s), {})
                 sid = db.insert_sample(
                     zip_id=zid, stem_id=stem_ids[stem_name], kind=kind, category=category, rel_path=rel,
-                    bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars,
+                    bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars, body_bars=body_bars,
                     key_label=k.label, key_camelot=k.camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
                     gain_applied_db=gain_db, source_offset_s=offset_s,
@@ -449,7 +462,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 for ev in o.events:
                     data, pk_db, gain = normalize.peak_normalize(ev.data, settings.event_peak_dbfs)
                     offset_s = ev.start / ev.sr / o.loop_factor
-                    add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint, pk_db, gain)
+                    add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint, pk_db, gain,
+                        ev.body_bars)
                     counts.events += 1
     except BaseException:
         for p in written:  # roll back files written by the aborted transaction
@@ -483,6 +497,53 @@ def delete_zip(settings: Settings, zip_id: int, delete_files: bool = True) -> di
             _delete_sample_files(lib, samples)
         db.delete_zip_rows(zip_id)
     return {"zip_id": zip_id, "deleted_samples": len(samples), "files_deleted": delete_files}
+
+
+def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
+    """The zip's drum stems summed to one mono file, for setting bar 1 by ear in the Grid view.
+
+    All stems of a zip share one timeline, so one bar-1 offset fits them all.
+    """
+    th = settings.thresholds
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        row = db.get_zip(zip_id)
+        if row is None:
+            raise PipelineError("not_found", f"No zip with id {zip_id}")
+        stems = db.stems_for_zip(zip_id)
+    zip_path = Path(row["original_path"] or "")
+    if not zip_path.exists():
+        raise PipelineError("missing_zip", f"Zip not found: {zip_path}")
+    category = {r["file_name"]: r["category_override"] or r["category"] for r in stems}
+    names = [n for n, c in category.items() if c in DRUM_CATEGORIES]
+    if not names:
+        names = [n for n, c in category.items() if c in EVENT_CATEGORIES]
+    if not names:
+        raise PipelineError("no_drums", "This zip has no drum stems to align")
+    sources = (row["bpm_source_stem"] or "").split(" + ")
+    phase_sr = next((r["sample_rate"] for r in stems if r["file_name"] in sources and r["sample_rate"]), 44100)
+    sr = th.grid_preview_sr
+    with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
+        ex = extract(zip_path, Path(d))
+        names = [n for n in names if n in ex.files]
+        if not names:
+            raise PipelineError("zip_changed", f"{zip_path} no longer has the processed stems")
+        parts = [resample(ex.audio(n).mono(), ex.audio(n).sr, sr) for n in names]
+    mix = np.zeros(max(len(p) for p in parts), dtype=np.float32)
+    for p in parts:
+        mix[:len(p)] += p
+    peak = float(np.max(np.abs(mix))) if len(mix) else 0.0
+    if peak > 0:
+        mix *= 10 ** (th.grid_preview_peak_dbfs / 20) / peak
+    out = library_dir(lib) / "grid" / f"{zip_id}.wav"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out), mix, sr, subtype="PCM_16", format="WAV")
+    manual = row["grid_offset_override_ms"] is not None
+    bar_one_ms = (float(row["grid_offset_override_ms"]) if manual
+                  else (row["phase_samples"] or 0) / phase_sr * 1000)
+    return GridPreview(zip_id=zip_id, path=str(out), sample_rate=sr, duration_s=len(mix) / sr,
+                       bpm=float(row["bpm_override"] or row["detected_bpm"] or settings.library_bpm),
+                       bar_one_ms=bar_one_ms, manual=manual, stems=sorted(names))
 
 
 def rebuild_loops(settings: Settings, ctx: JobContext | None = None) -> list[ProcessResult]:

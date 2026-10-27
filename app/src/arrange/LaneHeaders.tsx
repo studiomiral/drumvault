@@ -20,7 +20,7 @@ export function LaneHeaders() {
 
   return (
     <div className="relative shrink-0 border-r border-line bg-panel-2 overflow-hidden" style={{ width: HEADER_W }}>
-      <div className="absolute inset-x-0 top-0 z-10 bg-[rgb(20_20_22/0.72)] backdrop-blur-xl border-b border-line flex items-end justify-between px-3 pb-1.5"
+      <div className="absolute inset-x-0 top-0 z-10 bg-panel border-b border-line flex items-end justify-between px-3 pb-1.5"
            style={{ height: TOP }}>
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">Lanes</span>
         <button onClick={addLane} className="text-[12px] text-accent hover:underline">+ Lane</button>
@@ -223,12 +223,12 @@ function ColorPalette({ anchor, value, onPick, onClose }: {
   const top = Math.min(anchor.top, window.innerHeight - 140)
   return createPortal(
     <div className="fixed inset-0 z-50" onMouseDown={onClose}>
-      <div className="absolute grid grid-cols-8 gap-1.5 p-2.5 rounded-xl glass-strong"
+      <div className="absolute grid grid-cols-8 gap-1.5 p-2.5 rounded-xl surface-pop"
            style={{ left: anchor.right + 8, top }} onMouseDown={(e) => e.stopPropagation()}>
         {LANE_PALETTE.map((c) => (
           <button key={c} title={c} onClick={() => onPick(c)} style={{ background: c }}
                   className={cx('w-5 h-5 rounded-[4px] hover:scale-110 transition-transform',
-                    c === value && 'ring-2 ring-offset-2 ring-offset-[#161618] ring-text')} />
+                    c === value && 'ring-2 ring-offset-2 ring-offset-[#2a2b2f] ring-text')} />
         ))}
       </div>
     </div>,

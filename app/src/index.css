@@ -1,27 +1,34 @@
 @import "tailwindcss";
 
-/* Dark glass theme with a subtle yellow accent. On macOS the window itself is frosted
-   (native vibrancy, see electron/main.ts); the sidebar sits straight on it, the views on a
-   glass card over a dark backdrop with a faint warm glow. Surfaces and lines are translucent
-   white. The accent is used sparingly: flat fills, no glows. */
+/* Dark matte theme (after the NeuroNest dashboard reference): charcoal surfaces with thin
+   borders and large rounded cards, pastels for kinds and categories, a subtle yellow accent for
+   primary actions and selection (flat fills and tints, no glows). */
 @theme {
-  --color-bg: #0b0b0c;
-  --color-panel: rgb(255 255 255 / 0.06);
-  --color-panel-2: rgb(255 255 255 / 0.035);
-  --color-raised: rgb(255 255 255 / 0.085);
-  --color-line: rgb(255 255 255 / 0.08);
-  --color-text: #ecebe8;
-  --color-muted: #a6a39d;
-  --color-faint: #6f6c67;
+  --color-bg: #1c1d20;
+  --color-panel: #26272b;
+  --color-panel-2: #212226;
+  --color-raised: #313236;
+  --color-line: #313236;
+  --color-text: #f1f1ef;
+  --color-muted: #a5a5a1;
+  --color-faint: #707070;
   --color-accent: #e2c35f;
   --color-accent-soft: #e2c35f17;
   --color-on-accent: #1c1606;
+  /* Pastels mark kinds and categories (one-shots, loops, FX & fills); text on them is dark. */
+  --color-pastel-blue: #d5dee8;
+  --color-pastel-mint: #d2e5d0;
+  --color-pastel-yellow: #f2edc2;
+  --color-pastel-lavender: #dcd4ef;
+  --color-on-pastel: #1d1e21;
   --color-ok: #4ade80;
   --color-warn: #fbbf24;
   --color-bad: #f87171;
   /* Claude-like pairing: a warm book serif for titles, a friendly grotesk for the UI. */
   --font-sans: "Hanken Grotesk Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-display: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  /* Page titles in the top bar: heavy, modern display caps. */
+  --font-title: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
@@ -42,35 +49,27 @@
   color: transparent;
 }
 
-/* Frosted surfaces. `glass` for bars and panels, `glass-strong` for floating layers
-   (dialogs, popovers, toasts) that must stay readable over anything. */
-@utility glass {
-  background-color: rgb(255 255 255 / 0.045);
-  backdrop-filter: blur(24px) saturate(1.5);
-  border-color: rgb(255 255 255 / 0.09);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+/* Cards: dark fill, thin border, large radius. */
+@utility surface-card {
+  background-color: var(--color-panel-2);
+  border: 1px solid var(--color-line);
 }
 
-@utility glass-strong {
-  background-color: rgb(22 22 24 / 0.84);
-  backdrop-filter: blur(32px) saturate(1.6);
-  border: 1px solid rgb(255 255 255 / 0.1);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 28px 70px -20px rgb(0 0 0 / 0.75),
-    0 10px 24px -12px rgb(0 0 0 / 0.6);
-}
-
-/* The main card the views live on. */
-@utility glass-card {
-  background-color: rgb(20 20 22 / 0.58);
-  backdrop-filter: blur(28px) saturate(1.4);
-  border: 1px solid rgb(255 255 255 / 0.08);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 24px 60px -28px rgb(0 0 0 / 0.8);
+/* Floating layers: dialogs, menus, popovers, toasts. */
+@utility surface-pop {
+  background-color: #2a2b2f;
+  border: 1px solid #3a3b40;
+  box-shadow: 0 24px 60px -20px rgb(0 0 0 / 0.7), 0 8px 20px -10px rgb(0 0 0 / 0.5);
 }
 
 /* Raised controls (secondary buttons, the active nav item, segmented pills). */
 @utility surface-raised {
-  background-color: rgb(255 255 255 / 0.08);
-  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08), 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  background-color: var(--color-raised);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+@utility font-title {
+  font-family: var(--font-title);
 }
 
 @utility font-display {
@@ -94,7 +93,7 @@ html, body, #root {
 body {
   margin: 0;
   color-scheme: dark;
-  background: transparent;
+  background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -102,23 +101,6 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   overflow: hidden;
-}
-
-/* Behind the views: a dark wash over the frosted window with a faint warm glow. */
-.aurora {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(55% 50% at 88% -5%, rgb(226 195 95 / 0.07), transparent 70%),
-    radial-gradient(50% 55% at 20% 105%, rgb(255 255 255 / 0.03), transparent 70%),
-    linear-gradient(180deg, rgb(12 12 13 / 0.8), rgb(8 8 9 / 0.88));
-}
-
-/* Without native vibrancy (not macOS) the window needs a solid base. */
-:root:not(.vibrant) body {
-  background: var(--color-bg);
 }
 
 input, select, textarea {

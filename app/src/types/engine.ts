@@ -128,8 +128,22 @@ export type RpcRequest =
   | { id: string; method: "analyze_zip"; params: { path: string; settings?: EngineSettings } }
   | { id: string; method: "cancel"; params: { job_id: string } }
   | { id: string; method: "set_sample_meta"; params: { sample_id: number; favorite?: boolean; rating?: number; tags?: string; settings: EngineSettings } }
+  | { id: string; method: "mark_reviewed"; params: { zip_id: number; settings: EngineSettings } }
+  | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
   | { id: string; method: "shutdown"; params: Record<string, never> };
+
+/** `grid_preview` result: a zip's drum stems summed to one mono WAV (Grid view). */
+export interface GridPreview {
+  zip_id: number;
+  path: string;
+  sample_rate: number;
+  duration_s: number;
+  bpm: number;
+  bar_one_ms: number;   // where bar 1 starts in the stems now
+  manual: boolean;      // bar 1 was set by hand
+  stems: string[];
+}
 
 export interface RpcError {
   code: string;
@@ -207,6 +221,7 @@ export interface ZipRow {
   key_confidence: number | null;
   key_override: string | null;
   status: ZipStatus;
+  reviewed: number | null;      // 1 = marked as reviewed (stays done when reprocessed)
   warnings: string | null;      // JSON string[]
   processed_at: string | null;
   settings_hash: string | null;

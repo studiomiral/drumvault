@@ -23,6 +23,11 @@ export const KIND_LABELS: Record<SampleKind, string> = {
   oneshot: 'One-shots', loop: 'Loops', event: 'FX & fills',
 }
 
+/** Pastel per kind: blue one-shots, mint loops, lavender FX & fills (tags, dots, column heads). */
+export const KIND_PASTEL: Record<SampleKind, string> = {
+  oneshot: 'bg-pastel-blue', loop: 'bg-pastel-mint', event: 'bg-pastel-lavender',
+}
+
 /** "4 bars" for loops and events, "one-shot" otherwise. */
 export function lengthLabel(s: { kind: SampleKind; bars: number | null }): string {
   return s.kind === 'oneshot' ? 'one-shot' : `${s.bars} bar${s.bars === 1 ? '' : 's'}`

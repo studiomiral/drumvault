@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy import signal
@@ -216,7 +216,11 @@ def detect_tempo(mono: np.ndarray, sr: int, settings: Settings, *, source_stem: 
     grid_warning = False
     tol = th.tempo_phase_tolerance_ms / 1000.0
     if grid_offset_ms is not None:
+        # Set by hand in the Grid view. Hits ahead of the very first downbeat (a negative
+        # offset) start the grid one bar later, so cuts never begin before sample 0.
         phase_s = grid_offset_ms / 1000.0
+        while phase_s < 0:
+            phase_s += 4 * period
     elif min(phase, period - phase) <= tol:
         phase_s = 0.0
     else:
@@ -238,3 +242,28 @@ def detect_tempo(mono: np.ndarray, sr: int, settings: Settings, *, source_stem: 
                        confidence=float(conf), source_stem=source_stem, source_category=source_category,
                        raw_bpm=float(raw_bpm), detected_bpm=float(detected_bpm), warnings=warnings,
                        grid_warning=grid_warning, bpm_warning=bpm_warning)
+
+
+def stem_grid_offset(mono: np.ndarray, sr: int, category: str, bpm: float, settings: Settings) -> float | None:
+    """Median signed distance (s) of a stem's strong onsets from a 16th grid starting at sample 0."""
+    times, _, _ = onset_times(mono, sr, category, settings)
+    if len(times) < settings.thresholds.tempo_bar_one_min_onsets:
+        return None
+    step = 60.0 / bpm / 4
+    return float(np.median(times - np.round(times / step) * step))
+
+
+def keep_bar_one(res: TempoResult, offsets: list[float], th) -> TempoResult:
+    """The kick moved bar 1 off sample 0, but the other drums sit on a grid from sample 0.
+
+    Then the stems were exported from bar 1 and only the kick is late (a slow attack or a
+    nudged sample): keep bar 1 at sample 0, or every loop is cut late and flams.
+    """
+    if not res.grid_warning or not offsets or abs(float(np.median(offsets))) * 1000 > th.tempo_phase_tolerance_ms:
+        return res
+    period = 60.0 / res.bpm
+    late_ms = ((res.phase_samples / res.sample_rate) % period) * 1000
+    warnings = [w for w in res.warnings if not w.startswith("Grid does not start")]
+    warnings.append(f"The {res.source_category} hits {late_ms:.0f} ms after the grid of the other drums; "
+                    f"bar 1 kept at the start of the stems")
+    return replace(res, phase_samples=0, grid_warning=False, warnings=warnings)

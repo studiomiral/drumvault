@@ -105,3 +105,32 @@ def test_long_beds_are_cut_into_chunks():
     assert all(e.bars == 8 and e.start % (8 * BAR) == 0 for e in evs)
     for e in evs:  # chunks of a bed are faded, not clicked, at both ends
         assert abs(e.data[0, 0]) < 0.01 and e.data[-1, 0] == 0.0
+
+
+def test_body_bars_exclude_the_tail():
+    """A 4-bar build whose ring-out spills into a fifth bar: 5 bars long, a 4-bar body."""
+    stem = _stem()
+    n = 4 * BAR
+    build = (0.5 * np.random.default_rng(11).standard_normal(n) * np.linspace(0.1, 1.0, n)).astype(np.float32)
+    tail = (0.5 * np.random.default_rng(12).standard_normal(int(1.5 * BEAT))
+            * np.exp(-np.arange(int(1.5 * BEAT)) / (0.15 * BEAT)) * 0.2).astype(np.float32)
+    _put(stem, 8 * 4, np.concatenate([build, tail])[:, None])
+    (e,) = events.extract_events(stem, SR, 0, BPM, Settings())
+    assert (e.start // BAR, e.bars, e.body_bars) == (8, 5, 4)
+
+
+def test_old_library_gets_the_body_bars_column(tmp_path):
+    import sqlite3
+
+    from drumvault_engine.db import SCHEMA, LibraryDB, db_path
+    path = db_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    con = sqlite3.connect(path)
+    con.executescript(SCHEMA.replace("  body_bars INTEGER,\n", ""))  # a v1 library
+    con.execute("INSERT INTO samples (kind, bars) VALUES ('event', 5)")
+    con.commit()
+    con.close()
+    with LibraryDB(tmp_path) as db:
+        cols = {r["name"] for r in db.conn.execute("PRAGMA table_info(samples)")}
+        assert "body_bars" in cols
+        assert db.conn.execute("SELECT bars, body_bars FROM samples").fetchone()[:] == (5, None)

@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import { api } from '../api'
 import { EngineBanner } from '../components/EngineBanner'
-import { IconDrop, IconX } from '../components/icons'
-import { Button, Chip, cx, Empty, ProgressBar, SectionTitle, Segmented, StatusChip } from '../components/ui'
-import { formatBpm } from '../lib/format'
+import { IconDrop, IconHit, IconKey, IconLoop, IconSparkle, IconX } from '../components/icons'
+import { Button, Chip, cx, Empty, Modal, PageTitle, ProgressBar, SectionTitle, Segmented, StatusChip } from '../components/ui'
+import { ENGINE_DEFAULTS } from '../lib/defaults'
+import { formatBpm, KIND_PASTEL } from '../lib/format'
 import { attempt, useApp } from '../store/app'
 import type { JobInfo, ZipListItem } from '../types/api'
+import type { SampleKind } from '../types/engine'
 import { ZipDetailPanel } from './ZipDetailPanel'
 
 type ZipFilter = 'all' | 'needs_review' | 'error'
 
 export function ProcessView() {
-  const { jobs, libraryVersion, engine, toast } = useApp()
+  const { jobs, libraryVersion, engine, toast, settings } = useApp()
   const [zips, setZips] = useState<ZipListItem[]>([])
   const [filter, setFilter] = useState<ZipFilter>('all')
   const [selected, setSelected] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [dupes, setDupes] = useState<{ paths: string[]; dupes: Duplicate[] } | null>(null)
 
   useEffect(() => {
     void api.listZips().then(setZips)
@@ -32,6 +35,25 @@ export function ProcessView() {
   const submit = useCallback(async (paths: string[]) => {
     if (!paths.length) {
       toast('info', 'No zip files found in what was dropped.')
+      return
+    }
+    // Warn about zips whose file name is already in the library, queued, or twice in this batch.
+    const [inLibrary, queued] = [await api.listZips(), useApp.getState().jobs]
+    const known = new Map<string, string>()
+    for (const z of inLibrary) known.set(z.file_name.toLowerCase(), `already in the library as ${z.source_code}`)
+    for (const j of queued) {
+      if ((j.status === 'queued' || j.status === 'processing') && j.path) known.set(baseName(j.path).toLowerCase(), 'already in the queue')
+    }
+    const found: Duplicate[] = []
+    const seen = new Set<string>()
+    paths.forEach((p, index) => {
+      const name = baseName(p)
+      const why = known.get(name.toLowerCase()) ?? (seen.has(name.toLowerCase()) ? 'twice in this selection' : null)
+      if (why) found.push({ index, path: p, name, why })
+      seen.add(name.toLowerCase())
+    })
+    if (found.length) {
+      setDupes({ paths, dupes: found })
       return
     }
     await attempt(() => api.processZips(paths))
@@ -73,13 +95,17 @@ export function ProcessView() {
       onDrop={(e) => void onDrop(e)}
     >
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
-          <h1 className="font-display text-[21px] font-medium flex-1">Process</h1>
-          <Button variant="primary" onClick={() => void addViaDialog()} disabled={!canProcess}>Add zips…</Button>
+        <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+          <PageTitle>Process</PageTitle>
+          <div className="flex-1" />
         </header>
         <EngineBanner />
         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-6">
-          <DropZone compact={zips.length > 0 || jobs.length > 0} onClick={() => void addViaDialog()} />
+          <div className="flex gap-4 h-[196px]">
+            <Hero bpm={settings?.engine.library_bpm ?? ENGINE_DEFAULTS.library_bpm} canProcess={canProcess}
+                  onAdd={() => void addViaDialog()} />
+            <DropZone onClick={() => void addViaDialog()} />
+          </div>
           {jobs.length > 0 && <Queue jobs={jobs} onOpen={setSelected} />}
           <section>
             <SectionTitle right={
@@ -102,6 +128,37 @@ export function ProcessView() {
       {selected != null && (
         <ZipDetailPanel zipId={selected} onClose={() => setSelected(null)} />
       )}
+      {dupes && (
+        <Modal title="Already added?" onClose={() => setDupes(null)} width={540}>
+          <p className="text-muted">
+            {dupes.dupes.length === 1 ? 'This zip has' : `These ${dupes.dupes.length} zips have`} the same file name as one you
+            already added. Zips with identical contents are skipped anyway; a different download with the same name would be
+            processed again.
+          </p>
+          <ul className="mt-3 space-y-1 max-h-56 overflow-y-auto">
+            {dupes.dupes.map((d) => (
+              <li key={d.index} className="flex gap-3 text-[12.5px]">
+                <span className="truncate flex-1 text-text" title={d.path}>{d.name}</span>
+                <span className="text-warn shrink-0">{d.why}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setDupes(null)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => {
+              const skip = new Set(dupes.dupes.map((d) => d.index))
+              const keep = dupes.paths.filter((_, i) => !skip.has(i))
+              setDupes(null)
+              if (keep.length) void attempt(() => api.processZips(keep))
+            }}>Skip duplicates</Button>
+            <Button variant="primary" onClick={() => {
+              const all = dupes.paths
+              setDupes(null)
+              void attempt(() => api.processZips(all))
+            }}>Add anyway</Button>
+          </div>
+        </Modal>
+      )}
       {dragging && (
         <div className="absolute inset-2 rounded-2xl border-2 border-dashed border-accent/70 bg-accent/10 backdrop-blur-sm flex items-center justify-center pointer-events-none z-20">
           <div className="text-accent text-[15px] font-medium">Drop zips or folders to process them</div>
@@ -111,17 +168,51 @@ export function ProcessView() {
   )
 }
 
-function DropZone({ compact, onClick }: { compact: boolean; onClick: () => void }) {
+/** Welcome banner: what Drumvault does, the library tempo, and the main action. */
+function Hero({ bpm, canProcess, onAdd }: { bpm: number; canProcess: boolean; onAdd: () => void }) {
+  const bubbles = [
+    { Icon: IconHit, bg: 'bg-pastel-blue', at: 'right-[150px] top-[22px]', size: 'w-[72px] h-[72px]' },
+    { Icon: IconLoop, bg: 'bg-pastel-mint', at: 'right-[52px] top-[-14px]', size: 'w-[84px] h-[84px]' },
+    { Icon: IconSparkle, bg: 'bg-pastel-lavender', at: 'right-[70px] bottom-[-18px]', size: 'w-[88px] h-[88px]' },
+    { Icon: IconKey, bg: 'bg-pastel-yellow', at: 'right-[178px] bottom-[-26px]', size: 'w-[64px] h-[64px]' },
+  ]
+  return (
+    <section className="relative flex-1 min-w-0 rounded-2xl border border-line overflow-hidden px-7 py-6 flex flex-col justify-center
+                        bg-[radial-gradient(90%_130%_at_88%_40%,rgb(226_195_95/0.16),transparent_60%),linear-gradient(105deg,#222327_35%,#33332d_100%)]">
+      <div className="absolute inset-y-0 right-0 w-[300px] pointer-events-none" aria-hidden>
+        {bubbles.map(({ Icon, bg, at, size }, i) => (
+          <div key={i} className={cx('absolute rounded-full p-2.5 bg-[#2c2d30] border border-[#3a3b3f]', at)}>
+            <div className={cx('rounded-full flex items-center justify-center text-on-pastel', bg, size)}>
+              <Icon className="w-1/2 h-1/2" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="relative max-w-[460px] flex flex-col">
+        <h2 className="font-display text-[26px] leading-[1.15] font-medium">Stems in, drums out</h2>
+        <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+          Drop zips of dance-track stems. Drumvault keeps the drums, FX and fills, matches them to {formatBpm(bpm)} BPM
+          and labels them with the track&apos;s key.
+        </p>
+        <Button variant="primary" className="mt-4 h-8 px-3.5 self-start" onClick={onAdd} disabled={!canProcess}>Add zips…</Button>
+      </div>
+    </section>
+  )
+}
+
+function DropZone({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className={cx('w-full rounded-2xl border border-dashed border-[rgb(255_255_255/0.14)] bg-panel-2 hover:border-accent/60 hover:bg-accent-soft transition-all',
-        'flex items-center justify-center gap-3 text-muted', compact ? 'h-16' : 'h-56 flex-col')}
+      className="w-[300px] shrink-0 rounded-2xl border border-dashed border-[#3e3f44] bg-panel-2 hover:border-accent/60 hover:bg-accent-soft
+                 transition-colors flex flex-col items-center justify-center gap-3 px-6 text-center text-muted"
     >
-      <IconDrop className={compact ? 'w-6 h-6' : 'w-10 h-10 text-faint'} />
+      <span className="w-12 h-12 rounded-full bg-raised flex items-center justify-center text-text">
+        <IconDrop className="w-6 h-6" />
+      </span>
       <span>
-        <span className="text-text font-medium">Drop stem zips or folders here</span>
-        {!compact && <span className="block mt-1 text-[12px]">Folders are searched for zips. Already processed zips are skipped.</span>}
+        <span className="block text-text font-medium">Drop stem zips or folders</span>
+        <span className="block mt-1 text-[12px]">or click to browse. Folders are searched for zips; processed zips are skipped.</span>
       </span>
     </button>
   )
@@ -191,9 +282,9 @@ function ZipTable({ zips, selected, onSelect }: {
             <th className="font-medium px-3 py-2 w-28">Status</th>
             <th className="font-medium px-3 py-2 w-28">BPM</th>
             <th className="font-medium px-3 py-2 w-20">Key</th>
-            <th className="font-medium px-3 py-2 w-24 text-right">One-shots</th>
-            <th className="font-medium px-3 py-2 w-20 text-right">Loops</th>
-            <th className="font-medium px-3 py-2 w-24 text-right">FX & fills</th>
+            <KindHead kind="oneshot" className="w-28">One-shots</KindHead>
+            <KindHead kind="loop" className="w-20">Loops</KindHead>
+            <KindHead kind="event" className="w-28">FX & fills</KindHead>
           </tr>
         </thead>
         <tbody className="divide-y divide-line">
@@ -224,4 +315,25 @@ function ZipTable({ zips, selected, onSelect }: {
       </table>
     </div>
   )
+}
+
+function KindHead({ kind, className, children }: { kind: SampleKind; className: string; children: string }) {
+  return (
+    <th className={cx('font-medium px-3 py-2 text-right whitespace-nowrap', className)}>
+      <span className="inline-flex items-center gap-1.5">
+        <span className={cx('w-1.5 h-1.5 rounded-full', KIND_PASTEL[kind])} />{children}
+      </span>
+    </th>
+  )
+}
+
+interface Duplicate {
+  index: number
+  path: string
+  name: string
+  why: string
+}
+
+function baseName(path: string): string {
+  return path.split('/').pop() ?? path
 }

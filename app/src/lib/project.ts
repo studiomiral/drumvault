@@ -24,9 +24,9 @@ export const LANE_PALETTE = [
   '#f87171', '#2dd4bf', '#e879f9', '#fb7185', '#94a3b8', '#cbd5e1', '#78716c', '#f5f5f4',
 ]
 
-export const MARKER_NAMES = ['Intro', 'Build', 'Drop', 'Break', 'Outro']
+export const MARKER_NAMES = ['Intro', 'Build', 'Drop', 'Break', 'Breakdown', 'Outro']
 const MARKER_COLORS: Record<string, string> = {
-  intro: '#22d3ee', build: '#facc15', drop: '#f472b6', break: '#4ee3a6', outro: '#60a5fa',
+  intro: '#22d3ee', build: '#facc15', drop: '#f472b6', break: '#4ee3a6', breakdown: '#4ee3a6', outro: '#60a5fa',
 }
 
 export function markerColor(name: string): string {
@@ -172,6 +172,14 @@ export function formatPosition(beat: number): string {
   const b = Math.floor((sixteenth % STEPS_PER_BAR) / STEPS_PER_BEAT) + 1
   const s = (sixteenth % STEPS_PER_BEAT) + 1
   return `${bar}.${b}.${s}`
+}
+
+/** "1:23.4" (with tenths) or "5:12": minutes and seconds of a time in seconds. */
+export function formatTime(sec: number, tenths = false): string {
+  const t = Math.max(0, tenths ? Math.floor(sec * 10 + 1e-6) / 10 : Math.round(sec))
+  const m = Math.floor(t / 60)
+  const s = t - m * 60
+  return `${m}:${(tenths ? s.toFixed(1) : String(Math.floor(s))).padStart(tenths ? 4 : 2, '0')}`
 }
 
 export function snap(beat: number, toBeats: number): number {

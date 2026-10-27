@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { audition } from '../audio/audition'
 import { IconPlay, IconStar, IconStop } from '../components/icons'
-import { Button, Chip, cx, Empty, inputClass, Segmented } from '../components/ui'
+import { Button, cx, Empty, inputClass, PageTitle, Segmented } from '../components/ui'
 import { VirtualList } from '../components/VirtualList'
 import { Waveform } from '../components/Waveform'
 import { ALL_KEYS, expandCompatible } from '../lib/camelot'
-import { CATEGORY_LABELS, EVENT_CATEGORIES, formatBpm, formatDuration, KIND_LABELS, lengthLabel } from '../lib/format'
+import { CATEGORY_LABELS, EVENT_CATEGORIES, formatBpm, formatDuration, KIND_LABELS, KIND_PASTEL, lengthLabel } from '../lib/format'
 import { attempt, useApp } from '../store/app'
 import { useLibrary } from '../store/library'
 import type { LibraryFacets, SampleListItem, SampleSort } from '../types/api'
@@ -118,8 +118,8 @@ export function LibraryView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
-        <h1 className="font-display text-[21px] font-medium mr-2">Library</h1>
+      <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+        <PageTitle className="mr-3">Library</PageTitle>
         <input ref={searchRef} className={cx(inputClass, 'w-64')} placeholder="Search names and tags  ⌘F"
                value={search} onChange={(e) => setSearch(e.target.value)} />
         <Segmented<'all' | SampleKind> value={filter.kind ?? 'all'}
@@ -232,7 +232,8 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
           {Math.round((s as SampleListItem & { similarity: number }).similarity * 100)}%
         </span>
       )}
-      <Chip className="w-[92px] justify-center">{CATEGORY_LABELS[s.category]}</Chip>
+      <span className={cx('w-[92px] inline-flex items-center justify-center rounded-md h-[18px] text-[11px] font-medium text-on-pastel whitespace-nowrap',
+        KIND_PASTEL[s.kind])}>{CATEGORY_LABELS[s.category]}</span>
       <span className="w-[74px] text-[12px]">
         {s.key_label ?? <span className="text-faint">NoKey</span>}
         {s.key_camelot && <span className="text-faint ml-1.5">{s.key_camelot}</span>}

@@ -102,7 +102,7 @@ class Overrides(BaseModel):
 # ---------------------------------------------------------------------------
 
 Method = Literal["process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "cancel", "health",
-                 "analyze_zip", "set_sample_meta", "shutdown"]
+                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -140,6 +140,29 @@ class CancelParams(BaseModel):
 class AnalyzeZipParams(BaseModel):
     path: str
     settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class MarkReviewedParams(BaseModel):
+    """Clear a zip's needs-review flag (it stays cleared when the zip is reprocessed)."""
+    zip_id: int
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class GridPreviewParams(BaseModel):
+    """Sum a zip's drum stems into one preview file for the Grid view."""
+    zip_id: int
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class GridPreview(BaseModel):
+    zip_id: int
+    path: str                      # absolute path of the mono preview WAV
+    sample_rate: int
+    duration_s: float
+    bpm: float                     # the zip's tempo (override or detected)
+    bar_one_ms: float              # where bar 1 starts in the stems now
+    manual: bool                   # bar 1 was set by hand
+    stems: list[str]               # the stems in the preview
 
 
 class SetSampleMetaParams(BaseModel):

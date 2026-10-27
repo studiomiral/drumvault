@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { Button, cx, Field, inputClass, SectionTitle } from '../components/ui'
+import { Button, cx, Field, inputClass, PageTitle, SectionTitle } from '../components/ui'
 import { ENGINE_DEFAULTS, resolveEngine, type ResolvedEngineOptions } from '../lib/defaults'
 import { CATEGORY_LABELS } from '../lib/format'
 import { attempt, useApp } from '../store/app'
@@ -50,8 +50,9 @@ export function SettingsView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="app-drag h-14 shrink-0 flex items-center gap-3 px-6 border-b border-line">
-        <h1 className="font-display text-[21px] font-medium flex-1">Settings</h1>
+      <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+        <PageTitle>Settings</PageTitle>
+        <div className="flex-1" />
         <Button variant="ghost" disabled={!dirty} onClick={() => {
           setDraft(saved)
           setPaths({ enginePath: settings.enginePath ?? '', uvPath: settings.uvPath ?? '' })

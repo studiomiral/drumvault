@@ -37,7 +37,8 @@ const SORTS: Record<string, string> = {
 }
 
 /** SQL WHERE clause + parameters for a sample filter (exported for tests). */
-export function buildSampleQuery(f: SampleFilter): { sql: string; params: (string | number)[] } {
+/** `bodyCol` selects body_bars (libraries from before schema v2 lack the column). */
+export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars'): { sql: string; params: (string | number)[] } {
   const where: string[] = []
   const params: (string | number)[] = []
   const inList = (col: string, values: (string | number)[]) => {
@@ -70,7 +71,7 @@ export function buildSampleQuery(f: SampleFilter): { sql: string; params: (strin
     params.push(like, like)
   }
   const sql = `
-    SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, s.key_label, s.key_camelot,
+    SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${bodyCol} AS body_bars, s.key_label, s.key_camelot,
            s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
     FROM samples s JOIN zips z ON z.id = s.zip_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -118,8 +119,14 @@ export class LibraryReader {
     }
   }
 
+  /** `s.body_bars`, or NULL until the engine has migrated this library to schema v2. */
+  private bodyCol(): string {
+    const cols = this.all<{ name: string }>('PRAGMA table_info(samples)')
+    return cols.some((c) => c.name === 'body_bars') ? 's.body_bars' : 'NULL'
+  }
+
   querySamples(filter: SampleFilter): SampleListItem[] {
-    const { sql, params } = buildSampleQuery(filter)
+    const { sql, params } = buildSampleQuery(filter, this.bodyCol())
     return this.all<Omit<SampleListItem, 'name'>>(sql, ...params)
       .map((r) => ({ ...r, name: fileName(r.rel_path) }))
   }
@@ -132,11 +139,12 @@ export class LibraryReader {
 
   samplesByPath(relPaths: string[]): SampleListItem[] {
     const out: SampleListItem[] = []
+    const body = this.bodyCol()
     for (let i = 0; i < relPaths.length; i += 500) {
       const chunk = relPaths.slice(i, i + 500)
       out.push(...this.all<Omit<SampleListItem, 'name'>>(
-        `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, s.key_label, s.key_camelot, s.duration_s,
-                s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
+        `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${body} AS body_bars, s.key_label, s.key_camelot,
+                s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
          FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.rel_path IN (${chunk.map(() => '?').join(', ')})`,
         ...chunk).map((r) => ({ ...r, name: fileName(r.rel_path) })))
     }
@@ -153,8 +161,8 @@ export class LibraryReader {
     if (!t?.fingerprint) return []
     const target = toFloats(t.fingerprint)
     const rows = this.all<Omit<SampleListItem, 'name'> & { fingerprint: Uint8Array | null }>(
-      `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, s.key_label, s.key_camelot, s.duration_s,
-              s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, s.fingerprint
+      `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${this.bodyCol()} AS body_bars, s.key_label,
+              s.key_camelot, s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, s.fingerprint
        FROM samples s JOIN zips z ON z.id = s.zip_id
        WHERE s.kind = ? AND s.category = ? AND s.bars IS ? AND s.id != ?`,
       t.kind, t.category, t.bars, sampleId)

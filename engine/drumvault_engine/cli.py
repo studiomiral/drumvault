@@ -68,7 +68,7 @@ def cmd_process(args) -> int:
         line = f"{r.source_code or '-'}  {z.name}: {r.status}"
         if r.analysis:
             t, k = r.analysis.tempo, r.analysis.key
-            line += (f"  {t.bpm:g} BPM (conf {t.confidence:.2f})  key {k.label or 'NoKey'}"
+            line += (f"  {t.bpm:g} BPM  key {k.label or 'NoKey'}"
                      f"{'?' if k.uncertain else ''}")
         line += f"  one-shots {r.counts.oneshots}  loops {r.counts.loops}  fx/fills {r.counts.events}"
         print(line)

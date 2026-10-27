@@ -203,7 +203,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
         drag.current = { kind: 'marker', x0: x, marker: hit.marker, edge: hit.edge, moved: false }
       } else {
         st.selectMarker(null)
-        drag.current = { kind: 'marker-new', x0: x, beat0: snap(beat, unit(e.altKey)) }
+        drag.current = { kind: 'marker-new', x0: x, beat0: Math.max(0, snap(beat, unit(e.altKey))) }
       }
       return
     }
@@ -359,16 +359,25 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
         }
         setLoopPreview(null)
         break
-      case 'marker-new':
-        if (markerPreview) {
-          const m = { ...markerPreview, id: uid('m') }
+      case 'marker-new': {
+        let m = markerPreview ? { ...markerPreview, id: uid('m') } : null
+        if (!m) {
+          // A click: a section from this bar to the next section (at most 8 bars).
+          const bar = Math.floor(d.beat0 / BEATS_PER_BAR) * BEATS_PER_BAR
+          const end = Math.min(bar + 8 * BEATS_PER_BAR, ...project.markers.filter((k) => k.start > bar).map((k) => k.start))
+          if (end > bar) m = makeMarker(nextMarkerName(project.markers), bar, end)
+        }
+        if (m) {
+          const added = m
           st.edit('Add marker', (dr) => {
-            dr.markers.push(m)
+            dr.markers.push(added)
           })
-          st.selectMarker(m.id)
+          st.selectMarker(added.id)
+          onMarkerEdit(added, beatToX(added.start, px, sx))  // type its name right away
         }
         setMarkerPreview(null)
         break
+      }
       case 'marker':
         if (d.moved && markerPreview) {
           const m = markerPreview

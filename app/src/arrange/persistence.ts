@@ -75,6 +75,16 @@ export async function createProject(name = 'Untitled'): Promise<void> {
   await saveNow()
 }
 
+/** Generate → Send to Arrange: open a generated arrangement as a new project ("Generated 03"). */
+export async function openGenerated(project: Project): Promise<void> {
+  await saveNow()
+  await refreshProjectList()
+  const used = useArrange.getState().projects.map((p) => /^Generated (\d+)$/.exec(p.name)?.[1]).filter(Boolean).map(Number)
+  const name = `Generated ${String(Math.max(0, ...used) + 1).padStart(2, '0')}`
+  await open({ ...structuredClone(project), name, createdAt: new Date().toISOString() }, null)
+  await saveNow()
+}
+
 export async function deleteCurrentProject(): Promise<void> {
   const { file } = useProject.getState()
   if (file) await api.deleteProject(file)

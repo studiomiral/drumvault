@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { playback } from '../audio/engine'
 import { IconPlay, IconStop } from '../components/icons'
-import { Button, cx, inputClass } from '../components/ui'
+import { Button, cx, inputClass, PageTitle } from '../components/ui'
 import { formatBpm } from '../lib/format'
-import { formatPosition } from '../lib/project'
+import { beatToSec, BEATS_PER_BAR, formatPosition, formatTime } from '../lib/project'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
@@ -17,7 +17,8 @@ export function Toolbar() {
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
 
   return (
-    <div className="app-drag h-14 shrink-0 flex items-center gap-2 px-4 border-b border-line">
+    <div className="app-drag h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
+      <PageTitle className="mr-3">Arrange</PageTitle>
       <ProjectMenu />
       <input className={cx(inputClass, 'w-44 font-medium')} value={project.name} title="Project name"
              onChange={(e) => edit('Rename project', (d) => {
@@ -25,11 +26,11 @@ export function Toolbar() {
              }, { coalesce: 'project-name' })} />
       <span className="text-[11px] text-faint w-14">{saving ? 'Saving…' : dirty ? 'Edited' : 'Saved'}</span>
 
-      <div className="w-px h-6 bg-line mx-1" />
+      <div className="w-px h-6 bg-line mx-2.5" />
       <Button variant="ghost" title="Undo (⌘Z)" disabled={!past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" title="Redo (⇧⌘Z)" disabled={!future.length} onClick={redo}>↷</Button>
 
-      <div className="w-px h-6 bg-line mx-1" />
+      <div className="w-px h-6 bg-line mx-2.5" />
       <button title="Play / stop (Space)" onClick={() => playback.toggle()}
               className={cx('w-9 h-9 rounded-full flex items-center justify-center shadow-sm',
                 playback.playing ? 'bg-brand text-on-accent shadow-black/30' : 'bg-panel border border-line text-accent hover:bg-panel-2')}>
@@ -37,6 +38,7 @@ export function Toolbar() {
           : playback.playing ? <IconStop className="w-4 h-4" /> : <IconPlay className="w-4 h-4 ml-0.5" />}
       </button>
       <PositionDisplay />
+      <TimeDisplay />
       <Toggle on={project.loop.enabled} title="Loop region (L) — drag on the ruler to set it"
               onClick={() => edit('Toggle loop', (d) => {
                 d.loop.enabled = !d.loop.enabled
@@ -45,10 +47,10 @@ export function Toolbar() {
               onClick={() => edit('Toggle metronome', (d) => {
                 d.metronome = !d.metronome
               })}>Click</Toggle>
-      <span className="text-[12px] text-muted ml-1" title="Project tempo = library BPM">
+      <span className="text-[12px] text-muted ml-2" title="Project tempo = library BPM">
         <span className="font-semibold text-text">{formatBpm(project.bpm)}</span> BPM
       </span>
-      <label className="flex items-center gap-1.5 text-[12px] text-muted ml-1" title="Project length in bars">
+      <label className="flex items-center gap-1.5 text-[12px] text-muted ml-2" title="Project length in bars">
         <input type="number" min={1} max={999} className={cx(inputClass, 'w-16 h-7')} value={project.lengthBars}
                onChange={(e) => {
                  const v = Math.max(1, Math.min(999, Math.round(Number(e.target.value) || 1)))
@@ -60,9 +62,9 @@ export function Toolbar() {
       </label>
 
       <div className="flex-1" />
-      <span className="text-[11px] text-faint">Zoom</span>
+      <span className="text-[11px] text-faint ml-3">Zoom</span>
       <input type="range" min={Math.log(MIN_PX_PER_BEAT)} max={Math.log(MAX_PX_PER_BEAT)} step={0.01}
-             value={Math.log(pxPerBeat)} className="w-28 accent-[#e2c35f]"
+             value={Math.log(pxPerBeat)} className="w-28 mr-3 accent-[#e2c35f]"
              onChange={(e) => {
                const next = Math.exp(Number(e.target.value))
                const st = useArrange.getState()
@@ -85,6 +87,29 @@ function Toggle({ on, children, onClick, title }: { on: boolean; children: strin
               on ? 'bg-brand text-on-accent border-transparent' : 'border-line text-muted hover:text-text bg-panel')}>
       {children}
     </button>
+  )
+}
+
+/** Playhead time and the project's total length: "1:23.4 / 5:12". */
+function TimeDisplay() {
+  const ref = useRef<HTMLSpanElement>(null)
+  const bpm = useProject((s) => s.project.bpm)
+  const lengthBars = useProject((s) => s.project.lengthBars)
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      if (ref.current) ref.current.textContent = formatTime(beatToSec(playback.position(), bpm), true)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [bpm])
+  return (
+    <span title="Playhead time / total length"
+          className="font-mono text-[13px] tabular-nums rounded-md bg-panel-2 border border-line h-7 leading-7 px-2.5 whitespace-nowrap">
+      <span ref={ref} className="text-text">0:00.0</span>
+      <span className="text-faint"> / {formatTime(beatToSec(lengthBars * BEATS_PER_BAR, bpm))}</span>
+    </span>
   )
 }
 
@@ -116,7 +141,7 @@ function ProjectMenu() {
     <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
       <Button onClick={() => setOpen(!open)}>Projects ▾</Button>
       {open && (
-        <div className="absolute left-0 top-9 z-30 w-72 rounded-xl glass-strong py-1">
+        <div className="absolute left-0 top-9 z-30 w-72 rounded-xl surface-pop py-1">
           <MenuItem onClick={() => {
             setOpen(false)
             void createProject()

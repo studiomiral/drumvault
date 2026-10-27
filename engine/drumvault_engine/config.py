@@ -87,6 +87,12 @@ class Thresholds:
     tempo_integer_snap: float = 0.05
     tempo_filename_tolerance: float = 1.0   # use filename BPM within this
     tempo_phase_tolerance_ms: float = 15.0
+    # When the kick puts bar 1 off sample 0, the other drum stems are checked: if their hits sit
+    # (median, within tempo_phase_tolerance_ms) on a grid from sample 0, the kick is just late.
+    tempo_bar_one_min_onsets: int = 8
+    # Grid view preview (SCOPE.md §6.2a): the drum stems summed to mono at this rate.
+    grid_preview_sr: int = 22050
+    grid_preview_peak_dbfs: float = -1.0
     tempo_confidence_window_ms: float = 10.0
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak
@@ -161,6 +167,10 @@ class Thresholds:
     event_max_bars: int = 32                # longer regions are beds (atmos)...
     event_bed_bars: int = 8                 # ...cut into chunks of this many bars
     event_fade_ms: float = 5.0              # where an event is cut off from its neighbour
+    # The event's body (what a riser builds to, a roll's last hit) ends with its last beat
+    # within this of its loudest beat; the rest is tail. body_bars lets the generator end
+    # risers and rolls exactly on a downbeat.
+    event_body_rel_db: float = -12.0
 
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200

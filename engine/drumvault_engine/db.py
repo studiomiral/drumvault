@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS zips (
   phase_samples INTEGER, grid_offset_override_ms REAL, tempo_confidence REAL,
   key_label TEXT, key_camelot TEXT, key_confidence REAL, key_override TEXT,
   status TEXT,
+  reviewed INTEGER DEFAULT 0,
   warnings TEXT,
   processed_at TEXT, settings_hash TEXT
 );
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS samples (
   rel_path TEXT UNIQUE,
   bpm REAL,
   bars INTEGER,
+  body_bars INTEGER,
   key_label TEXT, key_camelot TEXT,
   duration_s REAL, sample_rate INTEGER, channels INTEGER,
   peak_db REAL, gain_applied_db REAL,
@@ -87,8 +89,18 @@ class LibraryDB:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
-        self.conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
+        self._migrate()
+        self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                           (str(SCHEMA_VERSION),))
+
+    def _migrate(self) -> None:
+        """Columns added after a library was created (CREATE TABLE IF NOT EXISTS keeps old tables)."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(samples)")}
+        if "body_bars" not in cols:  # v2: event body length (filled on the next reprocess)
+            self.conn.execute("ALTER TABLE samples ADD COLUMN body_bars INTEGER")
+        zip_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(zips)")}
+        if "reviewed" not in zip_cols:  # v2: "Mark as reviewed" survives reprocessing
+            self.conn.execute("ALTER TABLE zips ADD COLUMN reviewed INTEGER DEFAULT 0")
 
     def close(self) -> None:
         self.conn.close()
@@ -148,6 +160,15 @@ class LibraryDB:
             fields["warnings"] = json.dumps(fields["warnings"])
         with self._lock:
             self._update("zips", zip_id, fields)
+
+    def mark_reviewed(self, zip_id: int) -> bool:
+        """The user checked a needs-review zip: it counts as done, now and after reprocessing."""
+        with self._lock:
+            if self.get_zip(zip_id) is None:
+                return False
+            self.conn.execute("UPDATE zips SET reviewed = 1, status = CASE WHEN status = 'needs_review' "
+                              "THEN 'done' ELSE status END WHERE id = ?", (zip_id,))
+        return True
 
     def delete_zip_rows(self, zip_id: int) -> None:
         with self._lock:

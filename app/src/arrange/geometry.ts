@@ -2,7 +2,7 @@
 
 import type { Lane } from '../types/project'
 
-export const MARKER_H = 22
+export const MARKER_H = 28
 export const RULER_H = 24
 export const TOP = MARKER_H + RULER_H
 export const HEADER_W = 236

@@ -2,7 +2,7 @@
 // (exposed by electron/preload.ts as `window.drumvault`).
 
 import type {
-  Category, EngineSettings, HealthResult, Overrides, ProcessResult, RpcError, SampleKind,
+  Category, EngineSettings, GridPreview, HealthResult, Overrides, ProcessResult, RpcError, SampleKind,
   StemRow, ZipRow, ZipStatus,
 } from './engine'
 import type { ProjectFileInfo } from './project'
@@ -94,6 +94,8 @@ export interface SampleListItem {
   category: Category
   bpm: number | null
   bars: number | null
+  /** Events: bars until the main sound ends (tail excluded); null for other kinds or old libraries. */
+  body_bars: number | null
   key_label: string | null
   key_camelot: string | null
   duration_s: number
@@ -166,6 +168,11 @@ export interface DrumvaultAPI {
   cancelJob(jobId: string): Promise<void>
   clearFinishedJobs(): Promise<void>
   setSampleMeta(sampleId: number, meta: SampleMeta): Promise<void>
+  /** Clear a zip's needs-review flag (it stays cleared when the zip is reprocessed). */
+  markReviewed(zipId: number): Promise<void>
+
+  /** A zip's drum stems summed to one file (Grid view), with the bar 1 it was cut on. */
+  gridPreview(zipId: number): Promise<{ info: GridPreview; data: ArrayBuffer }>
 
   onLibraryChanged(cb: () => void): () => void
   listZips(): Promise<ZipListItem[]>

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo } from '../types/api'
 
-export type View = 'process' | 'library' | 'arrange' | 'settings'
+export type View = 'process' | 'library' | 'grid' | 'generate' | 'arrange' | 'settings'
 
 export interface Toast {
   id: number
@@ -21,9 +21,12 @@ interface AppState {
   view: View
   toasts: Toast[]
   modal: 'export' | 'shortcuts' | null
+  /** The zip shown in the Grid view. */
+  gridZipId: number | null
 
   init(): Promise<void>
   setView(v: View): void
+  openGrid(zipId: number): void
   setModal(m: AppState['modal']): void
   saveSettings(patch: Partial<AppSettings>): Promise<void>
   refreshDeps(): Promise<void>
@@ -43,6 +46,7 @@ export const useApp = create<AppState>((set, get) => ({
   view: 'process',
   toasts: [],
   modal: null,
+  gridZipId: null,
 
   async init() {
     api.onEngineStatus((engine) => {
@@ -62,6 +66,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setView: (view) => set({ view }),
+  openGrid: (gridZipId) => set({ gridZipId, view: 'grid' }),
   setModal: (modal) => set({ modal }),
 
   async saveSettings(patch) {

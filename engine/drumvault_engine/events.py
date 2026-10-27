@@ -24,6 +24,7 @@ class Event:
     bars: int
     start: int                # sample offset in the stretched stem (a bar line)
     fingerprint: np.ndarray
+    body_bars: int = 0        # bars from the start to the end of the main sound (tail excluded)
 
 
 def active_floor_db(mono: np.ndarray, th: Thresholds) -> float:
@@ -43,6 +44,17 @@ def active_regions(mono: np.ndarray, beat_len: float, phase: int, th: Thresholds
         else:
             regions.append([b, b + 1])
     return [(a, b) for a, b in regions]
+
+
+def body_bars(mono: np.ndarray, beat_len: float, phase: int, bar0: int, a: int, b: int,
+              th: Thresholds) -> int:
+    """Whole bars from the event's start bar to the end of its last loud beat."""
+    levels = beat_levels(mono, beat_len, phase)[a:b]
+    if not len(levels):
+        return 1
+    loud = np.nonzero(levels >= levels.max() + th.event_body_rel_db)[0]
+    last = a + int(loud[-1]) + 1                      # beat index after the last loud beat
+    return max(1, -(-last // 4) - bar0)
 
 
 def split_beds(regions: list[tuple[int, int]], th: Thresholds) -> list[tuple[int, int]]:
@@ -126,7 +138,7 @@ def extract_events(data: np.ndarray, sr: int, phase: int, bpm: float, settings: 
             _fade(seg, len(seg), fade, out=True)  # a bed chunk cut mid-sound
         fp = logmel_fingerprint(to_mono(seg), sr, th, frames_per_chunk=th.loop_fingerprint_frames_per_bar * bars,
                                 top_db=th.loop_fingerprint_top_db)
-        cands.append(Event(seg, sr, bars, start, fp))
+        cands.append(Event(seg, sr, bars, start, fp, min(bars, body_bars(mono, beat_len, phase, bar0, a, b, th))))
 
     # Dedupe: the same riser before every drop is one sample (first occurrence kept).
     kept: list[Event] = []

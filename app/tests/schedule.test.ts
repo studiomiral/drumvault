@@ -120,3 +120,22 @@ describe('metronome', () => {
     expect(metronomeTicks(BPM, 0.001, 2 * BEAT).map((x) => Math.round(x.start / BEAT))).toEqual([1])
   })
 })
+
+describe('clip filter', () => {
+  it('sweeps a loop clip exponentially from start to end, segment by segment', () => {
+    // 16 beats sweeping 200 Hz -> 3200 Hz: each 8-beat repetition covers half the sweep.
+    const clip = { ...audio(0, 16, 2), filter: { type: 'lowpass' as const, from: 200, to: 3200, q: 0.7 } }
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev.map((e) => [e.filter!.type, e.filter!.f0, Math.round(e.filter!.f1)])).toEqual([
+      ['lowpass', 200, 800], ['lowpass', 800, 3200],
+    ])
+  })
+
+  it('gives each one-shot hit the cutoff at its position, and is absent without a filter', () => {
+    const clip = { ...pattern(0, 4, four()), filter: { type: 'highpass' as const, from: 1000, to: 100, q: 1 } }
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev.map((e) => Math.round(e.filter!.f0))).toEqual([1000, 562, 316, 178])
+    expect(ev.every((e) => e.filter!.f0 === e.filter!.f1)).toBe(true)
+    expect(eventsInRange(project([pattern(0, 4, four())]), 0, 1000)[0].filter).toBeUndefined()
+  })
+})

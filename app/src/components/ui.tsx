@@ -134,7 +134,7 @@ export function Modal({ title, children, onClose, width = 560 }: {
   return (
     <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[3px] flex items-center justify-center"
          onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="rounded-2xl glass-strong max-h-[88vh] flex flex-col"
+      <div className="rounded-2xl surface-pop max-h-[88vh] flex flex-col"
            style={{ width }}>
         <div className="flex items-center px-5 pt-4 pb-3 border-b border-line">
           <h2 className="flex-1 font-display text-[19px] font-medium">{title}</h2>
@@ -143,5 +143,15 @@ export function Modal({ title, children, onClose, width = 560 }: {
         <div className="overflow-y-auto px-5 py-4">{children}</div>
       </div>
     </div>
+  )
+}
+
+/** Page title in the top bar: heavy, modern display caps. */
+export function PageTitle({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <h1 className={cx('font-title text-[22px] leading-none font-extrabold uppercase tracking-[0.01em] select-none', className)}
+        style={{ fontVariationSettings: '"opsz" 96' }}>
+      {children}
+    </h1>
   )
 }

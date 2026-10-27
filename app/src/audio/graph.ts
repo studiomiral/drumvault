@@ -1,7 +1,7 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → clip gain → lane gain → lane pan → master → destination
+// source → [clip filter] → clip gain → lane gain → lane pan → master → destination
 
 import { dbToGain } from '../lib/project'
 import type { Lane } from '../types/project'
@@ -58,7 +58,17 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   src.buffer = buffer
   const g = ctx.createGain()
   g.gain.value = ev.gain
-  src.connect(g).connect(dest)
+  if (ev.filter) {
+    const f = ctx.createBiquadFilter()
+    f.type = ev.filter.type
+    f.Q.value = ev.filter.q
+    f.frequency.setValueAtTime(ev.filter.f0, when)
+    if (ev.filter.f1 !== ev.filter.f0) f.frequency.exponentialRampToValueAtTime(ev.filter.f1, when + duration)
+    src.connect(f).connect(g)
+  } else {
+    src.connect(g)
+  }
+  g.connect(dest)
   src.start(when, offset, duration)
   return src
 }

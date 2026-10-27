@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { listProjects, projectFileName, readProjectFile, writeProjectFile } from '../electron/fs'
 import {
-  clipsInRange, duplicateClips, formatPosition, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
+  clipsInRange, duplicateClips, formatPosition, formatTime, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
   resizePattern, serializeProject,
 } from '../src/lib/project'
 import { SNAP_MIN_PX, snapUnit } from '../src/arrange/geometry'
@@ -14,11 +14,19 @@ import type { SampleListItem } from '../src/types/api'
 import type { PatternClip } from '../src/types/project'
 
 const sample = (kind: SampleListItem['kind'], category: SampleListItem['category'], bars: number | null = null): SampleListItem => ({
-  id: 1, rel_path: `x/${category}.wav`, name: category, kind, category, bpm: 124, bars, key_label: 'Am',
+  id: 1, rel_path: `x/${category}.wav`, name: category, kind, category, bpm: 124, bars, body_bars: null, key_label: 'Am',
   key_camelot: '8A', duration_s: 1, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001',
 })
 
 describe('project model', () => {
+  it('formats times as minutes and seconds', () => {
+    expect(formatTime(0, true)).toBe('0:00.0')
+    expect(formatTime(83.46, true)).toBe('1:23.4')
+    expect(formatTime(9.99, true)).toBe('0:09.9')
+    expect(formatTime(312.4)).toBe('5:12')
+    expect(formatTime((192 * 4 * 60) / 124)).toBe('6:12')
+  })
+
   it('snaps finer the further you zoom in', () => {
     expect(snapUnit(MIN_PX_PER_BEAT)).toBe(32)  // zoomed all the way out: 8 bars
     expect(snapUnit(2)).toBe(8)                 // 2 bars

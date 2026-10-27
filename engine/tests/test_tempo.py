@@ -128,3 +128,49 @@ def test_filename_bpm_regex():
 def test_too_few_onsets():
     r = tempo.detect_tempo(np.zeros(44100 * 4, np.float32), 44100, Settings(), source_category="kick")
     assert r.confidence == 0.0 and r.grid_warning
+
+
+def _late_kick_zip(kick_ms: float, clap_ms: float, sr: int = 44100, bpm: float = 124.0):
+    """Kick and clap stems exported from bar 1, each shifted by its own delay."""
+    def stem(sound, pattern, delay_ms):
+        tr = Track(bpm, sr, bars=16)
+        tr.pattern(sound, np.random.default_rng(1), pattern, range(16))
+        d = int(delay_ms / 1000 * sr)
+        return np.concatenate([np.zeros(d), tr.buf[:, 0]])[:len(tr.buf)].astype(np.float32)
+    return stem(kick, FOUR_ON_FLOOR, kick_ms), stem(clap, TWO_AND_FOUR, clap_ms)
+
+
+def test_late_kick_keeps_bar_one_when_the_other_drums_are_on_the_grid():
+    """A kick that hits 24 ms late must not move bar 1: the claps say the export starts at 0."""
+    sr, s = 44100, Settings()
+    k, c = _late_kick_zip(24, 0)
+    r = tempo.detect_tempo(k, sr, s, source_category="kick")
+    assert r.grid_warning
+    off = tempo.stem_grid_offset(c, sr, "clap", r.bpm, s)
+    assert abs(off) < 0.003
+    kept = tempo.keep_bar_one(r, [off], s.thresholds)
+    assert kept.phase_samples == 0 and not kept.grid_warning
+    assert any("24 ms after the grid" in w for w in kept.warnings)
+    assert not any(w.startswith("Grid does not start") for w in kept.warnings)
+
+
+def test_whole_export_offset_still_moves_bar_one():
+    """Every stem 40 ms late (not exported from bar 1): the grid follows the kick."""
+    sr, s = 44100, Settings()
+    k, c = _late_kick_zip(40, 40)
+    r = tempo.detect_tempo(k, sr, s, source_category="kick")
+    off = tempo.stem_grid_offset(c, sr, "clap", r.bpm, s)
+    kept = tempo.keep_bar_one(r, [off], s.thresholds)
+    assert kept.grid_warning and kept.phase_samples == r.phase_samples
+    assert abs(kept.phase_samples - 0.040 * sr) <= sr * 0.002
+
+
+def test_negative_manual_offset_starts_the_grid_a_bar_later():
+    """Hits ahead of sample-0's downbeat (set by hand in the Grid view) must not cut before 0."""
+    tr = Track(124.0, 44100, bars=8)
+    tr.pattern(kick, None, FOUR_ON_FLOOR, range(8))
+    mono = tr.buf[:, 0].astype(np.float32)
+    r = tempo.detect_tempo(mono, 44100, Settings(), source_category="kick", grid_offset_ms=-12.0)
+    bar = 4 * 60.0 / 124.0
+    assert r.phase_samples == round((bar - 0.012) * 44100)
+    assert not r.grid_warning

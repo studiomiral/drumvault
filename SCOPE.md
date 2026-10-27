@@ -23,7 +23,7 @@
 ## 2. Non-goals (explicitly out of scope)
 
 - Melodic samples (bass, synths, vocals). Melodic stems are only used for key detection, never exported. Vocals (including "Vocal FX") are ignored.
-- Effects, automation, MIDI, recording, plugins (VST/AU) in the DAW.
+- Effects, automation, MIDI, recording, plugins (VST/AU) in the DAW. One exception (Phase 5): a per-clip low-pass/high-pass filter, fixed or swept over the clip, for filtered kicks and filter builds.
 - Real-time time-stretching or pitch-shifting in the DAW. The DAW plays samples at native speed at the library BPM.
 - Windows/Linux support, auto-updates, code signing, notarization, multi-user anything.
 - Stem separation (Demucs etc.) — inputs are already separate stems.
@@ -174,7 +174,7 @@ Algorithm:
 3. **Refine** by fitting a linear grid `t_n = phase + n · period` to the onset times (nearest-beat assignment + least squares, iterate 2–3×).
 4. Source tracks are always whole-number BPM: round the refined BPM to the nearest integer. If it was more than ±0.05 away from that integer, flag `needs_review` (the detection is suspect) unless a filename BPM confirms it. (Configurable: `integer_bpm`.)
 5. If the zip name or any stem filename contains a BPM (regex `(\d{2,3}(?:\.\d+)?)\s?bpm`, case-insensitive) within ±1 of the detected value, use the filename BPM.
-6. **Grid phase / bar 1**: assume stems were exported from bar 1 (sample 0 = downbeat). Validate: if the fitted phase is within ±15 ms of 0 modulo one beat, use phase = 0. Otherwise use the first strong kick onset as the downbeat and flag `grid_warning`.
+6. **Grid phase / bar 1**: assume stems were exported from bar 1 (sample 0 = downbeat). Validate: if the fitted phase is within ±15 ms of 0 modulo one beat, use phase = 0. Otherwise check the other drum stems first: if their hits (median) sit within ±15 ms of a 16th grid from sample 0, the export does start at bar 1 and only the kick is late (a slow attack or a nudged sample): keep phase = 0 and note it. Only when the other drums are offset too, use the first strong kick onset as the downbeat and flag `grid_warning`. (A late kick taken as bar 1 cuts every loop late, so they flam against loops from other zips.)
 7. **Confidence** = fraction of strong onsets within ±10 ms of the grid. Logged only: it never flags a zip or shows in the UI. The detected BPM is trusted; Lars overrides it when it's wrong.
 
 Output: `{bpm, phase_samples, confidence, source_stem, warnings[]}`.
@@ -303,6 +303,7 @@ CREATE TABLE zips (
   phase_samples INTEGER, grid_offset_override_ms REAL, tempo_confidence REAL,
   key_label TEXT, key_camelot TEXT, key_confidence REAL, key_override TEXT,
   status TEXT,                      -- queued|processing|done|needs_review|error
+  reviewed INTEGER DEFAULT 0,       -- "Mark as reviewed": stays done when reprocessed (schema v2)
   warnings TEXT,                    -- JSON array
   processed_at TEXT, settings_hash TEXT
 );
@@ -323,7 +324,8 @@ CREATE TABLE samples (
   category TEXT,                    -- kick|snare|clap|hat_closed|...|top|groove|drums
   rel_path TEXT UNIQUE,             -- relative to the library root
   bpm REAL,                         -- library BPM for loops, NULL for one-shots
-  bars INTEGER,                     -- loops only
+  bars INTEGER,                     -- loops and events (events include their tail)
+  body_bars INTEGER,                -- events: bars until the main sound ends (schema v2)
   key_label TEXT, key_camelot TEXT,
   duration_s REAL, sample_rate INTEGER, channels INTEGER,
   peak_db REAL, gain_applied_db REAL,
@@ -369,6 +371,7 @@ Requests from the app:
 {"id": "uuid", "method": "delete_zip", "params": {"zip_id": 12, "delete_files": true}}
 {"id": "uuid", "method": "rebuild_loops", "params": {"settings": {...}}}
 {"id": "uuid", "method": "cancel", "params": {"job_id": "..."}}
+{"id": "uuid", "method": "grid_preview", "params": {"zip_id": 12, "settings": {...}}}
 {"id": "uuid", "method": "health", "params": {}}
 ```
 
@@ -379,6 +382,8 @@ Responses and events from the engine:
 {"event": "progress", "job_id": "...", "zip": "...", "stage": "tempo", "pct": 0.4, "message": "Kick: 124.00 BPM (conf 0.97)"}
 {"event": "job_done", "job_id": "...", "zip_id": 12, "status": "done", "counts": {"oneshots": 18, "loops": 41}}
 ```
+
+`grid_preview` is not queued behind imports (it runs on its own thread) and answers directly: it sums the zip's drum stems to one mono 16-bit WAV at `grid_preview_sr` in `.drumvault/grid/<zip_id>.wav` and returns its path, sample rate, duration, the zip's BPM, the bar 1 the library is cut on (`bar_one_ms`, and `manual` if it was set by hand) and the stem names. The app reads the file and deletes it. A negative `grid_offset_ms` (hits ahead of the first downbeat) starts the grid one bar later, so cuts never begin before sample 0.
 
 ### 5.15 CLI (`cli.py`) — needed for Phase 1
 
@@ -393,7 +398,7 @@ uv run python -m drumvault_engine cli analyze <zip>        # prints classificati
 
 ### 6.1 Layout
 
-A single window with three tabs or a left nav: **Process**, **Library**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark glass theme with a subtle yellow accent (muted gold, used sparingly: flat fills and tints, no glows; primary buttons are a soft yellow tint): on macOS the window is frosted (native dark vibrancy, hidden title bar), the sidebar sits on it and the views on a translucent glass card over a dark backdrop with a faint warm glow; dialogs and popovers are stronger glass. Type pairs a book serif for titles (Newsreader) with a grotesk for the UI (Hanken Grotesk), bundled locally as a free stand-in for Claude's typefaces.
+A single window with a left nav: **Process**, **Library**, **Grid**, **Generate**, **Arrange**. The Library browser also appears as a collapsible side panel inside Arrange. The UI uses a dark matte theme modelled on the NeuroNest dashboard reference: charcoal surfaces with thin borders and large rounded cards, a grouped sidebar (Samples: Process, Library, Grid · Create: Generate, Arrange · Settings: Settings, Shortcuts) with the library and engine status at the bottom, pastels for kinds (blue one-shots, mint loops, lavender FX & fills), and a subtle yellow accent for primary actions and selection. Process opens with a gradient hero banner beside the drop box. Page titles in the top bar are heavy display capitals (Bricolage Grotesque ExtraBold). The Drumvault name, the Process banner and dialog titles use a book serif (Newsreader); the UI uses a grotesk (Hanken Grotesk). All fonts are bundled locally.
 
 ### 6.2 Process view
 
@@ -404,9 +409,19 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
   - BPM/grid: detected value, source stem, override field, and a grid-offset nudge.
   - Key: detected value, confidence, override dropdown.
   - Warnings.
-  - Buttons: **Reprocess**, **Delete samples from library**, **Reveal in Finder**.
+  - Buttons: **Reprocess**, **Align grid** (opens the Grid view, §6.2a), **Mark as reviewed** (needs-review zips: the warnings are fine; the zip counts as done, also after reprocessing), **Delete samples from library**, **Reveal in Finder**.
 - A filter for `needs_review` zips.
+- Adding zips whose file name is already in the library, already queued, or twice in one drop opens a warning listing them, with **Skip duplicates** / **Add anyway** / **Cancel** (identical contents are skipped by the engine anyway; this catches re-downloads).
 - Processing continues while the user is in another view.
+
+### 6.2a Grid view
+
+Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (they are never offset from each other), so one offset fits the whole zip.
+- A zip picker in the top bar (opens on the first needs-review zip; **Align grid** in the zip panel opens a specific one), with the BPM and number of drum stems.
+- **Waveform:** all drum stems summed (engine `grid_preview`), under a fixed grid of bars, beats and 16ths with bar numbers. Dragging the waveform moves the stems against the grid (⇧ for fine moves); ⌘-scroll or pinch zooms around the pointer down to single samples; clicking the ruler or the waveform sets the playhead, which follows playback.
+- **Every beat stacked:** the envelope of every beat folded onto one (±15 ms, ±50 ms or a whole beat), with the grid line in the centre and a readout of how far the hits are early or late. Dragging here moves bar 1 precisely.
+- **Transport:** Space plays the stems with a metronome on the grid (accent on the downbeat), M toggles the metronome, separate click and drums levels. Clicks not yet heard are rescheduled when bar 1 moves, so a drag is audible straight away.
+- **Bar 1:** the offset in ms with −10/−1/+1/+10 nudges (← → and ⇧← ⇧→ too), **Snap to hits** (moves bar 1 to the stacked hits' attack), **Revert**, **Apply & re-cut** (reprocesses the zip with `grid_offset_ms`) and **Use detected** (drops a hand-set bar 1).
 
 ### 6.3 Library view
 
@@ -438,12 +453,12 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - Snapping follows the zoom: moves and resizes snap to the finest division at least 14 px wide (several bars zoomed far out, bars at the default zoom, then beats, 8ths and 16ths zoomed in close). Hold ⌥ to snap four times finer, down to 16ths.
 - Select, multi-select (drag a marquee or ⇧-click), move, copy (⌥-drag), R or ⌘D duplicate (places the copy right after), Delete.
 - ⌘Z / ⇧⌘Z undo/redo (command-pattern history in the store, minimum 100 steps).
-- **Section markers**: named ranges (Intro, Build, Drop, Break, Outro, custom), drawn as a colored ruler band. Clicking a marker selects all clips in that range, enabling a "duplicate section" workflow.
+- **Section markers**: named ranges (Intro, Build, Drop, Break, Breakdown, Outro, custom), drawn in a band above the ruler. Click an empty spot to add an 8-bar section (or up to the next one), or drag to set its range; a name box opens right away with quick picks. Double-click a marker to rename or delete it. Clicking a marker selects all clips in that range, enabling a "duplicate section" workflow. Generated arrangements arrive with their sections named.
 - Horizontal zoom (pinch / ⌘ + scroll) and scroll; vertical lane height adjustment.
 - Rendering performance: the timeline uses a single canvas (or virtualized DOM) and must stay smooth at 192 bars × 10 lanes × ~200 clips.
 
 **Transport**
-- Space = play/stop, click on the ruler = move the playhead, a loop region (drag on the ruler), an optional metronome, and a bar.beat position display.
+- Space = play/stop, click on the ruler = move the playhead, a loop region (drag on the ruler), an optional metronome, a bar.beat position display, and the playhead time next to the total length (m:ss.t / m:ss).
 - Playback starts within 50 ms of pressing play.
 
 **Audio engine** (`audio/engine.ts`)
@@ -462,6 +477,44 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - Also export `<Prefix>_markers.mid`: a MIDI file containing the tempo and section markers, which can be imported into Logic to get the markers. (Phase 4 nice-to-have.)
 - "Reveal in Finder" after export.
 - *Implementation notes:* event start times and sample offsets are snapped to whole sample frames, so a stem is a bit-exact copy of the placed samples (live playback uses the same snapping). Lane gain nodes are upmixed to stereo before the pan node, so a mono sample panned centre plays at unity rather than −3 dB. Exporting the loop region gives files that start at that region's first bar; the MIDI markers file uses the same start.
+
+### 6.6 Generate view (Phase 5)
+
+A view of its own (sidebar: Create → **Generate**) that instantly builds complete, DJ-friendly drum arrangements from random combinations of the library. You cycle through generations fast, listening as you go; when one is good, **Send to Arrange** turns it into a normal project to finish and export. The goal is range: no two generations need share a structure, a build style or a kick treatment.
+
+**Cycling**
+- **Generate** (G or →) makes a new arrangement in well under a second and starts playing it right away (from the start, or from the same section you were listening to). ← goes back through this session's history; generations are kept until the app quits.
+- Space plays/stops; 1–9 jump to a section; a read-only overview shows the sections as a coloured band and every lane's clips as blocks (the same drawing as Arrange, scaled to fit).
+- Shown per generation: length, BPM, the track key, its structure (e.g. "Intro 32 · Build 16 · Drop 32 · Break 8 · …"), the variation choices made, and which zips the samples come from.
+- **Keep** toggles hold parts while cycling: keep the structure, keep the kick, keep a lane's sample, keep the key. Everything not kept is re-rolled.
+- Options: length range (default 4–6 min), sources (all zips or a selection), favourites/ratings bias (on), and a seed field (the same seed + library + options gives the same generation).
+- **Send to Arrange** (Enter) creates a new project ("Generated 01", …), opens it in Arrange and keeps the Generate history, so you can go back and send another. The current Arrange project is never overwritten.
+
+**Structure: a grammar, not a template**
+An arrangement is a sequence of sections, each a whole number of 8-bar phrases, generated from weighted rules and then fitted to the chosen length. Hard constraints only where DJs need them:
+- **Always:** a mix-in intro and a mix-out outro of ≥ 16 bars each, with a steady kick and hats (beatmatchable, nothing tonal); the track starts and ends on a bar line.
+- **Everything else varies.** Examples of what the rules can produce:
+  - Intro → build → drop → break → drop → long break → drop → outro (the classic shape).
+  - One long breakdown in the middle, or three short ones (no "false drops": every breakdown runs into a real drop or the outro).
+  - Two or three drops of 16–48 bars; drops that change their top/groove halfway.
+  - Builds of 8–32 bars: layered slowly one element per phrase, all at once, or in **double time** (hats/perc/snare density doubling 8ths → 16ths → 32nds towards the drop).
+- Weights favour the classic shape, so most generations are sensible and some are surprising.
+
+**Variation dimensions** (each chosen per generation, some per section)
+- **Kick in breakdowns:** fully out; filtered (low-pass, fixed or sweeping open into the drop); half-time; only on the downbeat of each bar; kept. Each breakdown chooses on its own.
+- **Drum patterns:** kick dropouts at phrase ends (e.g. the last beat or two of an 8-bar phrase), skipped kicks before a drop, clap/snare rolls, ghost notes, open-hat accents, offbeat vs 16th hats, perc swaps between sections. Applied through pattern clips (one-shots) and by gaps/edits on loop clips.
+- **Fills and FX:** drum fills at phrase ends (more often before breaks and drops); a riser or snare roll that **ends** on the drop downbeat; downlifters and impacts that **start** on a section downbeat; atmos in breakdowns. FX density varies from sparse to busy.
+- **Sample picks:** one main sample per lane for the track (so it sounds like one record), variations for later drops; picks come from different zips while the library allows it (the same zip may repeat once there are fewer zips than lanes); favourites and ratings bias the picks.
+- **Key:** one key per track. Tonal FX and atmos are picked from that key or its Camelot neighbours; drums ignore key.
+
+**What it needs from the rest of the app**
+- **Clip filter** (the one effect allowed in the DAW): per clip, off / low-pass / high-pass, a cutoff, an optional sweep to a second cutoff over the clip, and resonance. Same node graph in live playback and offline export (shared code, like the scheduler); editable in Arrange (clip inspector); saved in the project file.
+- **Event body length:** risers and rolls must end exactly on the downbeat, but an event's `bars` includes its tail. The engine also stores `body_bars` (bars from the start to where the main sound ends); existing libraries need one reprocess.
+- **Loop gaps:** dropping a loop or the kick for a beat needs no new clip model: loops get shorter or split clips, kick/clap variations are per-bar pattern clips.
+
+**Implementation notes**
+- A pure TypeScript generator in the renderer (`src/generate/`): `generate(samples, options, seed, keep) → Project`, with a seeded PRNG and the structure grammar, rule weights and pattern variations as data (easy to tune). Unit-tested without audio: constraints (DJ intro/outro, phrase alignment, FX end/start on downbeats, length range), determinism per seed, and coverage (over many seeds every variation dimension occurs).
+- Generations are ordinary `Project` objects played by the existing engine; buffers are preloaded per generation, so cycling is instant after the first load. Nothing changes in export.
 
 ---
 
@@ -491,6 +544,10 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 ### Phase 4 — Export + polish
 - Stem export (§6.5), the clipping check, the MIDI markers file, "find similar", favorites/ratings, "rebuild loops at new BPM", keyboard shortcut overview, and an unsigned local `.app` build (electron-builder; the Python engine bundled with PyInstaller onedir, or pointing to the uv environment). *Chosen: the uv route.* The `.app` carries the engine source and `uv.lock`; on first launch it runs `uv run --frozen` into `~/Library/Application Support/Drumvault/engine-venv` (needs `uv` and `rubberband` from Homebrew). Ad-hoc signed so it launches on Apple Silicon.
 - **Acceptance:** exported stems imported into Logic at bar 1 at the same BPM line up sample-accurately with each other and with Logic's grid.
+
+### Phase 5 — Generate view
+- The Generate view in §6.6: the structure grammar and variation dimensions, fast cycling with history, keep toggles and seeds, the overview and section jumps, and Send to Arrange. Plus what it needs elsewhere: the per-clip filter (playback, export, Arrange inspector, project file), `body_bars` for events (engine, schema, reprocess), and short gaps in loop clips.
+- **Acceptance:** with ≥ 5 processed zips, a new generation is ready and playing in under a second (after the first buffer load); every generation is 4–6 minutes with a DJ intro and outro of ≥ 16 bars on kick + hats, phrase-aligned sections, and risers/rolls ending exactly on drop downbeats; samples come from ≥ 3 different zips and tonal FX match the track key; over 100 seeds the structures differ and every variation dimension (kick treatments, build styles, pattern variations) occurs; the same seed gives the same generation; Send to Arrange opens an editable project that plays and exports like any other.
 
 ---
 

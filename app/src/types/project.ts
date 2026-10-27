@@ -25,6 +25,17 @@ export interface Lane {
   height: number       // px
 }
 
+/**
+ * The one effect in the DAW (SCOPE.md §6.6): a low- or high-pass filter on a clip, fixed at
+ * `from` Hz or swept (exponentially) from `from` to `to` Hz across the clip.
+ */
+export interface ClipFilter {
+  type: 'lowpass' | 'highpass'
+  from: number
+  to: number | null
+  q: number
+}
+
 interface ClipBase {
   id: string
   laneId: string
@@ -32,6 +43,7 @@ interface ClipBase {
   length: number       // beats
   gainDb: number
   sample: SampleRef
+  filter?: ClipFilter
 }
 
 /** A loop on the bar grid; extending it repeats the loop. */

@@ -11,7 +11,7 @@ import type { Category } from '../types/engine'
 
 /** Zip review: stems, tempo/grid, key, warnings, and overrides + reprocess (SCOPE.md §6.2). */
 export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () => void }) {
-  const { libraryVersion, jobs, toast, setView } = useApp()
+  const { libraryVersion, jobs, toast, setView, openGrid } = useApp()
   const [detail, setDetail] = useState<ZipDetail | null>(null)
   const [bpm, setBpm] = useState('')
   const [offset, setOffset] = useState('')
@@ -93,6 +93,12 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
           <Button variant="primary" disabled={busy || !detail.originalExists} onClick={() => void reprocess()}>
             {busy ? 'Processing…' : dirty ? 'Reprocess with changes' : 'Reprocess'}
           </Button>
+          {z.status === 'needs_review' && (
+            <Button title="The warnings below are fine: count this zip as done (also after reprocessing)"
+                    onClick={() => void attempt(() => api.markReviewed(zipId))}>Mark as reviewed</Button>
+          )}
+          <Button disabled={!detail.originalExists} onClick={() => openGrid(zipId)}
+                  title="Play the drum stems with a metronome and drag them onto the grid">Align grid</Button>
           <Button onClick={() => {
             useLibrary.getState().resetFilter()
             useLibrary.getState().setFilter({ zipIds: [zipId] })

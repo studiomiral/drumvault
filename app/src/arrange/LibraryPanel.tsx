@@ -5,7 +5,7 @@ import { IconPlay, IconStop } from '../components/icons'
 import { cx, inputClass, Segmented } from '../components/ui'
 import { VirtualList } from '../components/VirtualList'
 import { ALL_KEYS } from '../lib/camelot'
-import { CATEGORY_LABELS, EVENT_CATEGORIES, lengthLabel } from '../lib/format'
+import { CATEGORY_LABELS, EVENT_CATEGORIES, KIND_PASTEL, lengthLabel } from '../lib/format'
 import { useApp } from '../store/app'
 import type { SampleListItem } from '../types/api'
 import type { Category, SampleKind } from '../types/engine'
@@ -83,7 +83,8 @@ export function LibraryPanel() {
             </button>
             <div className="flex-1 min-w-0">
               <div className="truncate text-[12px]" title={s.name}>{s.name}</div>
-              <div className="text-[10.5px] text-faint">
+              <div className="text-[10.5px] text-faint flex items-center gap-1.5">
+                <span className={cx('w-1.5 h-1.5 rounded-full shrink-0', KIND_PASTEL[s.kind])} />
                 {CATEGORY_LABELS[s.category]} · {s.key_label ?? 'NoKey'}{s.kind !== 'oneshot' ? ` · ${lengthLabel(s)}` : ''}
               </div>
             </div>

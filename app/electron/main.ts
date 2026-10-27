@@ -4,10 +4,10 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
-import type { EngineEvent, JobAccepted, Overrides } from '../src/types/engine'
+import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
 import { LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
@@ -223,6 +223,20 @@ function registerIpc(): void {
     send('library-changed')
   })
 
+  ipcMain.handle('zip:reviewed', async (_e, zipId: number) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('mark_reviewed', { zip_id: zipId, settings: engineSettings() })
+    send('library-changed')
+  })
+
+  ipcMain.handle('zip:gridPreview', async (_e, zipId: number) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const info = await sidecar.request<GridPreview>('grid_preview', { zip_id: zipId, settings: engineSettings() }, 180_000)
+    const buf = await readFile(info.path)
+    await rm(info.path, { force: true })
+    return { info, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) }
+  })
+
   ipcMain.handle('lib:zips', () => reader.listZips())
   ipcMain.handle('lib:zip', (_e, id: number) => reader.zipDetail(id))
   ipcMain.handle('lib:samples', (_e, filter) => reader.querySamples(filter))
@@ -295,13 +309,11 @@ function createWindow(): void {
     minWidth: 1024,
     minHeight: 640,
     title: 'Drumvault',
-    // macOS: frosted window (native vibrancy) behind the glass UI, traffic lights over the sidebar.
+    backgroundColor: '#1c1d20',
+    // macOS: hidden title bar, traffic lights over the sidebar.
     ...(process.platform === 'darwin'
-      ? {
-          titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 20 },
-          vibrancy: 'under-window' as const, visualEffectState: 'active' as const, backgroundColor: '#00000000',
-        }
-      : { backgroundColor: '#0b0b0c' }),
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 18 } }
+      : {}),
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -358,7 +370,9 @@ function buildMenu(): void {
       submenu: [
         { label: 'Process', accelerator: 'CmdOrCtrl+1', click: () => send('menu', 'view:process') },
         { label: 'Library', accelerator: 'CmdOrCtrl+2', click: () => send('menu', 'view:library') },
-        { label: 'Arrange', accelerator: 'CmdOrCtrl+3', click: () => send('menu', 'view:arrange') },
+        { label: 'Generate', accelerator: 'CmdOrCtrl+3', click: () => send('menu', 'view:generate') },
+        { label: 'Arrange', accelerator: 'CmdOrCtrl+4', click: () => send('menu', 'view:arrange') },
+        { label: 'Grid', accelerator: 'CmdOrCtrl+5', click: () => send('menu', 'view:grid') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },
@@ -377,7 +391,7 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
-  nativeTheme.themeSource = 'dark' // the UI is dark-only; keep the vibrancy material dark too
+  nativeTheme.themeSource = 'dark' // the UI is dark-only (native menus and dialogs follow)
   settings = await loadSettings(settingsFile())
   reader = new LibraryReader(settings.libraryPath)
   registerIpc()

@@ -3,7 +3,7 @@ import { Modal } from './ui'
 const SECTIONS: { title: string; rows: [string, string][] }[] = [
   {
     title: 'Everywhere',
-    rows: [['⌘1 / ⌘2 / ⌘3', 'Process / Library / Arrange'], ['⌘,', 'Settings'], ['⌘O', 'Add zips'],
+    rows: [['⌘1 – ⌘4', 'Process / Library / Generate / Arrange'], ['⌘5', 'Grid'], ['⌘,', 'Settings'], ['⌘O', 'Add zips'],
       ['⌘E', 'Export stems'], ['⌘/', 'This overview']],
   },
   {
@@ -11,6 +11,18 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
     rows: [['Click / Space', 'Play / stop the selected sample'], ['↑ / ↓', 'Previous / next sample, and play it'],
       ['Esc', 'Stop'], ['F', 'Favourite'], ['1 – 5', 'Rate (again to clear)'], ['S', 'Find similar sounds'],
       ['⌘F', 'Search'], ['Drag a row', 'Drop the WAV into Finder or Logic']],
+  },
+  {
+    title: 'Grid',
+    rows: [['Space', 'Play / stop the drum stems'], ['M', 'Metronome on / off'],
+      ['Drag the waveform', 'Move the stems against the grid (⇧: fine)'], ['← / →', 'Bar 1 ±1 ms (⇧: ±10 ms)'],
+      ['Home', 'Playhead to bar 1'], ['Click the ruler', 'Play from there'], ['⌘-scroll / pinch', 'Zoom']],
+  },
+  {
+    title: 'Generate',
+    rows: [['G / →', 'New generation (→ steps forward through earlier ones)'], ['←', 'Previous generation'],
+      ['Space', 'Play / stop'], ['1 – 9', 'Play from a section'], ['Click the overview', 'Play from there'],
+      ['Enter', 'Send to Arrange']],
   },
   {
     title: 'Arrange',

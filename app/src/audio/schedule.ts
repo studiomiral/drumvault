@@ -20,6 +20,8 @@ export interface ScheduledEvent {
   duration: number | null
   /** Linear gain (clip gain × step velocity). */
   gain: number
+  /** Clip filter, with its cutoff at the event's start and end (Hz). */
+  filter?: { type: BiquadFilterType; q: number; f0: number; f1: number }
 }
 
 export interface ScheduleOptions {
@@ -46,16 +48,33 @@ export function eventsInRange(project: Project, from: number, to: number, opts: 
   return out.sort((a, b) => a.start - b.start)
 }
 
-function push(out: ScheduledEvent[], clip: Clip, start: number, offset: number, duration: number | null, gain: number,
-              from: number, to: number, includeOngoing: boolean, soundLength: number): void {
+/** Cutoff of a clip's filter at project time `sec`: exponential from `from` to `to` over the clip. */
+export function filterCutoff(clip: Clip, bpm: number, sec: number): number {
+  const f = clip.filter!
+  if (f.to == null || f.to === f.from) return f.from
+  const t = Math.max(0, Math.min(1, (sec - beatToSec(clip.start, bpm)) / beatToSec(clip.length, bpm)))
+  return f.from * (f.to / f.from) ** t
+}
+
+function withFilter(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
+  if (!clip.filter) return ev
+  const end = ev.duration == null ? ev.start : ev.start + ev.duration  // one-shot hits keep one cutoff
+  return {
+    ...ev,
+    filter: { type: clip.filter.type, q: clip.filter.q, f0: filterCutoff(clip, bpm, ev.start), f1: filterCutoff(clip, bpm, end) },
+  }
+}
+
+function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
+              gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number): void {
   if (start >= from - EPS && start < to - EPS) {
-    out.push({ laneId: clip.laneId, clipId: clip.id, relPath: clip.sample.relPath, start, offset, duration, gain })
+    out.push(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath: clip.sample.relPath, start, offset, duration, gain }, clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
-    out.push({
+    out.push(withFilter({
       laneId: clip.laneId, clipId: clip.id, relPath: clip.sample.relPath, start: from, offset: offset + late,
       duration: duration == null ? null : duration - late, gain,
-    })
+    }, clip, bpm))
   }
 }
 
@@ -83,7 +102,7 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
     const e = Math.min(end, k === 0 ? firstEnd : s + L)
     const startSec = beatToSec(s, bpm)
     const durSec = beatToSec(e - s, bpm)
-    push(out, clip, startSec, beatToSec(k === 0 ? trim : 0, bpm), durSec, gain, from, to, ongoing, durSec)
+    push(out, clip, bpm, startSec, beatToSec(k === 0 ? trim : 0, bpm), durSec, gain, from, to, ongoing, durSec)
   }
 }
 
@@ -102,7 +121,7 @@ function patternEvents(clip: PatternClip, bpm: number, from: number, to: number,
     if (!v) continue
     // Step i of the clip: computed from integers (beats, 16ths), not accumulated.
     const start = beatToSec(clip.start + i / STEPS_PER_BEAT, bpm)
-    push(out, clip, start, 0, null, gain * VELOCITY_GAIN[v], from, to, false, 0)
+    push(out, clip, bpm, start, 0, null, gain * VELOCITY_GAIN[v], from, to, false, 0)
   }
 }
 
