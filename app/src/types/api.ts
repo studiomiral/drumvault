@@ -5,6 +5,7 @@ import type {
   Category, EngineSettings, HealthResult, Overrides, ProcessResult, RpcError, SampleKind,
   StemRow, ZipRow, ZipStatus,
 } from './engine'
+import type { ProjectFileInfo } from './project'
 
 /** Engine settings as stored by the app (the library path is kept separately). */
 export type EngineOptions = Omit<EngineSettings, 'library_path'>
@@ -16,6 +17,8 @@ export interface AppSettings {
   enginePath: string | null
   /** Override for the uv binary (default: found on PATH / Homebrew). */
   uvPath: string | null
+  /** Arrange project opened last (file name in the projects folder). */
+  lastProject: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +177,15 @@ export interface DrumvaultAPI {
   openLibraryFolder(): Promise<void>
   /** Start a native drag of the sample file (to Finder / Logic). */
   startDrag(relPath: string): void
+  /** Current library rows for these paths (sample ids change when a zip is reprocessed). */
+  samplesByPath(relPaths: string[]): Promise<SampleListItem[]>
+
+  listProjects(): Promise<ProjectFileInfo[]>
+  readProject(file: string): Promise<string>
+  /** Returns the file name used (it follows the project name). */
+  writeProject(previousFile: string | null, name: string, text: string): Promise<string>
+  deleteProject(file: string): Promise<void>
+
   /** Commands from the application menu ("add-zips", "view:library", …). */
   onMenu(cb: (cmd: string) => void): () => void
 }

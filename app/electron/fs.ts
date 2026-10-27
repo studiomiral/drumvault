@@ -2,16 +2,18 @@
 // Plain Node (no Electron imports) so it can be tested on its own.
 
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AppSettings } from '../src/types/api'
+import type { ProjectFileInfo } from '../src/types/project'
 
 export const DEFAULT_SETTINGS: AppSettings = {
   libraryPath: null,
   engine: {},
   enginePath: null,
   uvPath: null,
+  lastProject: null,
 }
 
 export async function loadSettings(file: string): Promise<AppSettings> {
@@ -101,4 +103,75 @@ export function which(name: string, path = augmentedPath()): string | null {
     if (dir && existsSync(candidate)) return candidate
   }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Arrange projects: <Library>/.drumvault/projects/<name>.dvproj
+// ---------------------------------------------------------------------------
+
+export function projectsDir(library: string): string {
+  return join(library, '.drumvault', 'projects')
+}
+
+export function projectFileName(name: string): string {
+  const safe = name.replace(/[/\\:*?"<>|\x00-\x1f]/g, '-').replace(/^\.+/, '').trim().slice(0, 80)
+  return `${safe || 'Untitled'}.dvproj`
+}
+
+export async function listProjects(library: string): Promise<ProjectFileInfo[]> {
+  const dir = projectsDir(library)
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith('.dvproj'))
+  } catch {
+    return []
+  }
+  const out: ProjectFileInfo[] = []
+  for (const file of names) {
+    try {
+      const path = join(dir, file)
+      const [st, text] = await Promise.all([stat(path), readFile(path, 'utf8')])
+      const data = JSON.parse(text)
+      out.push({ file, name: data.name ?? file.replace(/\.dvproj$/, ''), updatedAt: data.updatedAt ?? '', modified: st.mtimeMs })
+    } catch {
+      // unreadable file: skip
+    }
+  }
+  return out.sort((a, b) => b.modified - a.modified)
+}
+
+export async function readProjectFile(library: string, file: string): Promise<string> {
+  return readFile(projectPath(library, file), 'utf8')
+}
+
+/**
+ * Save a project. The file is named after the project; a rename (name changed since the
+ * last save) renames the file, and a new project never overwrites another one.
+ * Returns the file name used.
+ */
+export async function writeProjectFile(library: string, previous: string | null, name: string, text: string): Promise<string> {
+  const dir = projectsDir(library)
+  await mkdir(dir, { recursive: true })
+  const wanted = projectFileName(name)
+  let file = previous ?? wanted
+  if (file !== wanted) {
+    file = existsSync(join(dir, wanted)) ? previous! : wanted  // keep the old name if the new one is taken
+  }
+  if (!previous) {
+    for (let i = 2; existsSync(join(dir, file)); i++) file = projectFileName(`${name} ${i}`)
+  }
+  const tmp = join(dir, `.${file}.tmp`)
+  await writeFile(tmp, text)
+  await rename(tmp, join(dir, file))
+  if (previous && previous !== file) await unlink(join(dir, previous)).catch(() => {})
+  return file
+}
+
+export async function deleteProjectFile(library: string, file: string): Promise<void> {
+  await unlink(projectPath(library, file))
+}
+
+function projectPath(library: string, file: string): string {
+  if (file !== basename(file) || !file.endsWith('.dvproj')) throw new Error(`Bad project file name: ${file}`)
+  return join(projectsDir(library), file)
 }

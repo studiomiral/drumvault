@@ -1,9 +1,12 @@
 import { useEffect } from 'react'
+import { initProjects, startAutosave } from './arrange/persistence'
+import { setAudioSampleRate } from './audio/context'
 import { EngineStatusDot } from './components/EngineBanner'
 import { IconArrange, IconLibrary, IconProcess, IconSettings, IconX } from './components/icons'
 import { cx } from './components/ui'
 import { useApp, type View } from './store/app'
-import { ArrangeView } from './views/ArrangeView'
+import { ArrangeView, duplicateSelection } from './views/ArrangeView'
+import { useProject } from './store/project'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
@@ -22,6 +25,34 @@ export function App() {
   useEffect(() => {
     void init()
   }, [init])
+
+  // Arrange: load the library's last project once the library is known (and on switch).
+  const libraryPath = settings?.libraryPath
+  useEffect(() => {
+    if (!libraryPath) return
+    setAudioSampleRate(useApp.getState().settings?.engine.output_sample_rate ?? 44100)
+    startAutosave()
+    void initProjects()
+  }, [libraryPath])
+
+  // Edit commands (menu and keyboard): text fields get text editing, the arrangement gets
+  // project editing.
+  useEffect(() => {
+    const offMenu = window.drumvault.onMenu((cmd) => runEditCommand(cmd))
+    const onKey = (e: KeyboardEvent) => {
+      const mod = window.drumvault.platform === 'darwin' ? e.metaKey : e.ctrlKey
+      if (!mod || e.altKey) return
+      const k = e.key.toLowerCase()
+      const cmd = k === 'z' ? (e.shiftKey ? 'redo' : 'undo') : k === 'y' && !e.shiftKey ? 'redo'
+        : k === 'd' && !e.shiftKey ? 'duplicate' : k === 'a' && !e.shiftKey ? 'select-all' : null
+      if (cmd && runEditCommand(cmd)) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      offMenu()
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
 
   if (!ready || !settings) return <div className="h-full bg-bg" />
   if (!settings.libraryPath) return <WelcomeView />
@@ -51,7 +82,6 @@ export function App() {
               {v === 'process' && active > 0 && (
                 <span className="text-[10.5px] rounded-full bg-brand text-white px-1.5 font-semibold">{active}</span>
               )}
-              {v === 'arrange' && <span className="text-[10px] text-faint">soon</span>}
             </button>
           ))}
         </div>
@@ -83,4 +113,27 @@ function Toasts() {
       ))}
     </div>
   )
+}
+
+/** Returns true when the command was handled. */
+function runEditCommand(cmd: string): boolean {
+  const el = document.activeElement as HTMLElement | null
+  const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && (el as HTMLInputElement).type !== 'range'
+  const arrange = useApp.getState().view === 'arrange'
+  const p = useProject.getState()
+  if (cmd === 'undo' || cmd === 'redo') {
+    if (typing) document.execCommand(cmd)
+    else if (arrange) (cmd === 'undo' ? p.undo : p.redo)()
+    else return false
+  } else if (cmd === 'select-all') {
+    if (typing) (el as HTMLInputElement).select()
+    else if (arrange) p.select(p.project.clips.map((c) => c.id))
+    else return false
+  } else if (cmd === 'duplicate') {
+    if (!arrange || typing) return false
+    duplicateSelection()
+  } else {
+    return false
+  }
+  return true
 }

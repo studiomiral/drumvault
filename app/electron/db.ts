@@ -129,6 +129,19 @@ export class LibraryReader {
     return r ? { ...r, name: fileName(r.rel_path) } : null
   }
 
+  samplesByPath(relPaths: string[]): SampleListItem[] {
+    const out: SampleListItem[] = []
+    for (let i = 0; i < relPaths.length; i += 500) {
+      const chunk = relPaths.slice(i, i + 500)
+      out.push(...this.all<Omit<SampleListItem, 'name'>>(
+        `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, s.key_label, s.key_camelot, s.duration_s,
+                s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
+         FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.rel_path IN (${chunk.map(() => '?').join(', ')})`,
+        ...chunk).map((r) => ({ ...r, name: fileName(r.rel_path) })))
+    }
+    return out
+  }
+
   facets(): LibraryFacets {
     const total = this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples')[0]?.n ?? 0
     return {

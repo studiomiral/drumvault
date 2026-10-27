@@ -23,7 +23,8 @@ export default function setup(project: TestProject) {
   const uv = which('uv')
   project.provide('engineDir', ENGINE_DIR)
   project.provide('uv', uv)
-  if (!uv || !existsSync(join(ENGINE_DIR, 'pyproject.toml'))) {
+  // DRUMVAULT_SKIP_ENGINE=1 skips the engine-backed tests for quick runs.
+  if (!uv || !existsSync(join(ENGINE_DIR, 'pyproject.toml')) || process.env.DRUMVAULT_SKIP_ENGINE) {
     project.provide('fixturesDir', null)
     project.provide('libraryDir', null)
     return

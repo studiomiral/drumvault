@@ -1,23 +1,21 @@
-// Sample auditioning for the Library view (SCOPE.md §6.3): one voice, loops repeat.
+// Sample auditioning (SCOPE.md §6.3): one voice, loops repeat. While the Arrange transport
+// is playing, an auditioned loop starts on the next bar, in sync.
 
-import { api } from '../api'
 import type { SampleKind } from '../types/engine'
+import { audioContext, buffers } from './context'
+import { playback } from './engine'
 
 export interface Playable {
   id: number
   rel_path: string
   kind: SampleKind
+  bars?: number | null
 }
 
 type Listener = (playingId: number | null) => void
 
-const CACHE_BYTES = 512 * 1024 * 1024
-
 class Audition {
-  private ctx: AudioContext | null = null
   private source: AudioBufferSourceNode | null = null
-  private cache = new Map<number, AudioBuffer>()
-  private bytes = 0
   private token = 0
   private listeners = new Set<Listener>()
   playingId: number | null = null
@@ -32,39 +30,18 @@ class Audition {
     for (const fn of this.listeners) fn(id)
   }
 
-  private context(): AudioContext {
-    this.ctx ??= new AudioContext({ latencyHint: 'interactive' })
-    return this.ctx
-  }
-
-  async load(s: Playable): Promise<AudioBuffer> {
-    const hit = this.cache.get(s.id)
-    if (hit) {
-      this.cache.delete(s.id) // LRU: move to the end
-      this.cache.set(s.id, hit)
-      return hit
-    }
-    const data = await api.readSample(s.rel_path)
-    const buf = await this.context().decodeAudioData(data)
-    const size = buf.length * buf.numberOfChannels * 4
-    this.cache.set(s.id, buf)
-    this.bytes += size
-    for (const [id, b] of this.cache) {
-      if (this.bytes <= CACHE_BYTES) break
-      this.cache.delete(id)
-      this.bytes -= b.length * b.numberOfChannels * 4
-    }
-    return buf
-  }
-
   async play(s: Playable): Promise<void> {
     const token = ++this.token
     this.stopSource()
     this.setPlaying(s.id)
-    const buf = await this.load(s)
+    const buf = await buffers.load(s.rel_path)
     if (token !== this.token) return // another sample was requested meanwhile
-    const ctx = this.context()
+    const ctx = audioContext()
     if (ctx.state === 'suspended') await ctx.resume()
+    const done = () => {
+      if (this.token === token) this.setPlaying(null)
+    }
+    if (playback.auditionSynced(buf, s.kind, s.bars ?? null, done)) return
     const src = ctx.createBufferSource()
     src.buffer = buf
     src.loop = s.kind === 'loop'
@@ -72,7 +49,7 @@ class Audition {
     src.onended = () => {
       if (this.source === src) {
         this.source = null
-        this.setPlaying(null)
+        done()
       }
     }
     src.start()
@@ -87,6 +64,7 @@ class Audition {
   stop(): void {
     this.token++
     this.stopSource()
+    playback.stopAudition()
     this.setPlaying(null)
   }
 

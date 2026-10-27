@@ -10,7 +10,10 @@ import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/ty
 import type { EngineEvent, JobAccepted, Overrides } from '../src/types/engine'
 import { LibraryReader } from './db'
 import { checkDeps } from './deps'
-import { augmentedPath, expandZipPaths, findEngineDir, libraryFile, loadSettings, saveSettings, which } from './fs'
+import {
+  augmentedPath, deleteProjectFile, expandZipPaths, findEngineDir, libraryFile, listProjects, loadSettings,
+  readProjectFile, saveSettings, which, writeProjectFile,
+} from './fs'
 import { JobTracker } from './jobs'
 import { Sidecar } from './sidecar'
 
@@ -211,6 +214,12 @@ function registerIpc(): void {
   ipcMain.handle('lib:samples', (_e, filter) => reader.querySamples(filter))
   ipcMain.handle('lib:facets', () => reader.facets())
   ipcMain.handle('lib:peaks', (_e, id: number, points: number) => reader.peaks(id, points))
+  ipcMain.handle('lib:byPath', (_e, relPaths: string[]) => reader.samplesByPath(relPaths))
+  ipcMain.handle('projects:list', () => listProjects(lib()))
+  ipcMain.handle('projects:read', (_e, file: string) => readProjectFile(lib(), file))
+  ipcMain.handle('projects:write', (_e, prev: string | null, name: string, text: string) =>
+    writeProjectFile(lib(), prev, name, text))
+  ipcMain.handle('projects:delete', (_e, file: string) => deleteProjectFile(lib(), file))
   ipcMain.handle('lib:read', async (_e, relPath: string) => {
     const buf = await readFile(libraryFile(lib(), relPath))
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
@@ -282,7 +291,21 @@ function buildMenu(): void {
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        // These shortcuts are handled in the page (it knows whether a text field or the
+        // arrangement has focus); the menu only shows them, so keys aren't handled twice.
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', registerAccelerator: false, click: () => send('menu', 'undo') },
+        { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', registerAccelerator: false, click: () => send('menu', 'redo') },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { label: 'Duplicate', accelerator: 'CmdOrCtrl+D', registerAccelerator: false, click: () => send('menu', 'duplicate') },
+        { label: 'Select All', accelerator: 'CmdOrCtrl+A', registerAccelerator: false, click: () => send('menu', 'select-all') },
+      ],
+    },
     {
       label: 'View',
       submenu: [

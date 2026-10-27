@@ -47,6 +47,12 @@ const api: DrumvaultAPI = {
   openLibraryFolder: () => ipcRenderer.invoke('shell:openLibrary'),
   startDrag: (relPath) => ipcRenderer.send('drag:start', relPath),
 
+  samplesByPath: (relPaths) => ipcRenderer.invoke('lib:byPath', relPaths),
+  listProjects: () => ipcRenderer.invoke('projects:list'),
+  readProject: (file) => ipcRenderer.invoke('projects:read', file),
+  writeProject: (prev, name, text) => ipcRenderer.invoke('projects:write', prev, name, text),
+  deleteProject: (file) => ipcRenderer.invoke('projects:delete', file),
+
   onMenu: (cb) => subscribe('menu', cb),
 }
 
