@@ -37,9 +37,10 @@ def test_unsupported_audio_warns(fixtures, extracted):
 def test_fixture_audio_properties(fixtures, extracted):
     for name, truth in fixtures.truths.items():
         disc = extracted(name)
+        rates = {s.path: s.sample_rate or truth.sample_rate for s in truth.stems}
         for p in disc.files:
             info = sf.info(str(p))
-            assert info.samplerate == truth.sample_rate
+            assert info.samplerate == rates[disc.rel(p)]
             bar_s = 60 / truth.bpm * 4
             assert abs(info.duration - (truth.bars + 1) * bar_s) < 0.01
 

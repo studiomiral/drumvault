@@ -141,7 +141,8 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
         tempo=TempoInfo(bpm=tres.bpm, raw_bpm=tres.raw_bpm, phase_samples=tres.phase_samples,
                         sample_rate=tres.sample_rate, confidence=tres.confidence,
                         source_stem=tres.source_stem, source_category=tres.source_category,
-                        grid_warning=tres.grid_warning, warnings=tres.warnings),
+                        grid_warning=tres.grid_warning, bpm_warning=tres.bpm_warning,
+                        warnings=tres.warnings),
         key=KeyInfo(key=kres.key, scale=kres.scale, label=kres.label, camelot=kres.camelot,
                     confidence=kres.confidence, uncertain=kres.uncertain, backend=kres.backend,
                     source=kres.source),
@@ -299,7 +300,7 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         if t.confidence < th.tempo_min_confidence:
             status = "needs_review"
             warnings.append(f"Low tempo confidence ({t.confidence:.2f})")
-        if t.grid_warning:
+        if t.grid_warning or t.bpm_warning:
             status = "needs_review"
 
         do_loops = stretch.stretch_allowed(t.bpm, settings.library_bpm, settings.max_stretch)

@@ -31,6 +31,7 @@ class TempoInfo(BaseModel):
     source_stem: str
     source_category: str
     grid_warning: bool = False
+    bpm_warning: bool = False          # raw detection far from a whole number
     warnings: list[str] = Field(default_factory=list)
 
 

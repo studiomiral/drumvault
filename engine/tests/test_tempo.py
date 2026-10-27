@@ -44,19 +44,42 @@ def test_fallback_sources(name, category, fixtures, extracted):
     assert any("No kick" in w for w in r.warnings)
 
 
-def test_integer_snap_and_filename_bpm():
-    tr = Track(123.97, 44100, bars=16)
-    tr.pattern(kick, None, FOUR_ON_FLOOR, range(16))
-    mono = tr.buf[:, 0].astype(np.float32)
+def _kicks(bpm, bars=16, sr=44100):
+    tr = Track(bpm, sr, bars=bars)
+    tr.pattern(kick, None, FOUR_ON_FLOOR, range(bars))
+    return tr.buf[:, 0].astype(np.float32)
+
+
+def test_bpm_is_a_whole_number():
+    mono = _kicks(123.97)
     r = tempo.detect_tempo(mono, 44100, Settings(), source_category="kick")
     assert r.bpm == 124.0 and abs(r.raw_bpm - 123.97) < 0.02
-    # A filename BPM within +-1 of the detection wins.
+    assert not r.bpm_warning
+
+
+def test_far_from_whole_number_is_rounded_and_flagged():
+    mono = _kicks(123.4)
+    r = tempo.detect_tempo(mono, 44100, Settings(), source_category="kick")
+    assert r.bpm == 123.0 and abs(r.raw_bpm - 123.4) < 0.02
+    assert r.bpm_warning and any("not a whole number" in w for w in r.warnings)
+
+
+def test_fractional_bpm_when_integer_mode_is_off():
+    mono = _kicks(126.5)
+    r = tempo.detect_tempo(mono, 44100, Settings(integer_bpm=False), source_category="kick")
+    assert abs(r.bpm - 126.5) <= 0.02 and not r.bpm_warning
+    assert r.confidence > 0.95
+
+
+def test_filename_bpm():
+    mono = _kicks(123.6)
+    # A filename BPM within +-1 of the detection wins (and settles the rounding).
     r = tempo.detect_tempo(mono, 44100, Settings(), source_category="kick",
-                           names_for_bpm=["My Track 123.5 BPM.zip"])
-    assert r.bpm == 123.5
+                           names_for_bpm=["My Track 123 BPM.zip"])
+    assert r.bpm == 123.0 and not r.bpm_warning
     # ...but not one that is far away.
     r = tempo.detect_tempo(mono, 44100, Settings(), source_category="kick", names_for_bpm=["Track_128bpm.zip"])
-    assert r.bpm == 124.0
+    assert r.bpm == 124.0 and r.bpm_warning
 
 
 def test_offset_grid_sets_warning():

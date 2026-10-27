@@ -24,6 +24,7 @@ export interface TempoInfo {
   source_stem: string;
   source_category: string;
   grid_warning: boolean;
+  bpm_warning: boolean;        // raw detection far from a whole number
   warnings: string[];
 }
 
@@ -93,6 +94,7 @@ export interface EngineSettings {
   bpm_min?: number;
   bpm_max?: number;
   max_stretch?: number;
+  integer_bpm?: boolean;
   output_sample_rate?: 44100 | 48000;
   output_format?: "pcm24" | "float32";
   loop_lengths?: Partial<Record<Category, number[]>>;

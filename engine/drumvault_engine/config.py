@@ -78,7 +78,9 @@ class Thresholds:
     tempo_strong_onset_rel: float = 0.25   # strength >= rel * p95 -> strong
     tempo_refine_iterations: int = 3
     tempo_inlier_beat_fraction: float = 0.25  # |residual| < frac * beat for fit
-    tempo_integer_snap: float = 0.05        # snap to integer BPM within this
+    # Source tracks are always whole-number BPM (Settings.integer_bpm). A raw
+    # detection further than this from a whole number is flagged for review.
+    tempo_integer_snap: float = 0.05
     tempo_filename_tolerance: float = 1.0   # use filename BPM within this
     tempo_phase_tolerance_ms: float = 15.0
     tempo_confidence_window_ms: float = 10.0
@@ -129,9 +131,9 @@ class Thresholds:
     fingerprint_n_mels: int = 64
     fingerprint_n_fft: int = 1024
     fingerprint_hop: int = 256
-    # Dynamic range of the log-mel fingerprint. Wider ranges let low-level
-    # stretch artefacts in the gaps between hits dominate the comparison.
-    fingerprint_top_db: float = 50.0
+    # Dynamic range of the log-mel fingerprints (dB below their own max).
+    fingerprint_top_db: float = 50.0        # one-shots
+    loop_fingerprint_top_db: float = 80.0   # loops (grid-centred pooling, see audioutil)
     loop_fingerprint_frames_per_bar: int = 32
 
     # ---- loops -------------------------------------------------------------
@@ -156,6 +158,7 @@ class Settings:
     bpm_min: float = 115.0
     bpm_max: float = 135.0
     max_stretch: float = 0.15
+    integer_bpm: bool = True                # source tracks are always whole-number BPM
     output_sample_rate: int = 44100
     output_format: str = "pcm24"            # pcm24 | float32
     loop_lengths: dict[str, list[int]] = field(default_factory=_default_loop_lengths)

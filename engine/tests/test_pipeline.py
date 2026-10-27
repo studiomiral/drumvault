@@ -40,7 +40,9 @@ def test_all_fixtures_processed(library, fixtures):
     for name, r in library.results.items():
         truth = fixtures.truths[name]
         assert r.status == "done", (name, r.warnings)
-        assert r.analysis.tempo.bpm == pytest.approx(truth.bpm, abs=0.02)
+        assert r.analysis.tempo.bpm == truth.bpm  # whole number, exact
+        assert abs(r.analysis.tempo.raw_bpm - truth.bpm) <= 0.02
+        assert not r.analysis.tempo.bpm_warning
         assert r.analysis.tempo.phase_samples == 0
         assert r.analysis.key.label == truth.key
         assert r.counts.oneshots > 0 and r.counts.loops > 0
@@ -106,7 +108,7 @@ def test_loop_kicks_on_bar_starts_after_stretching(library, db, fixtures):
 
 
 def test_48k_source_loops_on_grid(library, db):
-    """48 kHz, 126.5 BPM source (resampled + stretched): the hats on beats 1 and 3 of every
+    """48 kHz, 126 BPM source (resampled + stretched): the hats on beats 1 and 3 of every
     bar (beats 2 and 4 also carry a soft-attack shaker) land within 1 ms of the grid."""
     rows = _samples(db, library, "sunrise", "loop", "top")
     assert rows
@@ -116,6 +118,32 @@ def test_48k_source_loops_on_grid(library, db):
         mono = data.mean(axis=1)
         err = onset_errors_ms(mono, sr, np.arange(0, r["bars"] * 4, 2) * beat, rel=0.3, win_ms=8)
         assert np.max(np.abs(err)) <= 1.0, err
+
+
+def test_mixed_sample_rates_in_one_zip(library, db):
+    """night_drive's nested stems are 48 kHz, the rest 44.1 kHz: all output is 44.1 kHz,
+    loops are whole bars, and the 48 kHz perc loops sit on the same grid."""
+    stems = {r["file_name"]: r for r in db.stems_for_zip(library.results["night_drive"].zip_id)}
+    assert stems["Extras.zip/Ride.wav"]["sample_rate"] == 48000
+    assert stems["Night Drive - BD.aif"]["sample_rate"] == 44100
+    bar = loops.bar_length(44100, 124.0)
+    beat = bar / 4
+    seen = set()
+    for r in _samples(db, library, "night_drive"):
+        stem = _stem_of(db, r)
+        if not stem.startswith("Extras.zip/"):
+            continue
+        seen.add((stem, r["kind"]))
+        data, sr = sf.read(str(library.path / r["rel_path"]), always_2d=True)
+        assert sr == 44100 and r["sample_rate"] == 44100
+        if r["kind"] == "loop":
+            assert len(data) == r["bars"] * bar
+            if "Conga" in stem:  # congas on steps 3, 6, 10, 11, 14 of every bar
+                hits = [(b * 4 + s / 4) * beat for b in range(r["bars"]) for s in (3, 6, 10, 14)]
+                err = onset_errors_ms(data.mean(axis=1), sr, hits, rel=0.3, win_ms=8)
+                assert np.max(np.abs(err)) <= 1.0, err
+    assert seen == {(s, k) for s in ("Extras.zip/Ride.wav", "Extras.zip/Perc Conga.wav")
+                    for k in ("oneshot", "loop")}
 
 
 def test_silent_breakdown_produces_no_loops(library, db, fixtures):
@@ -323,5 +351,5 @@ def test_find_zips(fixtures, tmp_path):
 def test_analyze_writes_nothing(fixtures, tmp_path):
     settings = Settings(library_path=str(tmp_path / "lib"))
     a = pipeline.analyze_zip(fixtures.zip("sunrise"), settings)
-    assert a.tempo.bpm == pytest.approx(126.5, abs=0.02) and a.key.label == "D"
+    assert a.tempo.bpm == 126.0 and a.key.label == "D"
     assert not (tmp_path / "lib").exists()

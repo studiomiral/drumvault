@@ -64,7 +64,7 @@ def test_resample_only():
     assert abs(y.shape[0] - x.shape[0] * 44100 / 48000) <= 1
 
 
-@pytest.mark.parametrize("src_bpm,src_sr", [(122.0, 44100), (126.5, 48000)])
+@pytest.mark.parametrize("src_bpm,src_sr", [(122.0, 44100), (126.0, 48000), (123.0, 48000)])
 def test_stretched_kicks_land_on_grid(src_bpm, src_sr):
     """After stretching (and resampling), every kick sits on the library grid within 1 ms."""
     bars = 8

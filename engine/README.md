@@ -36,6 +36,13 @@ Set `DRUMVAULT_FIXTURE_DIR=/some/dir` to cache fixtures between test runs.
 
 ## Notes and deviations from SCOPE.md
 
+- **Whole-number BPM.** Source tracks are always integer BPM (`integer_bpm`, default on):
+  the detected BPM is rounded, and a detection more than 0.05 from a whole number is
+  flagged `needs_review` (`bpm_warning`) unless a BPM in the file name confirms it.
+- **Sample rates.** 44.1 and 48 kHz sources (also mixed within one zip) are analysed at
+  their native rate and resampled (soxr, very high quality) to the output rate when written:
+  loops before stretching, one-shots after trimming. Output is always the library rate.
+
 - **Stretch ratio / phase (§5.7).** The spec defines `ratio = source_bpm / library_bpm` and
   then `new phase = phase / ratio`. With that ratio the stretched audio is `ratio` times as
   long, so the phase must be multiplied: `phase_out = phase_in * ratio` (`stretch.map_samples`).
@@ -46,10 +53,13 @@ Set `DRUMVAULT_FIXTURE_DIR=/some/dir` to cache fixtures between test runs.
   < -55 dBFS), a beat also counts as silent when it is more than 24 dB below the stem's median
   beat level (`loop_beat_silence_rel_db`). Without it, decaying tails at the start of a
   breakdown (e.g. a ride ringing out) produce "loops" that are mostly silence.
-- **Fingerprints.** Log-mel fingerprints are level-invariant (dB relative to their own max)
-  with a 50 dB range (`fingerprint_top_db`): with 80 dB, low-level stretch artefacts in the
-  gaps between hits made identical bars look different. One-shots are compared over the
-  frames both hits cover, so a hit cut short by the next onset dedupes with a full one.
+- **Fingerprints.** Log-mel fingerprints are level-invariant (dB relative to their own max).
+  Loop fingerprints pool the spectrogram into 32 chunks per bar *centred* on the 1/32 grid:
+  with chunk edges on the grid, every hit straddles two chunks and the sub-ms jitter of
+  stretched audio made identical bars score as low as 0.94 (threshold 0.96); centred, they
+  score >= 0.988 while real variations stay far below. One-shots use a 50 dB range and are
+  compared over the frames both hits cover, so a hit cut short by the next onset dedupes
+  with a full one.
 - **Hit starts.** One-shots start 0.5 ms before the first sample reaching 10% of the hit's
   peak (trailing-max envelope, so the rise isn't moved early); when the previous hit's tail is
   still loud, the start is the envelope trough between the two.

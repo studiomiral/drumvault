@@ -162,7 +162,7 @@ Algorithm:
 1. Mono, low-pass ~150 Hz, onset envelope (librosa), pick strong onsets with backtracking for precise attack times.
 2. Rough BPM from the onset envelope via autocorrelation, constrained to the configured range (default **115–135 BPM**) to avoid half/double errors.
 3. **Refine** by fitting a linear grid `t_n = phase + n · period` to the onset times (nearest-beat assignment + least squares, iterate 2–3×).
-4. If the refined BPM is within ±0.05 of an integer, snap to the integer (DAW exports are almost always integer BPM).
+4. Source tracks are always whole-number BPM: round the refined BPM to the nearest integer. If it was more than ±0.05 away from that integer, flag `needs_review` (the detection is suspect) unless a filename BPM confirms it. (Configurable: `integer_bpm`.)
 5. If the zip name or any stem filename contains a BPM (regex `(\d{2,3}(?:\.\d+)?)\s?bpm`, case-insensitive) within ±1 of the detected value, use the filename BPM.
 6. **Grid phase / bar 1**: assume stems were exported from bar 1 (sample 0 = downbeat). Validate: if the fitted phase is within ±15 ms of 0 modulo one beat, use phase = 0. Otherwise use the first strong kick onset as the downbeat and flag `grid_warning`.
 7. **Confidence** = fraction of strong onsets within ±10 ms of the grid. Below 0.8 → zip status `needs_review`.
@@ -437,7 +437,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 
 ### Phase 1 — Engine + CLI (no UI)
 - All of §5 implemented and runnable through the CLI.
-- `tests/make_fixtures.py` generates synthetic zips with a programmatic kick at known BPMs (e.g. 122.00, 124.00, 126.50), hats, claps, a top loop, a bassline + chords in a known key, a "silent breakdown" section, mixed naming conventions, `__MACOSX` junk, and one stem with a meaningless name.
+- `tests/make_fixtures.py` generates synthetic zips with a programmatic kick at known BPMs (e.g. 122, 124, 126; source tracks are always whole-number BPM), hats, claps, a top loop, a bassline + chords in a known key, a "silent breakdown" section, mixed naming conventions, `__MACOSX` junk, and one stem with a meaningless name.
 - **Acceptance**
   - BPM is detected within ±0.02 of the truth on all fixtures; grid phase is correct.
   - The key is correct on all fixtures.

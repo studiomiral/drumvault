@@ -109,7 +109,8 @@ def ride(sr: int, rng) -> np.ndarray:
     noise = _filt(rng.standard_normal(len(t)), sr, "highpass", 5000)
     noise /= np.max(np.abs(noise))
     bell = sum(np.sin(2 * np.pi * f * t) for f in (3100, 4700, 5900)) / 3
-    return _gate(0.5 * noise * np.exp(-t / 0.15) + 0.4 * bell * np.exp(-t / 0.3))
+    return _gate(0.5 * noise * np.exp(-t / 0.15) + 0.4 * bell * np.exp(-t / 0.3)
+                 + _click(sr, len(t), 1.1, 5000.0))
 
 
 def crash(sr: int, rng) -> np.ndarray:
@@ -286,6 +287,7 @@ class StemTruth:
     category: str                  # expected classification
     auto: bool = False             # expected to need the audio fallback
     alt_categories: list[str] = field(default_factory=list)  # also acceptable
+    sample_rate: int | None = None  # if different from the fixture's rate (mixed-rate zips)
 
 
 @dataclass
@@ -442,15 +444,17 @@ def build_night_drive(out: Path) -> FixtureTruth:
 
     files[pre + "Lead.mp3"] = b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\xff\xfb" * 300
 
-    # Nested zip (one level deep) with a perc and a ride stem.
-    perc, _ = _drum(bpm, sr, 1)
+    # Nested zip (one level deep) with a perc and a ride stem, exported at 48 kHz
+    # while the rest of the zip is 44.1 kHz (mixed sample rates in one zip).
+    sr_x = 48000
+    perc, _ = _drum(bpm, sr_x, 1)
     perc.pattern(conga, rng, {3: 0.8, 6: 0.6, 10: 0.9, 11: 0.5, 14: 0.7}, bars)
-    rd, _ = _drum(bpm, sr, 2)
+    rd, _ = _drum(bpm, sr_x, 2)
     rd.pattern(ride, rng, FOUR_ON_FLOOR, bars, stereo_width=0.3)
     inner = io.BytesIO()
     with zipfile.ZipFile(inner, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("Perc Conga.wav", _write(perc.buf, sr, "WAV", "PCM_24", 0.6))
-        z.writestr("Ride.wav", _write(rd.buf, sr, "WAV", "PCM_24", 0.5))
+        z.writestr("Perc Conga.wav", _write(perc.buf, sr_x, "WAV", "PCM_24", 0.6))
+        z.writestr("Ride.wav", _write(rd.buf, sr_x, "WAV", "PCM_24", 0.5))
         z.writestr("__MACOSX/._Ride.wav", b"\x00\x05\x16\x07")
     files["Extras.zip"] = inner.getvalue()
 
@@ -469,8 +473,8 @@ def build_night_drive(out: Path) -> FixtureTruth:
             StemTruth(pre + "Sub Bass.aif", "melodic"),
             StemTruth(pre + "Pad.flac", "melodic"),
             StemTruth(pre + "FX Riser.aif", "ignore"),
-            StemTruth("Extras.zip/Perc Conga.wav", "perc"),
-            StemTruth("Extras.zip/Ride.wav", "ride"),
+            StemTruth("Extras.zip/Perc Conga.wav", "perc", sample_rate=48000),
+            StemTruth("Extras.zip/Ride.wav", "ride", sample_rate=48000),
         ],
         junk=list(junk) + ["Extras.zip/__MACOSX/._Ride.wav"],
         skipped_warnings=[pre + "Lead.mp3"], top_variations=0,
@@ -478,11 +482,11 @@ def build_night_drive(out: Path) -> FixtureTruth:
 
 
 def build_sunrise(out: Path) -> FixtureTruth:
-    """126.5 BPM (stretch down, non-integer), D major, 48 kHz 24-bit WAV.
+    """126 BPM (stretch down), D major, 48 kHz 24-bit WAV.
 
     The kick only enters at bar 3 (grid phase must still be 0).
     """
-    bpm, sr, key, seed = 126.5, 48000, "D", 3
+    bpm, sr, key, seed = 126.0, 48000, "D", 3
     rng = np.random.default_rng(seed)
     files: dict[str, bytes] = {}
     W = lambda tr, peak: _write(tr.buf, sr, "WAV", "PCM_24", peak)
@@ -531,7 +535,7 @@ def build_sunrise(out: Path) -> FixtureTruth:
     melody(m, key)
     files["Track 12.wav"] = W(m, 0.6)
 
-    junk = {"._Hat.wav": b"\x00\x05\x16\x07" + b"\x00" * 64, "Info.txt": b"126.5"}
+    junk = {"._Hat.wav": b"\x00\x05\x16\x07" + b"\x00" * 64, "Info.txt": b"126"}
     _zip(out / "Sunrise Theory.zip", {**files, **junk})
     return FixtureTruth(
         name="sunrise", zip_name="Sunrise Theory.zip", bpm=bpm, key=key, camelot="10B",

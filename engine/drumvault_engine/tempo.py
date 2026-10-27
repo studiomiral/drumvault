@@ -32,6 +32,7 @@ class TempoResult:
     raw_bpm: float = 0.0          # before snapping / filename override
     warnings: list[str] = field(default_factory=list)
     grid_warning: bool = False
+    bpm_warning: bool = False     # raw detection was far from a whole number
 
 
 def pick_source(categories: dict[str, str]) -> tuple[str, list[str]]:
@@ -187,17 +188,26 @@ def detect_tempo(mono: np.ndarray, sr: int, settings: Settings, *, source_stem: 
     bpm = 60.0 / period
     raw_bpm = bpm
 
+    bpm_warning = False
     if bpm_override:
         bpm = float(bpm_override)
     else:
-        if abs(bpm - round(bpm)) <= th.tempo_integer_snap:
+        near_integer = abs(bpm - round(bpm)) <= th.tempo_integer_snap
+        if near_integer or settings.integer_bpm:
             bpm = float(round(bpm))
+        from_filename = False
         for fb in filename_bpms(names_for_bpm or []):
             if abs(fb - raw_bpm) <= th.tempo_filename_tolerance:
+                from_filename = True
+                fb = float(round(fb)) if settings.integer_bpm else fb
                 if abs(fb - bpm) > 1e-9:
                     warnings.append(f"Using BPM {fb:g} from filename (detected {raw_bpm:.3f})")
                 bpm = fb
                 break
+        if settings.integer_bpm and not near_integer and not from_filename:
+            bpm_warning = True
+            warnings.append(f"Detected {raw_bpm:.2f} BPM, which is not a whole number; using {bpm:g}. "
+                            f"Check the kick stem or set the BPM manually")
     period = 60.0 / bpm
     if len(times):
         phase = fit_phase(times, period, th.tempo_inlier_beat_fraction)
@@ -225,4 +235,5 @@ def detect_tempo(mono: np.ndarray, sr: int, settings: Settings, *, source_stem: 
         warnings.append(f"No kick stem; tempo detected from {source_category}")
     return TempoResult(bpm=float(bpm), phase_samples=int(round(phase_s * sr)), sample_rate=sr,
                        confidence=float(conf), source_stem=source_stem, source_category=source_category,
-                       raw_bpm=float(raw_bpm), warnings=warnings, grid_warning=grid_warning)
+                       raw_bpm=float(raw_bpm), warnings=warnings, grid_warning=grid_warning,
+                       bpm_warning=bpm_warning)

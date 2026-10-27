@@ -108,7 +108,8 @@ def extract_loops(data: np.ndarray, sr: int, phase: int, bpm: float, lengths: li
             m = mono[s:s + seg_len]
             if is_silent(m, 4 * bars, th, ref_db):
                 continue
-            fp = logmel_fingerprint(m, sr, th, frames_per_chunk=th.loop_fingerprint_frames_per_bar * bars)
+            fp = logmel_fingerprint(m, sr, th, frames_per_chunk=th.loop_fingerprint_frames_per_bar * bars,
+                                    top_db=th.loop_fingerprint_top_db)
             cands.append((s, fp))
         if not cands:
             continue

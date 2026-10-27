@@ -108,13 +108,14 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
 
 
 def logmel_fingerprint(mono: np.ndarray, sr: int, th, n_frames: int | None = None,
-                       frames_per_chunk: int | None = None) -> np.ndarray:
+                       frames_per_chunk: int | None = None, top_db: float | None = None) -> np.ndarray:
     """Level-invariant log-mel fingerprint, flattened and L2-normalised.
 
     The audio is resampled to a fixed rate so fingerprints are comparable
     across sources. If `n_frames` is given the spectrogram is cropped/padded
     to that many STFT frames (one-shots). If `frames_per_chunk` is given it is
     instead pooled into that many equal time chunks (loops, coarse grid).
+    `top_db` is the dynamic range kept (default `th.fingerprint_top_db`).
     """
     import librosa
 
@@ -126,14 +127,19 @@ def logmel_fingerprint(mono: np.ndarray, sr: int, th, n_frames: int | None = Non
         hop_length=th.fingerprint_hop, n_mels=th.fingerprint_n_mels, power=2.0,
     )
     if frames_per_chunk is not None:
+        # Centre each chunk on its grid point (wrapping, since loops are cyclic).
+        # With edges *on* the grid, every hit straddles two chunks and sub-ms
+        # timing jitter from stretching moves its energy between them.
+        S = np.roll(S, int(round(S.shape[1] / frames_per_chunk / 2)), axis=1)
         edges = np.linspace(0, S.shape[1], frames_per_chunk + 1).astype(int)
         S = np.stack([S[:, a:max(b, a + 1)].mean(axis=1) for a, b in zip(edges[:-1], edges[1:])], 1)
     if n_frames is not None:
         S = S[:, :n_frames]
         if S.shape[1] < n_frames:
             S = np.pad(S, ((0, 0), (0, n_frames - S.shape[1])))
+    top_db = th.fingerprint_top_db if top_db is None else top_db
     ref = max(float(S.max()), EPS)
-    L = librosa.power_to_db(S, ref=ref, top_db=th.fingerprint_top_db) + th.fingerprint_top_db
+    L = librosa.power_to_db(S, ref=ref, top_db=top_db) + top_db
     v = L.astype(np.float32).ravel()
     n = float(np.linalg.norm(v))
     return v / n if n > 0 else v
