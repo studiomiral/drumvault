@@ -13,7 +13,19 @@ from .config import Thresholds
 
 # Checked in this order; the first category with a matching keyword wins
 # (so "Bass Drum" is a kick, not bass). Multi-word keywords match as phrases.
+# Vocals come first so "Vocal FX" stays ignored; fills and rolls come before the
+# drum categories so "Snare Roll" and "Tom Fill" are events, not snare/perc.
 RULES: list[tuple[str, list[str]]] = [
+    ("ignore", ["vox", "vocal", "vocals", "voice", "acapella", "acappella"]),
+    ("roll", ["roll", "snare roll", "snareroll", "drumroll", "snare build", "snarebuild"]),
+    ("fill", ["fill", "drum fill", "drumfill"]),
+    ("fx_riser", ["riser", "rise", "uplifter", "uplift", "upsweep", "up sweep", "build up",
+                  "buildup"]),
+    ("fx_downlifter", ["downlifter", "downlift", "downsweep", "down sweep"]),
+    ("fx_impact", ["impact", "sub drop", "subdrop", "boom", "explosion"]),
+    ("fx_sweep", ["sweep", "whoosh", "swoosh", "noise", "white noise", "reverse", "reversed"]),
+    ("fx_atmos", ["atmos", "atmosphere", "ambience", "texture"]),
+    ("fx", ["fx", "sfx", "effect", "effects"]),
     ("kick", ["kick", "kik", "bd", "bassdrum", "bass drum"]),
     ("clap", ["clap", "cp", "handclap"]),
     ("snare", ["snare", "sd", "rim", "rimshot"]),
@@ -33,11 +45,13 @@ RULES: list[tuple[str, list[str]]] = [
                  "piano", "stab", "pluck", "arp", "organ", "string", "music", "melody",
                  "melodic"]),
     ("full_mix", ["master", "mix", "full", "mixdown"]),
-    ("ignore", ["vox", "vocal", "vocals", "voice", "fx", "sfx", "riser", "sweep", "uplifter",
-                "downlifter", "impact", "noise", "atmos", "reverse", "reverb return", "send"]),
+    ("ignore", ["reverb return", "send"]),
 ]
 # "loop" alone means drums, but only if nothing melodic/ignorable is named.
 LOOP_KEYWORD = "loop"
+NOT_DRUM_LOOP = [kw for cat, kws in RULES if cat in ("melodic", "ignore") for kw in kws]
+# Whole-word only: "Rolling Bass" is not a roll, "Filler" is not a fill.
+NO_PREFIX = {"roll", "fill"}
 # Words containing these are treated as bass for key weighting.
 BASS_KEYWORDS = ["bass", "sub", "subbass", "bassline"]
 
@@ -62,7 +76,7 @@ def _token_match(token: str, kw: str) -> bool:
     if token == kw or token in (kw + "s", kw + "es"):
         return True
     # Longer keywords also match as a word prefix ("bassline", "percloop", "claps").
-    return len(kw) >= 4 and token.startswith(kw)
+    return len(kw) >= 4 and kw not in NO_PREFIX and token.startswith(kw)
 
 
 def _phrase_in(tokens: list[str], keyword: str) -> bool:
@@ -80,8 +94,7 @@ def match_tokens(tokens: list[str]) -> str | None:
         if any(_phrase_in(tokens, kw) for kw in keywords):
             return category
         if category == "drums" and _phrase_in(tokens, LOOP_KEYWORD):
-            other = dict(RULES)
-            if not any(_phrase_in(tokens, kw) for kw in other["melodic"] + other["ignore"]):
+            if not any(_phrase_in(tokens, kw) for kw in NOT_DRUM_LOOP):
                 return "drums"
     return None
 

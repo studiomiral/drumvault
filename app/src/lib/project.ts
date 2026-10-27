@@ -109,7 +109,8 @@ export function loopBeats(c: AudioClip): number {
 
 export function makeClip(sample: SampleListItem, laneId: string, start: number): Clip {
   const base = { id: uid('c'), laneId, start, gainDb: 0, sample: sampleRef(sample) }
-  if (sample.kind === 'loop') {
+  // Loops and events (fills, rolls, FX) are whole bars of audio on the grid.
+  if (sample.kind !== 'oneshot') {
     const beats = (sample.bars ?? 1) * BEATS_PER_BAR
     return { ...base, type: 'audio', length: beats, trimBeats: 0 }
   }

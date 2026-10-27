@@ -11,6 +11,9 @@ Drum patterns repeat identically every bar (so 1-bar hat loops must dedupe to a
 single loop), except the top loop, which uses pattern A in the first section
 and a clearly different pattern B in the last one (two real variations).
 
+Fill, roll and FX stems are silent except for one sound that occurs twice,
+identically (it must dedupe to a single event starting on its bar line).
+
 Usage:  uv run python tests/make_fixtures.py <out_dir>
 """
 
@@ -277,6 +280,35 @@ def riser(track: Track, rng) -> None:
     track.place(out, start)
 
 
+def drum_fill(track: Track, rng, bars: list[int]) -> None:
+    """One-bar fill: snare 8ths into conga 16ths, the same rendered sounds every time."""
+    sn, cg = snare(track.sr, rng), conga(track.sr, rng)
+    for bar in bars:
+        for st in range(0, 8, 2):
+            track.place(sn, track.pos(bar, st), 0.6 + 0.05 * st)
+        for st in range(8, 16):
+            track.place(cg, track.pos(bar, st), 0.7 + 0.03 * (st - 8))
+
+
+def snare_roll(track: Track, rng, start_bars: list[int]) -> None:
+    """Four-bar build: 8ths, then 16ths, getting louder; it ends on the next bar line."""
+    sn = snare(track.sr, rng)
+    for b0 in start_bars:
+        for i, steps in enumerate((range(0, 16, 2), range(0, 16, 2), range(16), range(16))):
+            for st in steps:
+                track.place(sn, track.pos(b0 + i, st), 0.3 + 0.17 * i)
+
+
+def impact(sr: int, rng) -> np.ndarray:
+    """Sub boom sweeping down with a noise crack on top."""
+    t = _t(sr, 3.0)
+    f = 30 + 70 * np.exp(-t / 0.15)
+    boom = np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-t / 0.8)
+    noise = _filt(rng.standard_normal(len(t)), sr, "highpass", 2000)
+    crack = noise / np.max(np.abs(noise)) * np.exp(-t / 0.05)
+    return _gate(boom + 0.5 * crack)
+
+
 # --------------------------------------------------------------------------
 # Fixture definitions
 # --------------------------------------------------------------------------
@@ -305,6 +337,9 @@ class FixtureTruth:
     junk: list[str]                # entries that must be ignored
     skipped_warnings: list[str]    # file names that must produce a skip warning
     top_variations: int            # expected distinct top loops per length
+    # Event stems: path -> [start bar (0-based, source grid), min bars, max bars] of the
+    # single event each must produce (bars include the tail; stretching can add one).
+    events: dict[str, list[int]] = field(default_factory=dict)
 
 
 def _write(buf: np.ndarray, sr: int, fmt: str, subtype: str, peak: float) -> bytes:
@@ -370,6 +405,10 @@ def build_deep_groove(out: Path) -> FixtureTruth:
     vocal_chop(v, rng)
     files[root + "07 Vocal Chop.wav"] = W(v, 0.5)
 
+    fl = Track(bpm, sr, channels=1)
+    drum_fill(fl, rng, [BREAKDOWN[0] - 1, BARS - 1])
+    files[root + "08 Drum Fill.wav"] = W(fl, 0.7)
+
     junk = {
         "__MACOSX/Deep Groove Stems/._01 Kick.wav": b"\x00\x05\x16\x07" + b"\x00" * 200,
         root + ".DS_Store": b"\x00\x00\x00\x01Bud1" + b"\x00" * 100,
@@ -388,8 +427,10 @@ def build_deep_groove(out: Path) -> FixtureTruth:
             StemTruth(root + "06 Chords.wav", "melodic"),
             StemTruth(root + "Audio 07.wav", "drums", auto=True, alt_categories=["perc"]),
             StemTruth(root + "07 Vocal Chop.wav", "ignore"),
+            StemTruth(root + "08 Drum Fill.wav", "fill"),
         ],
         junk=list(junk), skipped_warnings=[], top_variations=2,
+        events={root + "08 Drum Fill.wav": [BREAKDOWN[0] - 1, 2, 2]},
     )
 
 
@@ -442,6 +483,10 @@ def build_night_drive(out: Path) -> FixtureTruth:
     riser(fx, rng)
     files[pre + "FX Riser.aif"] = AIF(fx, 0.5)
 
+    sr_roll = Track(bpm, sr, channels=1)
+    snare_roll(sr_roll, rng, [BREAKDOWN[0] - 4, BARS - 4])
+    files[pre + "Snare Roll.aif"] = AIF(sr_roll, 0.7)
+
     files[pre + "Lead.mp3"] = b"ID3\x03\x00\x00\x00\x00\x00\x00" + b"\xff\xfb" * 300
 
     # Nested zip (one level deep) with a perc and a ride stem, exported at 48 kHz
@@ -472,12 +517,15 @@ def build_night_drive(out: Path) -> FixtureTruth:
             StemTruth(pre + "Drum Loop.aif", "drums"),
             StemTruth(pre + "Sub Bass.aif", "melodic"),
             StemTruth(pre + "Pad.flac", "melodic"),
-            StemTruth(pre + "FX Riser.aif", "ignore"),
+            StemTruth(pre + "FX Riser.aif", "fx_riser"),
+            StemTruth(pre + "Snare Roll.aif", "roll"),
             StemTruth("Extras.zip/Perc Conga.wav", "perc", sample_rate=48000),
             StemTruth("Extras.zip/Ride.wav", "ride", sample_rate=48000),
         ],
         junk=list(junk) + ["Extras.zip/__MACOSX/._Ride.wav"],
         skipped_warnings=[pre + "Lead.mp3"], top_variations=0,
+        events={pre + "FX Riser.aif": [BREAKDOWN[1] - 4, 4, 5],
+                pre + "Snare Roll.aif": [BREAKDOWN[0] - 4, 5, 6]},
     )
 
 
@@ -530,6 +578,10 @@ def build_sunrise(out: Path) -> FixtureTruth:
     chords(kb, key, detune=0.001)
     files["Keys.wav"] = W(kb, 0.6)
 
+    im = Track(bpm, sr, channels=2)
+    im.pattern(impact, rng, {0: 1.0}, [0, BREAKDOWN[1]], stereo_width=0.4)
+    files["Impact FX.wav"] = W(im, 0.8)
+
     # Meaningless name, harmonic content -> audio fallback must say melodic.
     m = Track(bpm, sr, channels=1)
     melody(m, key)
@@ -551,8 +603,10 @@ def build_sunrise(out: Path) -> FixtureTruth:
             StemTruth("Bass.wav", "melodic"),
             StemTruth("Keys.wav", "melodic"),
             StemTruth("Track 12.wav", "melodic", auto=True),
+            StemTruth("Impact FX.wav", "fx_impact"),
         ],
         junk=list(junk), skipped_warnings=[], top_variations=1,
+        events={"Impact FX.wav": [0, 2, 3]},
     )
 
 

@@ -12,10 +12,10 @@ from typing import Callable
 
 import numpy as np
 
-from . import classify, key as keymod, loops as loopmod, naming, normalize, oneshots as osmod
-from . import peaks as peakmod, stretch, tempo as tempomod, zipio
+from . import classify, events as eventmod, key as keymod, loops as loopmod, naming, normalize
+from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
 from .audioutil import Audio, info as audio_info, load, resample, write_wav
-from .config import DRUM_CATEGORIES, ONESHOT_CATEGORIES, Settings
+from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
 from .db import LibraryDB, library_dir, match_key, now_iso
 from .schemas import KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
 
@@ -177,6 +177,7 @@ class StemOutput:
     category: str
     oneshots: list[osmod.OneShot] = field(default_factory=list)
     loops: list[loopmod.Loop] = field(default_factory=list)
+    events: list[eventmod.Event] = field(default_factory=list)
     loop_factor: float = 1.0               # duration factor applied before slicing
     loop_sr: int = 44100
     warnings: list[str] = field(default_factory=list)
@@ -191,13 +192,17 @@ def _process_stem(ex: Extracted, stem: StemInfo, analysis: ZipAnalysis, settings
     if do_oneshots and stem.category in ONESHOT_CATEGORIES:
         out.oneshots = osmod.extract_oneshots(audio, stem.category, settings)
     lengths = settings.loop_lengths_for(stem.category)
-    if do_loops and lengths:
+    is_event = stem.category in EVENT_CATEGORIES
+    if do_loops and (lengths or is_event):
         ctx.check()
         y, out_sr, w = stretch.stretch_stem(audio.data, audio.sr, t.bpm, settings, tmp_dir=tmp)
         out.warnings += w
         phase = stretch.map_samples(round(t.phase_samples * audio.sr / t.sample_rate), audio.sr,
                                     t.bpm, settings.library_bpm, out_sr)
-        out.loops = loopmod.extract_loops(y, out_sr, phase, settings.library_bpm, lengths, settings)
+        if is_event:
+            out.events = eventmod.extract_events(y, out_sr, phase, settings.library_bpm, settings)
+        else:
+            out.loops = loopmod.extract_loops(y, out_sr, phase, settings.library_bpm, lengths, settings)
         out.loop_factor = stretch.time_factor(t.bpm, settings.library_bpm)
         out.loop_sr = out_sr
     return out
@@ -307,22 +312,23 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         if not do_loops:
             status = "needs_review"
             warnings.append(f"{t.bpm:g} -> {settings.library_bpm:g} BPM exceeds the max stretch "
-                            f"({settings.max_stretch:.0%}); loops skipped, one-shots kept")
+                            f"({settings.max_stretch:.0%}); loops and FX/fills skipped, one-shots kept")
 
         # ---- per-stem work -------------------------------------------------
-        drum_stems = [s for s in analysis.stems if s.category in DRUM_CATEGORIES]
+        sample_stems = [s for s in analysis.stems if s.category in DRUM_CATEGORIES + EVENT_CATEGORIES]
         outputs: list[StemOutput] = []
         done = 0
         with ThreadPoolExecutor(max_workers=max(1, settings.workers)) as pool:
             futs = [pool.submit(_process_stem, ex, s, analysis, settings, not loops_only, do_loops,
-                                tmp, ctx) for s in drum_stems]
+                                tmp, ctx) for s in sample_stems]
             try:
                 for f in futs:
                     outputs.append(f.result())
                     done += 1
                     o = outputs[-1]
-                    ctx.progress("stems", 0.3 + 0.55 * done / max(1, len(drum_stems)),
-                                 f"{o.name}: {len(o.oneshots)} one-shots, {len(o.loops)} loops")
+                    ctx.progress("stems", 0.3 + 0.55 * done / max(1, len(sample_stems)),
+                                 f"{o.name}: {len(o.oneshots)} one-shots, {len(o.loops)} loops, "
+                                 f"{len(o.events)} FX/fills")
             except BaseException:
                 for f in futs:
                     f.cancel()
@@ -344,7 +350,8 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
             key_override=ov.key, status=status, warnings=warnings, processed_at=now_iso(),
             settings_hash=settings.processing_hash())
         _write_log(lib, code, zip_path, analysis, counts, status, warnings, settings)
-        ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops")
+        ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops, "
+                                  f"{counts.events} FX/fills")
         return ProcessResult(zip_id=zid, source_code=code, file_name=zip_path.name, status=status,
                              counts=counts, analysis=analysis, warnings=warnings)
 
@@ -361,7 +368,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
     written: list[Path] = []
     try:
         with db.transaction():
-            kind_filter = "loop" if loops_only else None
+            # Loops and events depend on the library BPM; one-shots don't.
+            kind_filter = ("loop", "event") if loops_only else None
             meta = db.user_meta(zid, kind_filter)
             old = db.samples_for_zip(zid, kind_filter)
             _delete_sample_files(lib, old)
@@ -379,6 +387,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                         s.used_for.append("oneshots")
                     if o.loops and "loops" not in s.used_for:
                         s.used_for.append("loops")
+                    if o.events and "events" not in s.used_for:
+                        s.used_for.append("events")
                 fields = dict(category=s.category, category_override=s.category_override,
                               auto_classified=int(s.auto_classified), duration_s=s.duration_s,
                               sample_rate=s.sample_rate, channels=s.channels, used_for=s.used_for)
@@ -397,6 +407,9 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 index[ik] = index.get(ik, 0) + 1
                 if kind == "oneshot":
                     rel = naming.oneshot_rel_path(category, key_label, tag, index[ik])
+                elif kind == "event":
+                    rel = naming.event_rel_path(category, settings.library_bpm, key_label, tag, bars or 0,
+                                                index[ik])
                 else:
                     rel = naming.loop_rel_path(category, settings.library_bpm, key_label, tag, bars or 0,
                                                index[ik])
@@ -406,7 +419,7 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 um = meta.get(match_key(stem_name, kind, bars, offset_s), {})
                 sid = db.insert_sample(
                     zip_id=zid, stem_id=stem_ids[stem_name], kind=kind, category=category, rel_path=rel,
-                    bpm=settings.library_bpm if kind == "loop" else None, bars=bars,
+                    bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars,
                     key_label=k.label, key_camelot=k.camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
                     gain_applied_db=gain_db, source_offset_s=offset_s,
@@ -435,6 +448,11 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     offset_s = lp.start / lp.sr / o.loop_factor
                     add(o.name, "loop", o.category, data, lp.bars, offset_s, lp.fingerprint, pk_db, gain)
                     counts.loops += 1
+                for ev in o.events:
+                    data, pk_db, gain = normalize.peak_normalize(ev.data, settings.event_peak_dbfs)
+                    offset_s = ev.start / ev.sr / o.loop_factor
+                    add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint, pk_db, gain)
+                    counts.events += 1
     except BaseException:
         for p in written:  # roll back files written by the aborted transaction
             p.unlink(missing_ok=True)
@@ -470,7 +488,7 @@ def delete_zip(settings: Settings, zip_id: int, delete_files: bool = True) -> di
 
 
 def rebuild_loops(settings: Settings, ctx: JobContext | None = None) -> list[ProcessResult]:
-    """Re-stretch and re-slice every zip's loops at the (new) library BPM; one-shots stay."""
+    """Re-stretch and re-cut every zip's loops and events at the (new) library BPM; one-shots stay."""
     ctx = ctx or JobContext()
     with LibraryDB(settings.library_path) as db:
         rows = [r for r in db.list_zips() if r["status"] in ("done", "needs_review")]

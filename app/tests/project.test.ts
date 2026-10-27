@@ -11,7 +11,7 @@ import { useProject } from '../src/store/project'
 import type { SampleListItem } from '../src/types/api'
 import type { PatternClip } from '../src/types/project'
 
-const sample = (kind: 'loop' | 'oneshot', category: SampleListItem['category'], bars: number | null = null): SampleListItem => ({
+const sample = (kind: SampleListItem['kind'], category: SampleListItem['category'], bars: number | null = null): SampleListItem => ({
   id: 1, rel_path: `x/${category}.wav`, name: category, kind, category, bpm: 124, bars, key_label: 'Am',
   key_camelot: '8A', duration_s: 1, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001',
 })
@@ -27,6 +27,9 @@ describe('project model', () => {
   it('makes loop clips one loop long and one-shot pattern clips with a category preset', () => {
     const loop = makeClip(sample('loop', 'top', 4), 'L', 8)
     expect(loop).toMatchObject({ type: 'audio', start: 8, length: 16, trimBeats: 0 })
+    // A riser (event) is whole bars of audio on the grid, like a loop, never a pattern.
+    const riser = makeClip(sample('event', 'fx_riser', 8), 'L', 32)
+    expect(riser).toMatchObject({ type: 'audio', start: 32, length: 32, trimBeats: 0 })
     const kick = makeClip(sample('oneshot', 'kick'), 'L', 0) as PatternClip
     expect(kick.type).toBe('pattern')
     expect(kick.steps.map((v, i) => (v ? i : -1)).filter((i) => i >= 0)).toEqual([0, 4, 8, 12])

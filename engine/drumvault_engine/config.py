@@ -26,7 +26,11 @@ ONESHOT_CATEGORIES = (
     "ride", "cymbal", "shaker", "perc",
 )
 DRUM_CATEGORIES = ONESHOT_CATEGORIES + ("top", "groove", "drums")
-ALL_CATEGORIES = DRUM_CATEGORIES + ("melodic", "full_mix", "ignore")
+# Stems cut into grid-aligned events (SCOPE.md §5.8a): fills, snare rolls and FX.
+EVENT_CATEGORIES = (
+    "fill", "roll", "fx_riser", "fx_downlifter", "fx_impact", "fx_sweep", "fx_atmos", "fx",
+)
+ALL_CATEGORIES = DRUM_CATEGORIES + EVENT_CATEGORIES + ("melodic", "full_mix", "ignore")
 
 
 def _default_loop_lengths() -> dict[str, list[int]]:
@@ -146,6 +150,19 @@ class Thresholds:
     loop_fade_in_ms: float = 1.0
     loop_near_zero_db: float = -60.0        # first sample above this -> fade in
 
+    # ---- events (fills, rolls, FX) -------------------------------------------
+    # A beat is part of an event if its RMS is within this of the stem's peak...
+    event_active_rel_db: float = -50.0
+    event_silence_db: float = -70.0         # ...and above this absolute level
+    event_merge_gap_beats: int = 2          # quieter gaps up to this long don't split an event
+    event_min_peak_rel_db: float = -30.0    # skip events this far below the stem's loudest
+    # An event starting this little before a bar line starts on that bar: Rubber Band
+    # smears ~15 ms of pre-ring ahead of a transient, and early flams belong to the bar.
+    event_preroll_ms: float = 30.0
+    event_max_bars: int = 32                # longer regions are beds (atmos)...
+    event_bed_bars: int = 8                 # ...cut into chunks of this many bars
+    event_fade_ms: float = 5.0              # where an event is cut off from its neighbour
+
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200
     peaks_loop_per_bar: int = 1024
@@ -164,12 +181,15 @@ class Settings:
     loop_lengths: dict[str, list[int]] = field(default_factory=_default_loop_lengths)
     max_oneshots_per_stem: int = 4
     max_loops_per_length: int = 6
+    max_events_per_stem: int = 6
     oneshot_peak_dbfs: float = -0.3
     loop_norm_mode: str = "peak"            # peak | lufs
     loop_peak_dbfs: float = -1.0
     loop_lufs_target: float = -14.0
+    event_peak_dbfs: float = -1.0
     oneshot_dedupe_threshold: float = 0.97
     loop_dedupe_threshold: float = 0.96
+    event_dedupe_threshold: float = 0.96
     rubberband_binary: str = "rubberband"
     # R3 engine. Dropped automatically (with a warning) if the installed
     # Rubber Band is 2.x and doesn't know the flag.

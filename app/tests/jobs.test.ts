@@ -10,9 +10,9 @@ describe('JobTracker', () => {
     expect(t.get('a')).toMatchObject({ status: 'processing', path: '/z/x.zip', stage: 'extract' })
     t.handleEvent({
       event: 'job_done', job_id: 'a', zip_id: 3, zip: 'x.zip', status: 'done',
-      counts: { oneshots: 4, loops: 9 }, result: null, error: null,
+      counts: { oneshots: 4, loops: 9, events: 2 }, result: null, error: null,
     })
-    expect(t.get('a')).toMatchObject({ status: 'done', zip_id: 3, pct: 1, message: '4 one-shots, 9 loops' })
+    expect(t.get('a')).toMatchObject({ status: 'done', zip_id: 3, pct: 1, message: '4 one-shots, 9 loops, 2 FX/fills' })
     expect(t.isActive('a')).toBe(false)
     expect(snapshots.length).toBeGreaterThan(0)
   })
@@ -21,7 +21,7 @@ describe('JobTracker', () => {
     const t = new JobTracker()
     t.add('a', 'process_zip', 'a.zip')
     t.add('b', 'process_zip', 'b.zip')
-    t.handleEvent({ event: 'job_done', job_id: 'a', zip_id: 1, zip: 'a.zip', status: 'skipped', counts: { oneshots: 0, loops: 0 }, result: null, error: null })
+    t.handleEvent({ event: 'job_done', job_id: 'a', zip_id: 1, zip: 'a.zip', status: 'skipped', counts: { oneshots: 0, loops: 0, events: 0 }, result: null, error: null })
     t.handleEvent({ event: 'progress', job_id: 'a', zip: 'a.zip', stage: 'tempo', pct: 0.2, message: '' })
     expect(t.get('a')?.status).toBe('skipped')
     t.engineCrashed()

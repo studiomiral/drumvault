@@ -68,7 +68,7 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete all ${z.oneshots + z.loops} samples of ${z.source_code} from the library? The zip itself is not touched.`)) return
+    if (!window.confirm(`Delete all ${z.oneshots + z.loops + z.events} samples of ${z.source_code} from the library? The zip itself is not touched.`)) return
     await attempt(() => api.deleteZip(zipId))
     onClose()
   }

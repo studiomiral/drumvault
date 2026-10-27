@@ -117,6 +117,7 @@ export interface LibraryFacets {
 export interface ZipListItem extends ZipRow {
   oneshots: number
   loops: number
+  events: number
 }
 
 export interface ZipDetail {

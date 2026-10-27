@@ -412,7 +412,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
     const u = unit(e.altKey)
     const start = Math.max(0, Math.floor(xToBeat(x, px, sx) / u) * u)
     const box = laneAt(boxes, y)
-    const beats = sample?.kind === 'loop' ? (sample.bars ?? 1) * BEATS_PER_BAR : 4 * BEATS_PER_BAR
+    const beats = sample && sample.kind !== 'oneshot' ? (sample.bars ?? 1) * BEATS_PER_BAR : 4 * BEATS_PER_BAR
     return { start, box, beats }
   }
 

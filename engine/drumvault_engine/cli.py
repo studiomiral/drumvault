@@ -70,7 +70,7 @@ def cmd_process(args) -> int:
             t, k = r.analysis.tempo, r.analysis.key
             line += (f"  {t.bpm:g} BPM (conf {t.confidence:.2f})  key {k.label or 'NoKey'}"
                      f"{'?' if k.uncertain else ''}")
-        line += f"  one-shots {r.counts.oneshots}  loops {r.counts.loops}"
+        line += f"  one-shots {r.counts.oneshots}  loops {r.counts.loops}  fx/fills {r.counts.events}"
         print(line)
         for w in r.warnings:
             print(f"    ! {w}")
@@ -108,7 +108,7 @@ def cmd_delete(args) -> int:
 
 def cmd_rebuild(args) -> int:
     for r in pipeline.rebuild_loops(_settings(args), ctx=_progress("rebuild")):
-        print(f"{r.source_code}  {r.file_name}: {r.status}  loops {r.counts.loops}")
+        print(f"{r.source_code}  {r.file_name}: {r.status}  loops {r.counts.loops}  fx/fills {r.counts.events}")
     return 0
 
 
@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--keep-files", action="store_true")
     p.set_defaults(fn=cmd_delete)
 
-    p = sub.add_parser("rebuild-loops", help="re-stretch all loops at the library BPM")
+    p = sub.add_parser("rebuild-loops", help="re-stretch all loops and FX/fills at the library BPM")
     common(p, True)
     p.set_defaults(fn=cmd_rebuild)
 

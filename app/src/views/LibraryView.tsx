@@ -6,7 +6,7 @@ import { Button, Chip, cx, Empty, inputClass, Segmented } from '../components/ui
 import { VirtualList } from '../components/VirtualList'
 import { Waveform } from '../components/Waveform'
 import { ALL_KEYS, expandCompatible } from '../lib/camelot'
-import { CATEGORY_LABELS, formatBpm, formatDuration } from '../lib/format'
+import { CATEGORY_LABELS, EVENT_CATEGORIES, formatBpm, formatDuration, KIND_LABELS, lengthLabel } from '../lib/format'
 import { attempt, useApp } from '../store/app'
 import { useLibrary } from '../store/library'
 import type { LibraryFacets, SampleListItem, SampleSort } from '../types/api'
@@ -15,6 +15,7 @@ import type { Category, SampleKind } from '../types/engine'
 const ROW = 46
 const ONESHOT_ORDER: Category[] = ['kick', 'snare', 'clap', 'hat_closed', 'hat_open', 'ride', 'cymbal', 'shaker', 'perc']
 const LOOP_ORDER: Category[] = ['snare', 'clap', 'hat', 'hat_closed', 'hat_open', 'ride', 'shaker', 'perc', 'top', 'groove', 'drums']
+const ORDER: Record<SampleKind, Category[]> = { oneshot: ONESHOT_ORDER, loop: LOOP_ORDER, event: EVENT_CATEGORIES }
 
 export function LibraryView() {
   const { libraryVersion } = useApp()
@@ -123,7 +124,8 @@ export function LibraryView() {
                value={search} onChange={(e) => setSearch(e.target.value)} />
         <Segmented<'all' | SampleKind> value={filter.kind ?? 'all'}
                    onChange={(v) => setFilter({ kind: v === 'all' ? null : v, categories: [] })}
-                   options={[{ value: 'all', label: 'All' }, { value: 'oneshot', label: 'One-shots' }, { value: 'loop', label: 'Loops' }]} />
+                   options={[{ value: 'all', label: 'All' },
+                             ...(['oneshot', 'loop', 'event'] as const).map((k) => ({ value: k, label: KIND_LABELS[k] }))]} />
         <button onClick={() => setFilter({ favoritesOnly: !filter.favoritesOnly })}
                 className={cx('flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-[12px]',
                   filter.favoritesOnly ? 'border-accent text-accent bg-accent-soft' : 'border-line text-muted hover:text-text')}>
@@ -153,7 +155,7 @@ export function LibraryView() {
             <div className="shrink-0 flex items-center gap-3 px-4 h-10 bg-brand-soft border-b border-line text-[12.5px]">
               <span className="text-accent font-medium">Similar to</span>
               <span className="truncate font-medium">{similarTo.name}</span>
-              <span className="text-faint">same category{items[0]?.kind === 'loop' ? ' and length' : ''}, most similar first</span>
+              <span className="text-faint">same category{items[0] && items[0].kind !== 'oneshot' ? ' and length' : ''}, most similar first</span>
               <div className="flex-1" />
               <Button variant="ghost" onClick={() => findSimilar(null)}>Back to the list</Button>
             </div>
@@ -235,7 +237,7 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
         {s.key_label ?? <span className="text-faint">NoKey</span>}
         {s.key_camelot && <span className="text-faint ml-1.5">{s.key_camelot}</span>}
       </span>
-      <span className="w-[64px] text-[12px] text-muted">{s.kind === 'loop' ? `${s.bars} bar${s.bars === 1 ? '' : 's'}` : 'one-shot'}</span>
+      <span className="w-[64px] text-[12px] text-muted">{lengthLabel(s)}</span>
       <button onClick={onFavorite} className={cx('shrink-0', s.favorite ? 'text-accent' : 'text-faint hover:text-muted')}
               title="Favourite (F)">
         <IconStar className="w-4 h-4" filled={!!s.favorite} />
@@ -257,7 +259,7 @@ function SelectedBar({ s, onTags, onSimilar }: { s: SampleListItem; onTags: (tag
     <div className="h-12 shrink-0 border-t border-line bg-panel flex items-center gap-3 px-4 text-[12px]">
       <span className="font-medium truncate max-w-[40%] select-text" title={s.rel_path}>{s.name}</span>
       <span className="text-muted">
-        {s.kind === 'loop' ? `${formatBpm(s.bpm)} BPM · ${s.bars} bars` : 'one-shot'} · {s.channels === 1 ? 'mono' : 'stereo'}
+        {s.kind !== 'oneshot' ? `${formatBpm(s.bpm)} BPM · ${lengthLabel(s)}` : 'one-shot'} · {s.channels === 1 ? 'mono' : 'stereo'}
       </span>
       <div className="flex-1" />
       <input className={cx(inputClass, 'w-56 h-6 text-[12px]')} placeholder="Tags (Enter to save)" value={tags}
@@ -288,8 +290,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
   for (const c of facets.categories) {
     if (!filter.kind || c.kind === filter.kind) catCounts.set(c.category, (catCounts.get(c.category) ?? 0) + c.count)
   }
-  const order = filter.kind === 'loop' ? LOOP_ORDER : filter.kind === 'oneshot' ? ONESHOT_ORDER
-    : [...new Set([...ONESHOT_ORDER, ...LOOP_ORDER])]
+  const order = filter.kind ? ORDER[filter.kind] : [...new Set([...ONESHOT_ORDER, ...LOOP_ORDER, ...EVENT_CATEGORIES])]
   const keyCounts = new Map(facets.keys.map((k) => [k.label ?? 'NoKey', k.count]))
   const selectedKeys = filter.keys ?? []
   const implied = filter.compatible ? expandCompatible(selectedKeys.filter((k) => k !== 'NoKey')) : []
@@ -354,7 +355,7 @@ function FilterSidebar({ facets, onReset, filtered }: { facets: LibraryFacets | 
 
       {filter.kind !== 'oneshot' && facets.bars.length > 0 && (
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-2">Loop length</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-2">Length</div>
           <div className="flex flex-wrap gap-1">
             {facets.bars.map((b) => (
               <button key={b} onClick={() => setFilter({ bars: toggle(filter.bars, b) })}

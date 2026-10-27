@@ -12,6 +12,9 @@ from typing import Any, Iterator
 
 SCHEMA_VERSION = 1
 
+# A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
+Kinds = str | tuple[str, ...] | None
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
@@ -168,11 +171,10 @@ class LibraryDB:
         self.conn.execute("DELETE FROM stems WHERE zip_id = ?", (zip_id,))
 
     # ---- samples -----------------------------------------------------------
-    def samples_for_zip(self, zip_id: int, kind: str | None = None) -> list[sqlite3.Row]:
-        if kind:
-            return self.conn.execute("SELECT * FROM samples WHERE zip_id = ? AND kind = ? ORDER BY id",
-                                     (zip_id, kind)).fetchall()
-        return self.conn.execute("SELECT * FROM samples WHERE zip_id = ? ORDER BY id", (zip_id,)).fetchall()
+    def samples_for_zip(self, zip_id: int, kind: Kinds = None) -> list[sqlite3.Row]:
+        sql, args = _kind_filter(kind)
+        return self.conn.execute(f"SELECT * FROM samples WHERE zip_id = ?{sql} ORDER BY id",
+                                 (zip_id, *args)).fetchall()
 
     def all_samples(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM samples ORDER BY id").fetchall()
@@ -195,26 +197,29 @@ class LibraryDB:
             self._update("samples", sample_id, fields)
         return True
 
-    def delete_samples(self, zip_id: int, kind: str | None = None) -> None:
-        if kind:
-            self.conn.execute("DELETE FROM samples WHERE zip_id = ? AND kind = ?", (zip_id, kind))
-        else:
-            self.conn.execute("DELETE FROM samples WHERE zip_id = ?", (zip_id,))
+    def delete_samples(self, zip_id: int, kind: Kinds = None) -> None:
+        sql, args = _kind_filter(kind)
+        self.conn.execute(f"DELETE FROM samples WHERE zip_id = ?{sql}", (zip_id, *args))
 
-    def user_meta(self, zip_id: int, kind: str | None = None) -> dict[tuple, dict[str, Any]]:
+    def user_meta(self, zip_id: int, kind: Kinds = None) -> dict[tuple, dict[str, Any]]:
         """favorite/rating/tags of a zip's samples, keyed for matching after reprocessing."""
+        where, args = _kind_filter(kind, "s.kind")
         sql = ("SELECT s.kind, s.bars, s.source_offset_s, s.favorite, s.rating, s.tags, st.file_name "
-               "FROM samples s JOIN stems st ON st.id = s.stem_id WHERE s.zip_id = ?")
-        args: list[Any] = [zip_id]
-        if kind:
-            sql += " AND s.kind = ?"
-            args.append(kind)
+               f"FROM samples s JOIN stems st ON st.id = s.stem_id WHERE s.zip_id = ?{where}")
         out = {}
-        for r in self.conn.execute(sql, args):
+        for r in self.conn.execute(sql, (zip_id, *args)):
             if r["favorite"] or r["rating"] is not None or r["tags"]:
                 out[match_key(r["file_name"], r["kind"], r["bars"], r["source_offset_s"])] = {
                     "favorite": r["favorite"], "rating": r["rating"], "tags": r["tags"]}
         return out
+
+
+def _kind_filter(kind: Kinds, column: str = "kind") -> tuple[str, tuple[str, ...]]:
+    """SQL condition (with leading AND) for one kind, several kinds or none."""
+    if not kind:
+        return "", ()
+    kinds = (kind,) if isinstance(kind, str) else tuple(kind)
+    return f" AND {column} IN ({', '.join('?' for _ in kinds)})", kinds
 
 
 def match_key(stem_file: str, kind: str, bars: int | None, offset_s: float | None) -> tuple:

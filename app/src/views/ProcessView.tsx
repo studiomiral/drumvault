@@ -193,6 +193,7 @@ function ZipTable({ zips, selected, onSelect }: {
             <th className="font-medium px-3 py-2 w-20">Key</th>
             <th className="font-medium px-3 py-2 w-24 text-right">One-shots</th>
             <th className="font-medium px-3 py-2 w-20 text-right">Loops</th>
+            <th className="font-medium px-3 py-2 w-24 text-right">FX & fills</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-line">
@@ -216,6 +217,7 @@ function ZipTable({ zips, selected, onSelect }: {
                 </td>
                 <td className="px-3 py-2 text-muted text-right tabular-nums">{z.oneshots}</td>
                 <td className="px-3 py-2 text-muted text-right tabular-nums">{z.loops}</td>
+                <td className="px-3 py-2 text-muted text-right tabular-nums">{z.events}</td>
               </tr>
             )
           })}

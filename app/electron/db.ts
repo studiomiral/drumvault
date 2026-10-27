@@ -23,7 +23,8 @@ export function peaksPath(library: string, sampleId: number): string {
 const ZIP_LIST_SQL = `
   SELECT z.*,
          COALESCE(SUM(s.kind = 'oneshot'), 0) AS oneshots,
-         COALESCE(SUM(s.kind = 'loop'), 0) AS loops
+         COALESCE(SUM(s.kind = 'loop'), 0) AS loops,
+         COALESCE(SUM(s.kind = 'event'), 0) AS events
   FROM zips z LEFT JOIN samples s ON s.zip_id = z.id
   GROUP BY z.id`
 
@@ -177,7 +178,7 @@ export class LibraryReader {
       bars: this.all<{ bars: number }>('SELECT DISTINCT bars FROM samples WHERE bars IS NOT NULL ORDER BY bars').map((r) => r.bars),
       zips: this.all(`SELECT z.id, z.source_code, z.file_name, COUNT(s.id) AS count
                       FROM zips z JOIN samples s ON s.zip_id = z.id GROUP BY z.id ORDER BY z.id`),
-      loopBpms: this.all<{ bpm: number }>("SELECT DISTINCT bpm FROM samples WHERE kind = 'loop' ORDER BY bpm").map((r) => r.bpm),
+      loopBpms: this.all<{ bpm: number }>("SELECT DISTINCT bpm FROM samples WHERE bpm IS NOT NULL ORDER BY bpm").map((r) => r.bpm),
     }
   }
 

@@ -18,6 +18,8 @@ from drumvault_engine.schemas import Overrides
 
 OS_RE = re.compile(r"^One-Shots/[A-Za-z-]+/OS_[A-Za-z]+_(?:[A-G][#b]?m?|NoKey)_S\d{4}-[a-z0-9-]+_\d{2}\.wav$")
 LP_RE = re.compile(r"^Loops/[A-Za-z-]+/LP_[A-Za-z]+_\d+(?:\.\d+)?_(?:[A-G][#b]?m?|NoKey)_S\d{4}-[a-z0-9-]+_\d+bar_\d{2}\.wav$")
+EV_RE = re.compile(r"^(?:FX/[A-Za-z]+/FX|Fills/[A-Za-z-]+/FL)_[A-Za-z]+_\d+(?:\.\d+)?_(?:[A-G][#b]?m?|NoKey)_"
+                   r"S\d{4}-[a-z0-9-]+_\d+bar_\d{2}\.wav$")
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +51,7 @@ def test_all_fixtures_processed(library, fixtures):
         assert r.analysis.tempo.phase_samples == 0
         assert r.analysis.key.label == truth.key
         assert r.counts.oneshots > 0 and r.counts.loops > 0
+        assert r.counts.events == len(truth.events)
     assert [r.source_code for r in library.results.values()] == ["S0001", "S0002", "S0003"]
 
 
@@ -57,7 +60,7 @@ def test_files_and_rows_agree(library, db):
     on_disk = {p.relative_to(library.path).as_posix() for p in library.path.rglob("*.wav")}
     assert {r["rel_path"] for r in rows} == on_disk
     for r in rows:
-        assert OS_RE.match(r["rel_path"]) or LP_RE.match(r["rel_path"]), r["rel_path"]
+        assert OS_RE.match(r["rel_path"]) or LP_RE.match(r["rel_path"]) or EV_RE.match(r["rel_path"]), r["rel_path"]
         info = sf.info(str(library.path / r["rel_path"]))
         assert info.samplerate == 44100 and info.subtype == "PCM_24"
         assert info.channels == r["channels"]
@@ -171,6 +174,34 @@ def test_identical_bars_dedupe_to_one_loop(library, db, fixtures):
             assert n == expected, (name, stem, bars, n)
 
 
+def test_events_start_on_their_bar_and_dedupe(library, db, fixtures):
+    """Every fill/roll/FX sound occurs twice: one event each, starting on the bar line where
+    the sound starts in the source, whole bars long at the library BPM."""
+    bar = loops.bar_length(44100, 124.0)
+    for name, truth in fixtures.truths.items():
+        rows = _samples(db, library, name, "event")
+        assert sorted(_stem_of(db, r) for r in rows) == sorted(truth.events), name
+        for r in rows:
+            start_bar, lo, hi = truth.events[_stem_of(db, r)]
+            src_bar = r["source_offset_s"] / (60.0 / truth.bpm * 4)
+            assert src_bar == pytest.approx(start_bar, abs=1e-3), (name, r["rel_path"], src_bar)
+            assert lo <= r["bars"] <= hi, (r["rel_path"], r["bars"])
+            assert sf.info(str(library.path / r["rel_path"])).frames == r["bars"] * bar
+            assert r["bpm"] == 124.0 and "_124_" in r["rel_path"]
+            assert r["peak_db"] < 0 and r["gain_applied_db"] == pytest.approx(-1.0 - r["peak_db"], abs=1e-6)
+
+
+def test_stretched_snare_roll_is_on_the_grid(library, db):
+    """122 BPM roll stretched to 124: its 8th-note hits land within 1 ms of the new grid."""
+    (r,) = [r for r in _samples(db, library, "night_drive", "event", "roll")]
+    data, sr = sf.read(str(library.path / r["rel_path"]), always_2d=True)
+    eighth = 60.0 / 124.0 * sr / 2
+    # 50%: R3's pre-echo ahead of a snare (with the previous hit's tail under it) can reach
+    # ~35% of the attack a millisecond early; the attack itself stays on the grid.
+    err = onset_errors_ms(data.mean(axis=1), sr, np.arange(16) * eighth, rel=0.5, win_ms=8)
+    assert np.max(np.abs(err)) <= 1.0, err
+
+
 def test_one_shot_categories_and_transients(library, db):
     """Acceptance: every one-shot category yields a clean hit (no fade-in, peak in the first 10 ms)."""
     by_cat: dict[str, list] = {}
@@ -225,6 +256,8 @@ def test_stems_table(library, db, fixtures):
                 assert "tempo" in used and "oneshots" in used
             if s.category == "melodic":
                 assert used == ["key"]
+            if s.path in truth.events:
+                assert used == ["events"]
 
 
 def test_peaks_json(library, db):
@@ -301,7 +334,7 @@ def test_delete_zip(small_lib):
     lib = Path(settings.library_path)
     assert list(lib.rglob("*.wav"))
     out = pipeline.delete_zip(settings, r.zip_id)
-    assert out["deleted_samples"] == r.counts.oneshots + r.counts.loops
+    assert out["deleted_samples"] == r.counts.oneshots + r.counts.loops + r.counts.events
     assert not list(lib.rglob("*.wav"))
     with LibraryDB(lib) as db:
         assert db.get_zip(r.zip_id) is None and not db.all_samples()
@@ -317,9 +350,11 @@ def test_rebuild_loops_at_new_bpm(small_lib):
     assert len(results) == 1 and results[0].status == "done"
     assert sorted(p.name for p in (lib / "One-Shots").rglob("*.wav")) == oneshots_before
     loops_now = list((lib / "Loops").rglob("*.wav"))
+    events_now = list((lib / "Fills").rglob("*.wav"))
     assert loops_now and all("_126_" in p.name for p in loops_now)
+    assert len(events_now) == 1 and "_126_" in events_now[0].name
     bar = loops.bar_length(44100, 126.0)
-    for p in loops_now:
+    for p in loops_now + events_now:
         info = sf.info(str(p))
         assert info.frames % bar == 0
 
@@ -328,7 +363,7 @@ def test_max_stretch_exceeded_keeps_one_shots(fixtures, tmp_path):
     settings = Settings(library_path=str(tmp_path / "lib"), library_bpm=100.0)
     r = pipeline.process_zip(fixtures.zip("deep_groove"), settings)
     assert r.status == "needs_review"
-    assert r.counts.loops == 0 and r.counts.oneshots > 0
+    assert r.counts.loops == 0 and r.counts.events == 0 and r.counts.oneshots > 0
     assert any("max stretch" in w for w in r.warnings)
 
 

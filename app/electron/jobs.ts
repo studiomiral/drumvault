@@ -102,11 +102,11 @@ export class JobTracker {
   }
 }
 
-function doneMessage(status: string, counts: { oneshots: number; loops: number }): string {
+function doneMessage(status: string, counts: { oneshots: number; loops: number; events: number }): string {
   switch (status) {
     case 'skipped': return 'Already in the library'
     case 'cancelled': return 'Cancelled'
     case 'error': return 'Failed'
-    default: return `${counts.oneshots} one-shots, ${counts.loops} loops`
+    default: return `${counts.oneshots} one-shots, ${counts.loops} loops, ${counts.events} FX/fills`
   }
 }

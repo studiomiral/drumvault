@@ -217,7 +217,8 @@ class RpcServer:
             elif job.method == "rebuild_loops":
                 rs = pipeline.rebuild_loops(settings, ctx=ctx)
                 counts = SampleCounts(oneshots=sum(r.counts.oneshots for r in rs),
-                                      loops=sum(r.counts.loops for r in rs))
+                                      loops=sum(r.counts.loops for r in rs),
+                                      events=sum(r.counts.events for r in rs))
                 status = "done" if all(r.status in ("done", "needs_review") for r in rs) else "needs_review"
                 self._done(job, status, None, counts, [r.model_dump(mode="json") for r in rs])
         except pipeline.Cancelled:

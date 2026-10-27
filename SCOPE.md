@@ -14,6 +14,7 @@
 2. Automatically keep only **drum stems**, analyse them, and write finished samples into **one target library folder**:
    - **One-shots** (unstretched) from single-sound stems: kick, snare, clap, hats, rides, perc, etc.
    - **Loops**, time-stretched to a single library BPM: hats, perc, shakers, tops, grooves, full drum loops.
+   - **FX & fills** ("events"), time-stretched like loops and cut on the bar grid: drum fills, snare rolls, risers, downlifters, impacts, sweeps, atmos.
 3. **BPM** is detected on the zip's **kick stem** and applied to every stem in that zip.
 4. Every sample is labeled with the **source track key**, detected from the zip's melodic stems (which are then discarded).
 5. Normalize, deduplicate, name, and index all samples in a searchable library.
@@ -21,7 +22,7 @@
 
 ## 2. Non-goals (explicitly out of scope)
 
-- Melodic samples (bass, synths, vocals, FX, risers). Melodic stems are only used for key detection, never exported.
+- Melodic samples (bass, synths, vocals). Melodic stems are only used for key detection, never exported. Vocals (including "Vocal FX") are ignored.
 - Effects, automation, MIDI, recording, plugins (VST/AU) in the DAW.
 - Real-time time-stretching or pitch-shifting in the DAW. The DAW plays samples at native speed at the library BPM.
 - Windows/Linux support, auto-updates, code signing, notarization, multi-user anything.
@@ -110,7 +111,7 @@ drumvault/
 zip → extract to temp dir → discover audio files → classify stems
     → detect BPM + grid (kick stem) → detect key (melodic stems)
     → one-shots from ORIGINAL (unstretched) single-sound stems
-    → stretch drum stems to library BPM → slice loops on the grid
+    → stretch drum + event stems to library BPM → slice loops / cut events on the grid
     → filter silence → dedupe → normalize → write files → peaks → index in DB
     → clean temp dir
 ```
@@ -129,10 +130,19 @@ A zip is identified by a **SHA-1 of the zip file**. Re-dropping an already proce
 
 ### 5.3 Stem classification (`classify.py`)
 
-**Step 1 — filename rules** (case-insensitive, word-boundary-aware, checked in this priority order so "Bass Drum" isn't caught as bass):
+**Step 1 — filename rules** (case-insensitive, word-boundary-aware, checked in this priority order so "Bass Drum" isn't caught as bass, "Snare Roll" is a roll and "Vocal FX" stays ignored):
 
 | Category | Keywords |
 |---|---|
+| `ignore` (vocals, checked first) | vox, vocal, vocals, voice, acapella |
+| `roll` | roll, snare roll, drumroll, snare build (whole word: "Rolling Bass" is not a roll) |
+| `fill` | fill, drum fill (whole word) |
+| `fx_riser` | riser, rise, uplifter, upsweep, build up |
+| `fx_downlifter` | downlifter, downsweep |
+| `fx_impact` | impact, sub drop, boom, explosion |
+| `fx_sweep` | sweep, whoosh, noise, white noise, reverse (so "Reverse Crash" is FX, not a cymbal) |
+| `fx_atmos` | atmos, atmosphere, ambience, texture |
+| `fx` | fx, sfx, effect, effects |
 | `kick` | kick, kik, bd, bassdrum, bass drum |
 | `clap` | clap, cp, handclap |
 | `snare` | snare, sd, rim, rimshot |
@@ -148,7 +158,7 @@ A zip is identified by a **SHA-1 of the zip file**. Re-dropping an already proce
 | `drums` | drums, drum, drum bus, drumbus, beat, loop (only if no melodic keyword) |
 | `melodic` (key only) | bass, sub, synth, lead, pad, chord, chords, keys, piano, stab, pluck, arp, organ, string, music, melody |
 | `full_mix` (key fallback) | master, mix, full, mixdown |
-| `ignore` | vox, vocal, vocals, voice, fx, sfx, riser, sweep, uplifter, downlifter, impact, noise, atmos, reverse, reverb return, send |
+| `ignore` | reverb return, send |
 
 **Step 2 — audio fallback** for files that match no rule: compute harmonic/percussive energy ratio (librosa HPSS), spectral flatness, and onset density. Clearly percussive → `drums` (or a more specific category if the spectral centroid strongly suggests kick or hats); clearly harmonic → `melodic`; otherwise `ignore`. Mark these stems `auto_classified = true` so the UI can highlight them for review.
 
@@ -226,6 +236,20 @@ Steps:
 4. Optional per-stem cap: max loops per length (default 6), keeping the most mutually distinct ones (greedy farthest-point selection on fingerprints).
 5. Loops are cut exactly on the grid with **no fades** (they must loop seamlessly). Only if the first sample is not near zero, apply a 1 ms fade-in to prevent a click; never fade the end.
 
+### 5.8a Events: fills, rolls and FX (`events.py`)
+
+Stems in the categories `fill`, `roll` and `fx_*` / `fx` are mostly silent with a sound every few bars (a fill before the drop, an 8-bar riser, a downlifter after it). Each sound becomes one sample that starts on the bar line where it begins, so it drops onto the timeline exactly where it sat in the source track.
+
+1. The whole stem is stretched to the library BPM first (as for loops, §5.7). If the stretch exceeds the max stretch setting, events are skipped like loops.
+2. A beat is *active* if its RMS is within −50 dB of the stem's peak (and above −70 dBFS). Active beats separated by ≤ 2 quieter beats form one region.
+3. The event starts on the bar line at or before the region's first sample above that level. A start within **30 ms before a bar line** belongs to that bar (Rubber Band smears ~15 ms of pre-ring ahead of a transient; early flams belong to the bar).
+4. The event runs for **whole bars, tail included** (an 8-bar roll that rings into the next bar is a 9-bar sample), so it works as an audio clip on the grid. If a neighbouring event shares its first or last bar, that part is silenced with a 5 ms fade.
+5. Regions longer than 32 bars (atmos beds) are cut into 8-bar chunks.
+6. Skip events quieter than −30 dB relative to the stem's loudest. **Dedupe**: same fingerprint as loops (per bar), only events of equal length compared, cosine > 0.96 = duplicate, first occurrence kept. Cap: 6 per stem (farthest-point selection).
+7. Peak normalize to −1.0 dBFS. Key label, BPM and bar count are stored like loops.
+
+Events are not one-shots: they are time-stretched, because they must line up with the bar grid at the library BPM.
+
 ### 5.9 Normalization (`normalize.py`)
 
 - One-shots: peak normalize to **−0.3 dBFS**.
@@ -246,6 +270,10 @@ Folder layout in the target library folder:
 │   ├── Kicks/ Snares/ Claps/ Hats-Closed/ Hats-Open/ Rides/ Cymbals/ Shakers/ Perc/
 ├── Loops/
 │   ├── Snares-Claps/ Hats/ Rides/ Shakers/ Perc/ Tops/ Grooves/ Full-Drums/
+├── Fills/
+│   ├── Drum-Fills/ Snare-Rolls/
+├── FX/
+│   ├── Risers/ Downlifters/ Impacts/ Sweeps/ Atmos/ Other/
 └── .drumvault/
     ├── library.sqlite
     └── peaks/<sample_id>.json
@@ -254,6 +282,8 @@ Folder layout in the target library folder:
 Filenames:
 - One-shot: `OS_Kick_Am_S0037-deep-groove_01.wav`
 - Loop: `LP_Top_124_Am_S0037-deep-groove_4bar_03.wav`
+- Fill / roll: `FL_Roll_124_Am_S0037-deep-groove_9bar_01.wav`
+- FX: `FX_Riser_124_Am_S0037-deep-groove_8bar_01.wav`
 - Unknown key: `NoKey` in place of the key.
 
 Keeping the database inside the library folder makes the library self-contained and portable (back it up, move it to another drive).
@@ -289,7 +319,7 @@ CREATE TABLE samples (
   id INTEGER PRIMARY KEY,
   zip_id INTEGER REFERENCES zips(id) ON DELETE CASCADE,
   stem_id INTEGER REFERENCES stems(id) ON DELETE CASCADE,
-  kind TEXT,                        -- oneshot|loop
+  kind TEXT,                        -- oneshot|loop|event
   category TEXT,                    -- kick|snare|clap|hat_closed|...|top|groove|drums
   rel_path TEXT UNIQUE,             -- relative to the library root
   bpm REAL,                         -- library BPM for loops, NULL for one-shots
@@ -326,7 +356,7 @@ Reprocessing a zip deletes that zip's samples (files + rows) and regenerates the
 | Dedupe thresholds | one-shots 0.97, loops 0.96 |
 | Rubber Band options | `--fine` |
 
-**Changing the library BPM** requires reprocessing loops (one-shots stay). The UI offers a "Rebuild loops at new BPM" action that reruns stretching and slicing for all zips. The original zips must still be available (store `original_path`; warn if missing).
+**Changing the library BPM** requires reprocessing loops and FX & fills (one-shots stay). The UI offers a "Rebuild loops at new BPM" action that reruns stretching, slicing and event cutting for all zips. The original zips must still be available (store `original_path`; warn if missing).
 
 ### 5.14 RPC protocol (`rpc.py`)
 
@@ -380,7 +410,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 
 ### 6.3 Library view
 
-- Filters: kind (one-shot/loop), category, key (multi-select, plus "compatible keys" via Camelot neighbors), bars, source zip, favorites, and text search on filename/tags.
+- Filters: kind (one-shot / loop / FX & fills), category, key (multi-select, plus "compatible keys" via Camelot neighbors), bars, source zip, favorites, and text search on filename/tags.
 - A virtualized list (thousands of rows): waveform thumbnail from peaks, name, category, key, bars, a favorite star, and a rating.
 - **Audition**: click or Space plays the sample, ↑/↓ moves to the next sample and plays it, Esc stops. Loops repeat while auditioning. When the Arrange transport is playing, an auditioned loop starts on the next bar, in sync.
 - "Find similar" action: nearest neighbors by fingerprint within the same category.
@@ -401,6 +431,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 
 **Clip types**
 1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats.
+   FX & fills (events) also become audio clips: placed at a bar, they play once over their length; extending one repeats it like a loop.
 2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4".
 
 **Editing**

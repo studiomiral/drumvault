@@ -21,7 +21,7 @@ def compute_peaks(data: np.ndarray, n_points: int) -> list[list[float]]:
 
 
 def peaks_for(data: np.ndarray, sr: int, kind: str, bars: int | None, th) -> dict:
-    if kind == "loop":
+    if kind in ("loop", "event"):
         n = th.peaks_loop_per_bar * int(bars or 1)
     else:
         n = int(np.ceil(len(data) / sr * th.peaks_oneshot_per_second))

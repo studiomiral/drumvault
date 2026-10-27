@@ -1,16 +1,32 @@
-import type { Category } from '../types/engine'
+import type { Category, SampleKind } from '../types/engine'
 
 export const CATEGORY_LABELS: Record<Category, string> = {
   kick: 'Kick', clap: 'Clap', snare: 'Snare', hat: 'Hat', hat_closed: 'Closed hat',
   hat_open: 'Open hat', ride: 'Ride', cymbal: 'Cymbal', shaker: 'Shaker', perc: 'Perc',
-  top: 'Top', groove: 'Groove', drums: 'Full drums', melodic: 'Melodic (key only)',
+  top: 'Top', groove: 'Groove', drums: 'Full drums', fill: 'Drum fill', roll: 'Snare roll',
+  fx_riser: 'Riser', fx_downlifter: 'Downlifter', fx_impact: 'Impact', fx_sweep: 'Sweep',
+  fx_atmos: 'Atmos', fx: 'FX (other)', melodic: 'Melodic (key only)',
   full_mix: 'Full mix (key only)', ignore: 'Ignore',
 }
 
 export const STEM_CATEGORIES: Category[] = [
   'kick', 'clap', 'snare', 'hat', 'hat_closed', 'hat_open', 'ride', 'cymbal', 'shaker', 'perc',
-  'top', 'groove', 'drums', 'melodic', 'full_mix', 'ignore',
+  'top', 'groove', 'drums', 'fill', 'roll', 'fx_riser', 'fx_downlifter', 'fx_impact', 'fx_sweep',
+  'fx_atmos', 'fx', 'melodic', 'full_mix', 'ignore',
 ]
+
+export const EVENT_CATEGORIES: Category[] = [
+  'fill', 'roll', 'fx_riser', 'fx_downlifter', 'fx_impact', 'fx_sweep', 'fx_atmos', 'fx',
+]
+
+export const KIND_LABELS: Record<SampleKind, string> = {
+  oneshot: 'One-shots', loop: 'Loops', event: 'FX & fills',
+}
+
+/** "4 bars" for loops and events, "one-shot" otherwise. */
+export function lengthLabel(s: { kind: SampleKind; bars: number | null }): string {
+  return s.kind === 'oneshot' ? 'one-shot' : `${s.bars} bar${s.bars === 1 ? '' : 's'}`
+}
 
 export function fileName(relPath: string): string {
   const base = relPath.split('/').pop() ?? relPath

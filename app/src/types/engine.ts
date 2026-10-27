@@ -3,13 +3,15 @@
 
 export type Category =
   | "kick" | "clap" | "snare" | "hat" | "hat_closed" | "hat_open" | "ride" | "cymbal"
-  | "shaker" | "perc" | "top" | "groove" | "drums" | "melodic" | "full_mix" | "ignore";
+  | "shaker" | "perc" | "top" | "groove" | "drums" | "fill" | "roll" | "fx_riser" | "fx_downlifter"
+  | "fx_impact" | "fx_sweep" | "fx_atmos" | "fx" | "melodic" | "full_mix" | "ignore";
 
 export type ZipStatus =
   | "queued" | "processing" | "done" | "needs_review" | "error" | "skipped" | "cancelled";
 
-export type SampleKind = "oneshot" | "loop";
-export type StemRole = "tempo" | "key" | "oneshots" | "loops";
+/** event = fill, snare roll or FX: starts on a bar line, plays once (SCOPE.md §5.8a). */
+export type SampleKind = "oneshot" | "loop" | "event";
+export type StemRole = "tempo" | "key" | "oneshots" | "loops" | "events";
 
 // ---------------------------------------------------------------------------
 // Analysis results
@@ -65,6 +67,7 @@ export interface ZipAnalysis {
 export interface SampleCounts {
   oneshots: number;
   loops: number;
+  events: number;
 }
 
 export interface ProcessResult {
@@ -101,12 +104,15 @@ export interface EngineSettings {
   loop_lengths?: Partial<Record<Category, number[]>>;
   max_oneshots_per_stem?: number;
   max_loops_per_length?: number;
+  max_events_per_stem?: number;
   oneshot_peak_dbfs?: number;
   loop_norm_mode?: "peak" | "lufs";
   loop_peak_dbfs?: number;
   loop_lufs_target?: number;
+  event_peak_dbfs?: number;
   oneshot_dedupe_threshold?: number;
   loop_dedupe_threshold?: number;
+  event_dedupe_threshold?: number;
   rubberband_binary?: string;
   rubberband_options?: string[];
   rubberband_r3_flag?: string;

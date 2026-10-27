@@ -11,11 +11,12 @@ from pydantic import BaseModel, Field
 
 Category = Literal[
     "kick", "clap", "snare", "hat", "hat_closed", "hat_open", "ride", "cymbal", "shaker",
-    "perc", "top", "groove", "drums", "melodic", "full_mix", "ignore",
+    "perc", "top", "groove", "drums", "fill", "roll", "fx_riser", "fx_downlifter", "fx_impact",
+    "fx_sweep", "fx_atmos", "fx", "melodic", "full_mix", "ignore",
 ]
 ZipStatus = Literal["queued", "processing", "done", "needs_review", "error", "skipped", "cancelled"]
-SampleKind = Literal["oneshot", "loop"]
-StemRole = Literal["tempo", "key", "oneshots", "loops"]
+SampleKind = Literal["oneshot", "loop", "event"]
+StemRole = Literal["tempo", "key", "oneshots", "loops", "events"]
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ class ZipAnalysis(BaseModel):
 class SampleCounts(BaseModel):
     oneshots: int = 0
     loops: int = 0
+    events: int = 0
 
 
 class ProcessResult(BaseModel):

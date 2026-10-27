@@ -20,12 +20,15 @@ export const ENGINE_DEFAULTS: Required<Omit<EngineOptions, 'thresholds' | 'rubbe
   },
   max_oneshots_per_stem: 4,
   max_loops_per_length: 6,
+  max_events_per_stem: 6,
   oneshot_peak_dbfs: -0.3,
   loop_norm_mode: 'peak',
   loop_peak_dbfs: -1.0,
   loop_lufs_target: -14.0,
+  event_peak_dbfs: -1.0,
   oneshot_dedupe_threshold: 0.97,
   loop_dedupe_threshold: 0.96,
+  event_dedupe_threshold: 0.96,
   workers: 4,
 }
 

@@ -70,15 +70,15 @@ export function SettingsView() {
             <p className="text-faint text-[12px] ml-[192px] -mt-0.5">
               Changing this switches to another library; it doesn't move the current one.
             </p>
-            <Field label="Library BPM" hint="loops are stretched to this tempo">{num('library_bpm')}</Field>
+            <Field label="Library BPM" hint="loops and FX/fills are stretched to this tempo">{num('library_bpm')}</Field>
             {staleLoops.length > 0 && (
               <div className="ml-[192px] mt-1 mb-2 rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-[12px] flex items-center gap-3">
                 <span className="flex-1 text-warn">
-                  The library has loops at {staleLoops.join(', ')} BPM. Rebuild them at {saved.library_bpm} BPM
+                  The library has loops and FX/fills at {staleLoops.join(', ')} BPM. Rebuild them at {saved.library_bpm} BPM
                   (one-shots stay; the original zips must still exist).
                 </span>
                 <Button disabled={dirty || engine.state !== 'ready'} onClick={() => {
-                  if (window.confirm(`Rebuild all loops at ${saved.library_bpm} BPM? This reprocesses every zip.`)) {
+                  if (window.confirm(`Rebuild all loops and FX/fills at ${saved.library_bpm} BPM? This reprocesses every zip.`)) {
                     void attempt(() => api.rebuildLoops())
                     useApp.getState().setView('process')
                   }
@@ -136,6 +136,7 @@ export function SettingsView() {
             <SectionTitle>Selection</SectionTitle>
             <Field label="One-shots per stem">{num('max_oneshots_per_stem')}</Field>
             <Field label="Loops per stem & length">{num('max_loops_per_length')}</Field>
+            <Field label="FX & fills per stem">{num('max_events_per_stem')}</Field>
             <Field label="Duplicate threshold" hint="one-shots / loops; higher keeps more variations">
               {num('oneshot_dedupe_threshold', 0.005)}{num('loop_dedupe_threshold', 0.005)}
             </Field>

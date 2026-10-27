@@ -15,10 +15,17 @@ LOOP_FOLDERS = {
     "hat_open": "Hats", "ride": "Rides", "shaker": "Shakers", "perc": "Perc", "top": "Tops",
     "groove": "Grooves", "drums": "Full-Drums",
 }
+EVENT_FOLDERS = {
+    "fill": "Fills/Drum-Fills", "roll": "Fills/Snare-Rolls", "fx_riser": "FX/Risers",
+    "fx_downlifter": "FX/Downlifters", "fx_impact": "FX/Impacts", "fx_sweep": "FX/Sweeps",
+    "fx_atmos": "FX/Atmos", "fx": "FX/Other",
+}
 CATEGORY_LABELS = {
     "kick": "Kick", "snare": "Snare", "clap": "Clap", "hat": "Hat", "hat_closed": "HatClosed",
     "hat_open": "HatOpen", "ride": "Ride", "cymbal": "Cymbal", "shaker": "Shaker",
-    "perc": "Perc", "top": "Top", "groove": "Groove", "drums": "Drums",
+    "perc": "Perc", "top": "Top", "groove": "Groove", "drums": "Drums", "fill": "Fill",
+    "roll": "Roll", "fx_riser": "Riser", "fx_downlifter": "Downlifter", "fx_impact": "Impact",
+    "fx_sweep": "Sweep", "fx_atmos": "Atmos", "fx": "FX",
 }
 SLUG_MAX = 20
 
@@ -59,4 +66,12 @@ def oneshot_rel_path(category: str, key_label: str, tag: str, index: int) -> str
 def loop_rel_path(category: str, bpm: float, key_label: str, tag: str, bars: int, index: int) -> str:
     folder = LOOP_FOLDERS[category]
     return (f"Loops/{folder}/LP_{CATEGORY_LABELS[category]}_{format_bpm(bpm)}_{key_label}_"
+            f"{tag}_{bars}bar_{index:02d}.wav")
+
+
+def event_rel_path(category: str, bpm: float, key_label: str, tag: str, bars: int, index: int) -> str:
+    """Fills and rolls get FL_, FX get FX_: `FX/Risers/FX_Riser_124_Am_S0037-deep-groove_8bar_01.wav`."""
+    folder = EVENT_FOLDERS[category]
+    prefix = "FL" if category in ("fill", "roll") else "FX"
+    return (f"{folder}/{prefix}_{CATEGORY_LABELS[category]}_{format_bpm(bpm)}_{key_label}_"
             f"{tag}_{bars}bar_{index:02d}.wav")

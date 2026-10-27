@@ -5,7 +5,7 @@ import { IconPlay, IconStop } from '../components/icons'
 import { cx, inputClass, Segmented } from '../components/ui'
 import { VirtualList } from '../components/VirtualList'
 import { ALL_KEYS } from '../lib/camelot'
-import { CATEGORY_LABELS } from '../lib/format'
+import { CATEGORY_LABELS, EVENT_CATEGORIES, lengthLabel } from '../lib/format'
 import { useApp } from '../store/app'
 import type { SampleListItem } from '../types/api'
 import type { Category, SampleKind } from '../types/engine'
@@ -38,7 +38,8 @@ export function LibraryPanel() {
 
   const cats = kind === 'oneshot'
     ? ['kick', 'snare', 'clap', 'hat_closed', 'hat_open', 'ride', 'cymbal', 'shaker', 'perc']
-    : ['snare', 'clap', 'hat', 'hat_closed', 'hat_open', 'ride', 'shaker', 'perc', 'top', 'groove', 'drums']
+    : kind === 'event' ? EVENT_CATEGORIES
+      : ['snare', 'clap', 'hat', 'hat_closed', 'hat_open', 'ride', 'shaker', 'perc', 'top', 'groove', 'drums']
 
   return (
     <aside className="w-[300px] shrink-0 border-l border-line bg-panel flex flex-col min-h-0">
@@ -48,7 +49,8 @@ export function LibraryPanel() {
         <Segmented<SampleKind | 'all'> value={kind} onChange={(v) => {
           setKind(v)
           setCategory('')
-        }} options={[{ value: 'loop', label: 'Loops' }, { value: 'oneshot', label: 'One-shots' }, { value: 'all', label: 'All' }]} />
+        }} options={[{ value: 'loop', label: 'Loops' }, { value: 'oneshot', label: 'One-shots' },
+                     { value: 'event', label: 'FX & fills' }, { value: 'all', label: 'All' }]} />
         <div className="flex gap-2">
           <select className={cx(inputClass, 'flex-1 min-w-0')} value={category} onChange={(e) => setCategory(e.target.value as Category)}>
             <option value="">All categories</option>
@@ -82,7 +84,7 @@ export function LibraryPanel() {
             <div className="flex-1 min-w-0">
               <div className="truncate text-[12px]" title={s.name}>{s.name}</div>
               <div className="text-[10.5px] text-faint">
-                {CATEGORY_LABELS[s.category]} · {s.key_label ?? 'NoKey'}{s.kind === 'loop' ? ` · ${s.bars} bar${s.bars === 1 ? '' : 's'}` : ''}
+                {CATEGORY_LABELS[s.category]} · {s.key_label ?? 'NoKey'}{s.kind !== 'oneshot' ? ` · ${lengthLabel(s)}` : ''}
               </div>
             </div>
           </div>

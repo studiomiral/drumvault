@@ -8,7 +8,7 @@ const cache = new Map<string, PeakPoints | null>()
 const pending = new Set<string>()
 const listeners = new Set<() => void>()
 
-/** Points per loop bar / per one-shot. */
+/** Points per loop or event bar / per one-shot. */
 const PER_BAR = 96
 const ONESHOT = 64
 
@@ -17,7 +17,7 @@ export function clipPeaks(s: SampleRef): PeakPoints | null | undefined {
   if (hit !== undefined || s.id == null) return hit
   if (!pending.has(s.relPath)) {
     pending.add(s.relPath)
-    const n = s.kind === 'loop' ? (s.bars ?? 1) * PER_BAR : ONESHOT
+    const n = s.kind !== 'oneshot' ? (s.bars ?? 1) * PER_BAR : ONESHOT
     void api.peaks(s.id, n).then((p) => {
       cache.set(s.relPath, p)
       pending.delete(s.relPath)

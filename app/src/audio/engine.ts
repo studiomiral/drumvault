@@ -5,6 +5,7 @@
 
 import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
+import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
 import { applyLane, createLaneNodes, laneAudible, playEvent, type LaneNodes } from './graph'
 import { eventsInRange, metronomeTicks } from './schedule'
@@ -231,9 +232,10 @@ class PlaybackEngine {
 
   /**
    * Library audition while the transport runs: loops start on the next bar, in sync, and
-   * repeat; one-shots play at once. Returns false when not playing (caller plays normally).
+   * repeat; events (fills, FX) start on the next bar and play once; one-shots play at once.
+   * Returns false when not playing (caller plays normally).
    */
-  auditionSynced(buffer: AudioBuffer, kind: 'loop' | 'oneshot', bars: number | null, onEnd: () => void): boolean {
+  auditionSynced(buffer: AudioBuffer, kind: SampleKind, bars: number | null, onEnd: () => void): boolean {
     if (!this.playing) return false
     const ctx = audioContext()
     const p = this.getProject()
@@ -241,11 +243,13 @@ class PlaybackEngine {
     const src = ctx.createBufferSource()
     src.buffer = buffer
     let when = ctx.currentTime + 0.01
-    if (kind === 'loop') {
+    if (kind !== 'oneshot') {
       const barSec = beatToSec(BEATS_PER_BAR, p.bpm)
       const proj = this.segProj + (ctx.currentTime - this.segCtx)
       const nextBar = Math.ceil((proj + 0.005) / barSec) * barSec
       when = this.ctxAt(nextBar)
+    }
+    if (kind === 'loop') {
       src.loop = true
       src.loopStart = 0
       src.loopEnd = Math.min(buffer.duration, beatToSec((bars ?? 1) * BEATS_PER_BAR, p.bpm))
