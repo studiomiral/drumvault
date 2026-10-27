@@ -5,6 +5,7 @@ import { Button, cx, inputClass } from '../components/ui'
 import { formatBpm } from '../lib/format'
 import { formatPosition } from '../lib/project'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
+import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import { createProject, deleteCurrentProject, openProject } from './persistence'
 
@@ -68,6 +69,7 @@ export function Toolbar() {
                const centre = (st.scrollX + 400) / st.pxPerBeat
                setView({ pxPerBeat: next, scrollX: Math.max(0, centre * next - 400) })
              }} />
+      <Button variant="primary" title="Export stems (⌘E)" onClick={() => useApp.getState().setModal('export')}>Export…</Button>
       <Button variant={libraryOpen ? 'secondary' : 'ghost'} onClick={() => setView({ libraryOpen: !libraryOpen })}>
         Library {libraryOpen ? '›' : '‹'}
       </Button>

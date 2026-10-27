@@ -2,7 +2,7 @@
 
 Electron + React shell around the Python engine: **Process** (drop zips, queue, review and
 reprocess with overrides), **Library** (browse, filter, audition, favourite/rate) and
-**Arrange** (the mini DAW). Stem export to Logic is Phase 4.
+**Arrange** (the mini DAW) with stem export to Logic.
 
 ## Run it (Mac)
 
@@ -26,8 +26,25 @@ install it.
 | F | toggle favourite |
 | 1–5 | rate (press again to clear) |
 | ⌘F | search |
+| S | find similar loops/one-shots (same category and length, most similar first) |
+
+⌘/ or ? opens the overview of every keyboard shortcut.
 
 Drag a row out of the list to drop the WAV into Finder or Logic.
+
+## Build the .app (Mac)
+
+```
+cd app && npm install && npm run dist
+open release/mac-arm64/Drumvault.app      # or drag it to /Applications
+```
+
+The `.app` contains the engine's source and `uv.lock`, not a frozen Python. It still needs
+`brew install uv rubberband`. The first launch installs the engine's Python packages into
+`~/Library/Application Support/Drumvault/engine-venv`, which takes about a minute; after
+that the engine starts in a few seconds. The app is ad-hoc signed, not notarised: if macOS
+blocks it, right-click → Open once. Settings → Engine folder overrides the bundled engine
+(useful for running the repo's `engine/` in place).
 
 ## Develop
 
@@ -49,7 +66,9 @@ Layout:
 | `electron/preload.ts` | typed `window.drumvault` bridge (`src/types/api.ts`) |
 | `src/views/` | Process (+ zip detail panel), Library, Settings, Welcome |
 | `src/audio/` | shared AudioContext + buffer cache, scheduler, transport engine, audition |
-| `src/arrange/` | timeline canvas, lane headers, toolbar, step editor, library panel, project persistence |
+| `src/arrange/` | timeline canvas, lane headers, toolbar, step editor, library panel, project persistence, export dialog |
+| `src/audio/render.ts`, `wav.ts` | offline stem rendering, WAV writer (24-bit / 32-bit float) |
+| `src/lib/midi.ts` | markers MIDI file |
 | `src/types/engine.ts` | mirror of `engine/drumvault_engine/schemas.py` |
 
 Settings live in `~/Library/Application Support/Drumvault/settings.json`, the engine log in
@@ -83,5 +102,25 @@ on the floor, clap/snare: 2 & 4, others: offbeat). Projects autosave to
 While the transport runs, auditioning a loop (in the panel or the Library view) starts it on
 the next bar, in time with the arrangement.
 
-Playback and the Phase 4 stem export share one scheduler (`src/audio/schedule.ts`): event
-times are computed from integer grid positions, so there is no drift over 192 bars.
+Playback and stem export share one scheduler (`src/audio/schedule.ts`): event times are
+computed from integer grid positions and snapped to whole sample frames, so there is no
+drift over 192 bars.
+
+## Export stems (⌘E)
+
+File → Export Stems… or the Export button in Arrange. Pick a folder (default
+`~/Music/Drumvault Exports`), a file prefix, the range (whole project or the loop region),
+24-bit or 32-bit float, and which lanes. Muted lanes are skipped and solo is ignored.
+**Master** adds a mix of every unmuted lane. **Markers (MIDI)** writes
+`<Prefix>_markers.mid` with the tempo and your section markers.
+
+Files are named `<Prefix>_<Lane>_<BPM>bpm.wav`, at the library's sample rate, and all have
+the same length. In Logic: set the project tempo to the BPM, drag every file in at bar 1
+(or at the loop region's first bar if you exported that), and drag the `.mid` file in too if
+you want the markers.
+
+If a 24-bit stem would clip, the export stops and asks you to choose: export as 32-bit
+float (keeps the overs, no level change), auto-gain (turns every stem down by the same
+amount so the loudest one peaks at about −0.3 dBFS, so the stems still sum to the master),
+export anyway (clipped), or cancel. The dialog asks before overwriting existing files, and
+offers Reveal in Finder when it's done.

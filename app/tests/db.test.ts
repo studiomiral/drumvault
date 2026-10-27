@@ -100,6 +100,20 @@ describe.skipIf(!libraryDir)('LibraryReader on an engine-built library', () => {
     expect(await reader.peaks(999999, 120)).toBeNull()
   })
 
+  it('finds similar samples within the same category and loop length', () => {
+    const hat = reader.querySamples({ kind: 'loop', categories: ['hat'], bars: [2] })[0]
+    const sim = reader.similar(hat.id, 10)
+    expect(sim.length).toBeGreaterThan(0)
+    expect(sim.every((s) => s.kind === 'loop' && s.category === 'hat' && s.bars === 2 && s.id !== hat.id)).toBe(true)
+    expect(sim.map((s) => s.similarity)).toEqual([...sim.map((s) => s.similarity)].sort((a, b) => b - a))
+    expect(sim[0].similarity).toBeLessThanOrEqual(1 + 1e-6)
+    const kick = reader.querySamples({ kind: 'oneshot', categories: ['kick'] })[0]
+    const k = reader.similar(kick.id, 10)
+    expect(k.every((s) => s.category === 'kick')).toBe(true)
+    expect(k[0].similarity).toBeGreaterThan(0.5)  // synthetic kicks are alike
+    expect(reader.similar(999999)).toEqual([])
+  })
+
   it('handles a library without a database yet', () => {
     const empty = new LibraryReader(mkdtempSync(join(tmpdir(), 'dv-empty-')))
     expect(empty.listZips()).toEqual([])

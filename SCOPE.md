@@ -430,6 +430,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - Clipping check: if any lane peaks above 0 dBFS in 24-bit mode, warn and offer 32-bit float or auto-gain.
 - Also export `<Prefix>_markers.mid`: a MIDI file containing the tempo and section markers, which can be imported into Logic to get the markers. (Phase 4 nice-to-have.)
 - "Reveal in Finder" after export.
+- *Implementation notes:* event start times and sample offsets are snapped to whole sample frames, so a stem is a bit-exact copy of the placed samples (live playback uses the same snapping). Lane gain nodes are upmixed to stereo before the pan node, so a mono sample panned centre plays at unity rather than −3 dB. Exporting the loop region gives files that start at that region's first bar; the MIDI markers file uses the same start.
 
 ---
 
@@ -457,7 +458,7 @@ A single window with three tabs or a left nav: **Process**, **Library**, **Arran
 - **Acceptance:** build a 192-bar arrangement with 8 lanes; playback is in time with no drift or glitches; save → reopen gives an identical project.
 
 ### Phase 4 — Export + polish
-- Stem export (§6.5), the clipping check, the MIDI markers file, "find similar", favorites/ratings, "rebuild loops at new BPM", keyboard shortcut overview, and an unsigned local `.app` build (electron-builder; the Python engine bundled with PyInstaller onedir, or pointing to the uv environment).
+- Stem export (§6.5), the clipping check, the MIDI markers file, "find similar", favorites/ratings, "rebuild loops at new BPM", keyboard shortcut overview, and an unsigned local `.app` build (electron-builder; the Python engine bundled with PyInstaller onedir, or pointing to the uv environment). *Chosen: the uv route.* The `.app` carries the engine source and `uv.lock`; on first launch it runs `uv run --frozen` into `~/Library/Application Support/Drumvault/engine-venv` (needs `uv` and `rubberband` from Homebrew). Ad-hoc signed so it launches on Apple Silicon.
 - **Acceptance:** exported stems imported into Logic at bar 1 at the same BPM line up sample-accurately with each other and with Logic's grid.
 
 ---

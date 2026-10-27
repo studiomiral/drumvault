@@ -182,7 +182,7 @@ export function SettingsView() {
                 {c.fix && <code className="text-accent select-text">{c.fix}</code>}
               </Field>
             ))}
-            <Field label="Engine folder" hint="empty = ../engine">
+            <Field label="Engine folder" hint="empty = the bundled engine (../engine in dev)">
               <input className={cx(inputClass, 'w-[380px]')} placeholder="(default)" value={paths.enginePath}
                      onChange={(e) => setPaths((p) => ({ ...p, enginePath: e.target.value }))} />
             </Field>

@@ -53,6 +53,13 @@ const api: DrumvaultAPI = {
   writeProject: (prev, name, text) => ipcRenderer.invoke('projects:write', prev, name, text),
   deleteProject: (file) => ipcRenderer.invoke('projects:delete', file),
 
+  chooseExportFolder: (defaultPath) => ipcRenderer.invoke('export:chooseDir', defaultPath),
+  defaultExportFolder: () => ipcRenderer.invoke('export:defaultDir'),
+  existingFiles: (dir, names) => ipcRenderer.invoke('export:existing', dir, names),
+  writeExportFile: (dir, name, data) => ipcRenderer.invoke('export:write', dir, name, data),
+  revealPath: (path) => ipcRenderer.invoke('shell:revealPath', path),
+  similarSamples: (id, limit) => ipcRenderer.invoke('lib:similar', id, limit),
+
   onMenu: (cb) => subscribe('menu', cb),
 }
 

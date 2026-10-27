@@ -3,6 +3,7 @@ import { initProjects, startAutosave } from './arrange/persistence'
 import { setAudioSampleRate } from './audio/context'
 import { EngineStatusDot } from './components/EngineBanner'
 import { IconArrange, IconLibrary, IconProcess, IconSettings, IconX } from './components/icons'
+import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { cx } from './components/ui'
 import { useApp, type View } from './store/app'
 import { ArrangeView, duplicateSelection } from './views/ArrangeView'
@@ -20,7 +21,7 @@ const NAV: { view: View; label: string; Icon: typeof IconProcess; key: string }[
 ]
 
 export function App() {
-  const { ready, settings, view, setView, jobs, init } = useApp()
+  const { ready, settings, view, setView, jobs, init, modal, setModal } = useApp()
 
   useEffect(() => {
     void init()
@@ -40,6 +41,11 @@ export function App() {
   useEffect(() => {
     const offMenu = window.drumvault.onMenu((cmd) => runEditCommand(cmd))
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (e.key === '?' && t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA') {
+        useApp.getState().setModal('shortcuts')
+        return
+      }
       const mod = window.drumvault.platform === 'darwin' ? e.metaKey : e.ctrlKey
       if (!mod || e.altKey) return
       const k = e.key.toLowerCase()
@@ -96,6 +102,7 @@ export function App() {
         {view === 'settings' && <SettingsView />}
       </main>
       <Toasts />
+      {modal === 'shortcuts' && <ShortcutsDialog onClose={() => setModal(null)} />}
     </div>
   )
 }

@@ -14,6 +14,12 @@ export interface LaneNodes {
 
 export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNodes {
   const gain = ctx.createGain()
+  // Upmix to stereo before the panner: StereoPannerNode applies an equal-power law to mono
+  // input (-3 dB in each channel at centre) but passes stereo through at unity. Mono
+  // one-shots and stereo loops must come out at the level they have in the library.
+  gain.channelCount = 2
+  gain.channelCountMode = 'explicit'
+  gain.channelInterpretation = 'speakers'
   const pan = ctx.createStereoPanner()
   gain.connect(pan).connect(dest)
   return { gain, pan }
@@ -34,10 +40,16 @@ export function laneAudible(lane: Lane, lanes: Lane[]): boolean {
 /**
  * Start one event. `when` is the context time of `ev.start`; `cutAt` (context time)
  * optionally ends the sound early (loop-region wrap).
+ *
+ * Start times and offsets are snapped to whole sample frames: Chromium interpolates
+ * (and slightly dulls) sounds that start between two samples, so snapping keeps every
+ * hit a bit-exact copy of the library sample, at most half a sample from the grid.
  */
 export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: AudioBuffer, dest: AudioNode,
                           when: number, cutAt?: number): AudioBufferSourceNode | null {
-  const offset = Math.max(0, ev.offset)
+  const sr = ctx.sampleRate
+  when = Math.round(when * sr) / sr
+  const offset = Math.round(Math.max(0, ev.offset) * buffer.sampleRate) / buffer.sampleRate
   if (offset >= buffer.duration) return null
   let duration = ev.duration ?? buffer.duration - offset
   if (cutAt != null) duration = Math.min(duration, cutAt - when)

@@ -142,6 +142,32 @@ export class LibraryReader {
     return out
   }
 
+  /**
+   * Nearest neighbours of a sample by fingerprint (cosine similarity of the engine's
+   * L2-normalised log-mel fingerprints), within the same kind, category and loop length.
+   */
+  similar(sampleId: number, limit = 50): (SampleListItem & { similarity: number })[] {
+    const [t] = this.all<{ kind: string; category: string; bars: number | null; fingerprint: Uint8Array | null }>(
+      'SELECT kind, category, bars, fingerprint FROM samples WHERE id = ?', sampleId)
+    if (!t?.fingerprint) return []
+    const target = toFloats(t.fingerprint)
+    const rows = this.all<Omit<SampleListItem, 'name'> & { fingerprint: Uint8Array | null }>(
+      `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, s.key_label, s.key_camelot, s.duration_s,
+              s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, s.fingerprint
+       FROM samples s JOIN zips z ON z.id = s.zip_id
+       WHERE s.kind = ? AND s.category = ? AND s.bars IS ? AND s.id != ?`,
+      t.kind, t.category, t.bars, sampleId)
+    const scored = []
+    for (const { fingerprint, ...r } of rows) {
+      if (!fingerprint || fingerprint.byteLength !== t.fingerprint.byteLength) continue
+      const f = toFloats(fingerprint)
+      let dot = 0
+      for (let i = 0; i < f.length; i++) dot += f[i] * target[i]
+      scored.push({ ...r, name: fileName(r.rel_path), similarity: dot })
+    }
+    return scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit)
+  }
+
   facets(): LibraryFacets {
     const total = this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples')[0]?.n ?? 0
     return {
@@ -189,4 +215,10 @@ export function downsamplePeaks(src: [number, number][], points: number): PeakPo
     out.push([lo, hi])
   }
   return out
+}
+
+function toFloats(blob: Uint8Array): Float32Array {
+  // SQLite blobs are not necessarily 4-byte aligned: copy when needed.
+  const aligned = blob.byteOffset % 4 === 0 ? blob : blob.slice()
+  return new Float32Array(aligned.buffer, aligned.byteOffset, Math.floor(aligned.byteLength / 4))
 }

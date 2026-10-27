@@ -18,7 +18,7 @@ const LOOP_ORDER: Category[] = ['snare', 'clap', 'hat', 'hat_closed', 'hat_open'
 
 export function LibraryView() {
   const { libraryVersion } = useApp()
-  const { filter, setFilter, resetFilter, selectedId, select } = useLibrary()
+  const { filter, setFilter, resetFilter, selectedId, select, similarTo, findSimilar } = useLibrary()
   const [items, setItems] = useState<SampleListItem[]>([])
   const [facets, setFacets] = useState<LibraryFacets | null>(null)
   const [playingId, setPlayingId] = useState<number | null>(audition.playingId)
@@ -41,7 +41,8 @@ export function LibraryView() {
 
   useEffect(() => {
     let alive = true
-    void api.querySamples(filter).then((rows) => {
+    const q = similarTo ? api.similarSamples(similarTo.id, 60) : api.querySamples(filter)
+    void q.then((rows) => {
       if (!alive) return
       setItems(rows)
       setLoaded(true)
@@ -49,7 +50,7 @@ export function LibraryView() {
     return () => {
       alive = false
     }
-  }, [filter, libraryVersion])
+  }, [filter, similarTo, libraryVersion])
 
   const index = useMemo(() => items.findIndex((s) => s.id === selectedId), [items, selectedId])
   const selected = index >= 0 ? items[index] : null
@@ -103,11 +104,13 @@ export function LibraryView() {
         toggleFavorite(selected)
       } else if (selected && /^[1-5]$/.test(e.key)) {
         setRating(selected, Number(e.key))
+      } else if (selected && e.key.toLowerCase() === 's' && !e.metaKey && !e.ctrlKey) {
+        findSimilar({ id: selected.id, name: selected.name })
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [items, index, selected, choose, toggleFavorite, setRating])
+  }, [items, index, selected, choose, toggleFavorite, setRating, findSimilar])
 
   const filtered = !!(filter.kind || filter.categories?.length || filter.keys?.length || filter.bars?.length
     || filter.zipIds?.length || filter.favoritesOnly || filter.search)
@@ -146,7 +149,17 @@ export function LibraryView() {
           resetFilter()
         }} filtered={filtered} />
         <div className="flex-1 min-w-0 flex flex-col">
+          {similarTo && (
+            <div className="shrink-0 flex items-center gap-3 px-4 h-10 bg-brand-soft border-b border-line text-[12.5px]">
+              <span className="text-accent font-medium">Similar to</span>
+              <span className="truncate font-medium">{similarTo.name}</span>
+              <span className="text-faint">same category{items[0]?.kind === 'loop' ? ' and length' : ''}, most similar first</span>
+              <div className="flex-1" />
+              <Button variant="ghost" onClick={() => findSimilar(null)}>Back to the list</Button>
+            </div>
+          )}
           {loaded && items.length === 0 ? (
+            similarTo ? <Empty title="Nothing similar">No other samples in this category{' '}to compare with.</Empty> :
             <Empty title={facets?.total ? 'No samples match' : 'The library is empty'}>
               {facets?.total ? 'Try removing some filters.' : 'Process some zips in the Process view to fill it.'}
             </Empty>
@@ -172,7 +185,7 @@ export function LibraryView() {
               )}
             />
           )}
-          {selected && <SelectedBar s={selected} onTags={(tags) => {
+          {selected && <SelectedBar s={selected} onSimilar={() => findSimilar({ id: selected.id, name: selected.name })} onTags={(tags) => {
             updateLocal(selected.id, { tags: tags || null })
             void attempt(() => api.setSampleMeta(selected.id, { tags }))
           }} />}
@@ -212,6 +225,11 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
         <div className="truncate text-[12.5px]">{s.name}</div>
         <div className="text-[11px] text-faint truncate">{s.source_code} · {formatDuration(s.duration_s)}</div>
       </div>
+      {'similarity' in s && (
+        <span className="w-12 text-right text-[11.5px] tabular-nums text-accent font-medium" title="Similarity">
+          {Math.round((s as SampleListItem & { similarity: number }).similarity * 100)}%
+        </span>
+      )}
       <Chip className="w-[92px] justify-center">{CATEGORY_LABELS[s.category]}</Chip>
       <span className="w-[74px] text-[12px]">
         {s.key_label ?? <span className="text-faint">NoKey</span>}
@@ -232,7 +250,7 @@ function SampleRow({ s, selected, playing, onClick, onPlayToggle, onFavorite, on
   )
 }
 
-function SelectedBar({ s, onTags }: { s: SampleListItem; onTags: (tags: string) => void }) {
+function SelectedBar({ s, onTags, onSimilar }: { s: SampleListItem; onTags: (tags: string) => void; onSimilar: () => void }) {
   const [tags, setTags] = useState(s.tags ?? '')
   useEffect(() => setTags(s.tags ?? ''), [s.id, s.tags])
   return (
@@ -251,6 +269,7 @@ function SelectedBar({ s, onTags }: { s: SampleListItem; onTags: (tags: string) 
                }
              }}
              onBlur={() => tags !== (s.tags ?? '') && onTags(tags)} />
+      <Button variant="ghost" title="Find similar sounds (S)" onClick={onSimilar}>Find similar</Button>
       <Button variant="ghost" onClick={() => void api.revealSample(s.rel_path)}>Reveal in Finder</Button>
     </div>
   )

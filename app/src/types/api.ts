@@ -19,6 +19,8 @@ export interface AppSettings {
   uvPath: string | null
   /** Arrange project opened last (file name in the projects folder). */
   lastProject: string | null
+  /** Folder of the last stem export. */
+  lastExportDir?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +187,17 @@ export interface DrumvaultAPI {
   /** Returns the file name used (it follows the project name). */
   writeProject(previousFile: string | null, name: string, text: string): Promise<string>
   deleteProject(file: string): Promise<void>
+
+  /** Folder dialog for stem export. */
+  chooseExportFolder(defaultPath: string | null): Promise<string | null>
+  /** Default export folder (~/Music/Drumvault Exports). */
+  defaultExportFolder(): Promise<string>
+  /** Which of `names` already exist in `dir`. */
+  existingFiles(dir: string, names: string[]): Promise<string[]>
+  writeExportFile(dir: string, name: string, data: ArrayBuffer): Promise<void>
+  revealPath(path: string): Promise<void>
+  /** Nearest neighbours by fingerprint (same kind, category and loop length). */
+  similarSamples(sampleId: number, limit: number): Promise<(SampleListItem & { similarity: number })[]>
 
   /** Commands from the application menu ("add-zips", "view:library", …). */
   onMenu(cb: (cmd: string) => void): () => void

@@ -20,9 +20,11 @@ interface AppState {
   libraryVersion: number
   view: View
   toasts: Toast[]
+  modal: 'export' | 'shortcuts' | null
 
   init(): Promise<void>
   setView(v: View): void
+  setModal(m: AppState['modal']): void
   saveSettings(patch: Partial<AppSettings>): Promise<void>
   refreshDeps(): Promise<void>
   toast(kind: Toast['kind'], text: string): void
@@ -40,6 +42,7 @@ export const useApp = create<AppState>((set, get) => ({
   libraryVersion: 0,
   view: 'process',
   toasts: [],
+  modal: null,
 
   async init() {
     api.onEngineStatus((engine) => {
@@ -50,6 +53,8 @@ export const useApp = create<AppState>((set, get) => ({
     api.onLibraryChanged(() => set((s) => ({ libraryVersion: s.libraryVersion + 1 })))
     api.onMenu((cmd) => {
       if (cmd.startsWith('view:')) set({ view: cmd.slice(5) as View })
+      if (cmd === 'export') set({ view: 'arrange', modal: 'export' })
+      if (cmd === 'shortcuts') set({ modal: 'shortcuts' })
     })
     const [settings, engine, jobs] = await Promise.all([api.getSettings(), api.engineStatus(), api.listJobs()])
     set({ settings, engine, jobs, ready: true })
@@ -57,6 +62,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setView: (view) => set({ view }),
+  setModal: (modal) => set({ modal }),
 
   async saveSettings(patch) {
     const settings = await api.saveSettings(patch)

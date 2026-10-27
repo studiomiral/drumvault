@@ -6,6 +6,8 @@ import { LibraryPanel } from '../arrange/LibraryPanel'
 import { MarkerEditor } from '../arrange/MarkerEditor'
 import { Timeline } from '../arrange/Timeline'
 import { Toolbar } from '../arrange/Toolbar'
+import { ExportDialog } from '../arrange/ExportDialog'
+import { useApp } from '../store/app'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Marker } from '../types/project'
@@ -14,12 +16,14 @@ import { BEATS_PER_BAR, duplicateClips, uid } from '../lib/project'
 /** Mini DAW (SCOPE.md §6.4). */
 export function ArrangeView() {
   const libraryOpen = useArrange((s) => s.libraryOpen)
+  const { modal, setModal } = useApp()
   const [markerEdit, setMarkerEdit] = useState<{ marker: Marker; x: number } | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return
+      if (useApp.getState().modal) return
       const st = useProject.getState()
       if (e.key === ' ') {
         e.preventDefault()
@@ -63,6 +67,7 @@ export function ArrangeView() {
         {libraryOpen && <LibraryPanel />}
       </div>
       <BottomPanel />
+      {modal === 'export' && <ExportDialog onClose={() => setModal(null)} />}
     </div>
   )
 }

@@ -4,8 +4,8 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
 import type { EngineEvent, JobAccepted, Overrides } from '../src/types/engine'
 import { LibraryReader } from './db'
@@ -52,8 +52,27 @@ function engineLog(line: string): void {
   if (!app.isPackaged) console.log(`[engine] ${line}`)
 }
 
+/**
+ * The engine's source: the user's override, the copy bundled in the packaged app, or the
+ * repo's engine/ folder next to app/ (development).
+ */
 function engineDir(): string {
-  return settings.enginePath || findEngineDir(app.getAppPath()) || resolve(app.getAppPath(), '..', 'engine')
+  if (settings.enginePath) return settings.enginePath
+  if (app.isPackaged) return join(process.resourcesPath, 'engine')
+  return findEngineDir(app.getAppPath()) || resolve(app.getAppPath(), '..', 'engine')
+}
+
+/**
+ * uv arguments/environment. The packaged app keeps its Python environment in
+ * ~/Library/Application Support/Drumvault/engine-venv (never inside the read-only app
+ * bundle) and installs exactly the locked versions (--frozen).
+ */
+function engineCommand(dir: string): { args: string[]; env: NodeJS.ProcessEnv } {
+  const bundled = app.isPackaged && !settings.enginePath
+  const args = ['run', ...(bundled ? ['--frozen'] : []), '--project', dir, 'python', '-m', 'drumvault_engine']
+  const env: NodeJS.ProcessEnv = { PATH: augmentedPath() }
+  if (bundled) env.UV_PROJECT_ENVIRONMENT = join(app.getPath('userData'), 'engine-venv')
+  return { args, env }
 }
 
 function engineSettings(): Record<string, unknown> {
@@ -77,13 +96,8 @@ function startEngine(): void {
     lastStatus = status
     return
   }
-  sidecar = new Sidecar({
-    command: uv,
-    args: ['run', '--project', dir, 'python', '-m', 'drumvault_engine'],
-    cwd: dir,
-    env: { PATH: augmentedPath() },
-    log: engineLog,
-  })
+  const { args, env } = engineCommand(dir)
+  sidecar = new Sidecar({ command: uv, args, cwd: dir, env, log: engineLog })
   sidecar.on('status', (s: EngineStatus) => {
     lastStatus = s
     send('engine-status', s)
@@ -220,6 +234,32 @@ function registerIpc(): void {
   ipcMain.handle('projects:write', (_e, prev: string | null, name: string, text: string) =>
     writeProjectFile(lib(), prev, name, text))
   ipcMain.handle('projects:delete', (_e, file: string) => deleteProjectFile(lib(), file))
+  ipcMain.handle('lib:similar', (_e, id: number, limit: number) => reader.similar(id, limit))
+
+  // ---- stem export --------------------------------------------------------
+  const exportFile = (dir: string, name: string) => {
+    if (!isAbsolute(dir) || name !== basename(name) || !/\.(wav|mid)$/i.test(name)) throw new Error(`Bad export path: ${name}`)
+    return join(dir, name)
+  }
+  ipcMain.handle('export:defaultDir', () => join(app.getPath('music'), 'Drumvault Exports'))
+  ipcMain.handle('export:chooseDir', async (_e, defaultPath: string | null) => {
+    const r = await dialog.showOpenDialog(win!, {
+      title: 'Export stems to', buttonLabel: 'Choose', defaultPath: defaultPath ?? undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    return r.canceled ? null : r.filePaths[0]
+  })
+  ipcMain.handle('export:existing', (_e, dir: string, names: string[]) =>
+    names.filter((n) => existsSync(exportFile(dir, n))))
+  ipcMain.handle('export:write', async (_e, dir: string, name: string, data: ArrayBuffer) => {
+    const path = exportFile(dir, name)
+    await mkdir(dir, { recursive: true })
+    const tmp = join(dir, `.${name}.part`)
+    await writeFile(tmp, Buffer.from(data))
+    await rename(tmp, path)
+  })
+  ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
+
   ipcMain.handle('lib:read', async (_e, relPath: string) => {
     const buf = await readFile(libraryFile(lib(), relPath))
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
@@ -286,6 +326,7 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         { label: 'Add Zips…', accelerator: 'CmdOrCtrl+O', click: () => send('menu', 'add-zips') },
+        { label: 'Export Stems…', accelerator: 'CmdOrCtrl+E', click: () => send('menu', 'export') },
         { label: 'Show Library in Finder', click: () => settings.libraryPath && shell.openPath(settings.libraryPath) },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -321,6 +362,10 @@ function buildMenu(): void {
       ],
     },
     { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [{ label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: () => send('menu', 'shortcuts') }],
+    },
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

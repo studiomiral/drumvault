@@ -15,7 +15,9 @@ function param() {
 function node<T extends object>(extra: T = {} as T) {
   return { connect(n: unknown) { return n }, disconnect() {}, ...extra }
 }
+const SR = 44100
 const fakeCtx = {
+  sampleRate: SR,
   get currentTime() { return clock.t },
   state: 'running',
   destination: node(),
@@ -37,7 +39,7 @@ const fakeCtx = {
 vi.mock('../src/audio/context', () => ({
   audioContext: () => fakeCtx,
   buffers: {
-    get: (p: string) => ({ duration: p.includes('Kick') ? 0.5 : 100, tag: p }),
+    get: (p: string) => ({ duration: p.includes('Kick') ? 0.5 : 100, sampleRate: SR, tag: p }),
     loadAll: async () => [],
     load: async (p: string) => ({ duration: 1, tag: p }),
   },
@@ -64,6 +66,10 @@ function build(bars: number): Project {
   p.clips = [kick, loop]
   return p
 }
+
+/** Start times are snapped to whole sample frames (at most half a frame from the grid). */
+const HALF = 0.5 / SR + 1e-9
+const onFrame = (t: number) => Math.abs(t * SR - Math.round(t * SR)) < 1e-6
 
 /** Advance the fake clock in 25 ms steps, firing the engine's timer each time. */
 function run(seconds: number) {
@@ -92,11 +98,14 @@ describe('live transport', () => {
     run(192 * 4 * BEAT + 1)
     const kicks = starts.filter((s) => s.tag.includes('Kick'))
     expect(kicks).toHaveLength(192 * 4)
-    kicks.forEach((k, i) => expect(Math.abs(k.when - (t0 + i * BEAT))).toBeLessThan(1e-9))
+    kicks.forEach((k, i) => {
+      expect(Math.abs(k.when - (t0 + i * BEAT))).toBeLessThanOrEqual(HALF)
+      expect(onFrame(k.when)).toBe(true)
+    })
     const loops = starts.filter((s) => s.tag.includes('Top'))
     expect(loops).toHaveLength(192 / 4)
     loops.forEach((l, i) => {
-      expect(Math.abs(l.when - (t0 + i * 16 * BEAT))).toBeLessThan(1e-9)
+      expect(Math.abs(l.when - (t0 + i * 16 * BEAT))).toBeLessThanOrEqual(HALF)
       expect(l.offset).toBe(0)
       expect(Math.abs(l.duration! - 16 * BEAT)).toBeLessThan(1e-9)
     })
@@ -109,7 +118,7 @@ describe('live transport', () => {
     await playback.play(6)               // beat 6: inside the first 4-bar loop
     run(0.2)
     const loop = starts.find((s) => s.tag.includes('Top'))!
-    expect(loop.offset).toBeCloseTo(6 * BEAT, 9)
+    expect(Math.abs(loop.offset - 6 * BEAT)).toBeLessThanOrEqual(HALF)
     expect(loop.duration).toBeCloseTo(10 * BEAT, 9)
   })
 
@@ -125,9 +134,9 @@ describe('live transport', () => {
     // Each cycle: the 4-bar loop clip enters at beat 4 (offset 4 beats) and plays to the loop end.
     for (let c = 0; c < 3; c++) {
       const l = loops[c]
-      expect(Math.abs(l.when - (t0 + c * cycle))).toBeLessThan(1e-9)
-      expect(l.offset).toBeCloseTo(4 * BEAT, 9)
-      expect(l.duration).toBeCloseTo(8 * BEAT, 9)
+      expect(Math.abs(l.when - (t0 + c * cycle))).toBeLessThanOrEqual(HALF)
+      expect(Math.abs(l.offset - 4 * BEAT)).toBeLessThanOrEqual(HALF)
+      expect(Math.abs(l.duration! - 8 * BEAT)).toBeLessThanOrEqual(2 * HALF)
     }
     const kicks = starts.filter((s) => s.tag.includes('Kick'))
     expect(kicks.slice(0, 24).map((k) => Math.round((k.when - t0) / BEAT))).toEqual(

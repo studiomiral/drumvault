@@ -117,3 +117,24 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
     </div>
   )
 }
+
+export function Modal({ title, children, onClose, width = 560 }: {
+  title: string
+  children: ReactNode
+  onClose?: () => void
+  width?: number
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-[#1e1b2e33] backdrop-blur-[2px] flex items-center justify-center"
+         onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
+      <div className="rounded-2xl border border-line bg-panel shadow-2xl shadow-violet-900/15 max-h-[88vh] flex flex-col"
+           style={{ width }}>
+        <div className="flex items-center px-5 pt-4 pb-3 border-b border-line">
+          <h2 className="flex-1 text-[15px] font-semibold">{title}</h2>
+          {onClose && <button onClick={onClose} className="text-muted hover:text-text text-[18px] leading-none">×</button>}
+        </div>
+        <div className="overflow-y-auto px-5 py-4">{children}</div>
+      </div>
+    </div>
+  )
+}
