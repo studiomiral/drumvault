@@ -68,8 +68,9 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
   }
 
   const pack = z.kind === 'pack'
+  const source = detail.originalExists || detail.originalKept
   const remove = async () => {
-    if (!window.confirm(`Delete all ${z.oneshots + z.loops + z.events} samples of ${z.source_code} from the library? The ${pack ? 'original files are' : 'zip itself is'} not touched.`)) return
+    if (!window.confirm(`Delete all ${z.oneshots + z.loops + z.events} samples of ${z.source_code} from the library? The ${pack ? 'original files are' : 'zip itself is'} not touched; the copy the library kept goes too.`)) return
     await attempt(() => api.deleteZip(zipId))
     onClose()
   }
@@ -85,13 +86,14 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
             </div>
             <div className="font-medium mt-1 break-words select-text">{z.file_name}</div>
             <div className="text-[11.5px] text-faint mt-0.5 truncate select-text" title={z.original_path}>
-              {detail.originalExists ? z.original_path : `Original ${pack ? 'folder' : 'zip'} missing: ${z.original_path}`}
+              {detail.originalKept ? `Kept in the library (FLAC) · from ${z.original_path}`
+                : detail.originalExists ? z.original_path : `Original ${pack ? 'folder' : 'zip'} missing: ${z.original_path}`}
             </div>
           </div>
           <button onClick={onClose} className="text-muted hover:text-text mt-0.5"><IconX className="w-4 h-4" /></button>
         </div>
         <div className="flex flex-wrap gap-2 mt-3">
-          <Button variant="primary" disabled={busy || !detail.originalExists} onClick={() => void reprocess()}>
+          <Button variant="primary" disabled={busy || !source} onClick={() => void reprocess()}>
             {busy ? 'Processing…' : dirty ? 'Reprocess with changes' : 'Reprocess'}
           </Button>
           {z.status === 'needs_review' && (
@@ -99,7 +101,7 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
                     onClick={() => void attempt(() => api.markReviewed(zipId))}>Mark as reviewed</Button>
           )}
           {!pack && (
-            <Button disabled={!detail.originalExists} onClick={() => openGrid(zipId)}
+            <Button disabled={!source} onClick={() => openGrid(zipId)}
                     title="Play the drum stems with a metronome and drag them onto the grid">Align grid</Button>
           )}
           <Button onClick={() => {
@@ -107,7 +109,8 @@ export function ZipDetailPanel({ zipId, onClose }: { zipId: number; onClose: () 
             useLibrary.getState().setFilter({ zipIds: [zipId] })
             setView('library')
           }}>Show samples</Button>
-          <Button variant="ghost" disabled={!detail.originalExists}
+          <Button variant="ghost" disabled={!source}
+                  title={detail.originalExists ? undefined : 'The original is gone: shows the copy the library kept'}
                   onClick={() => void api.revealZip(zipId)}>{pack ? 'Reveal folder' : 'Reveal zip'}</Button>
           <div className="flex-1" />
           <Button variant="danger" disabled={busy} onClick={() => void remove()}>Delete samples</Button>

@@ -97,9 +97,20 @@ class Thresholds:
     # Grid view preview (SCOPE.md §6.2a): the drum stems summed to mono at this rate.
     grid_preview_sr: int = 22050
     grid_preview_peak_dbfs: float = -1.0
+    # ---- Kept originals (SCOPE.md §5.8d) -----------------------------------
+    # A zip's stems are only kept in the library while this much disk stays free afterwards.
+    originals_min_free_gb: float = 5.0
+    # FLAC size as a share of the PCM WAV, for that check (measured: 0.38 on a stem zip; erring large).
+    originals_flac_ratio: float = 0.6
     # ---- MIDI import and bass rendering (SCOPE.md §6.7) ----------------------
     # A MIDI file's length is rounded up to one of these bar counts.
     midi_bar_lengths: tuple[int, ...] = (1, 2, 4, 8, 16)
+    # Logic exports a region where it sits in the project (bar 49, say): the empty bars before the
+    # first note are cut, so the loop starts on its bar 1. A first note up to this many beats early
+    # (pushed or humanized) still counts as on that bar's 1.
+    midi_early_beats: float = 0.25
+    # A last note held this far past a bar line (a few ticks) still ends the loop on that bar.
+    midi_overhang_beats: float = 0.125
     # Below this median pitch (G3) a part counts as bass when its name doesn't say.
     midi_bass_max_median_pitch: int = 55
     # Rendered basslines are loudness-matched so patches compare fairly.

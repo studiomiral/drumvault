@@ -17,7 +17,7 @@ import numpy as np
 import soundfile as sf
 
 from . import arrangement as arrmod, classify, events as eventmod, groove as groovemod, key as keymod, loops as loopmod
-from . import naming, normalize, samples as samplemod
+from . import naming, normalize, originals, samples as samplemod
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
 from .audioutil import Audio, info as audio_info, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
@@ -176,6 +176,47 @@ def extract(zip_path: Path, tmp_dir: Path) -> Extracted:
                      warnings=list(disc.warnings))
 
 
+def _source(lib: Path, row, tmp_dir: Path) -> Extracted:
+    """A processed zip's stems: the library's kept copy (SCOPE.md §5.15), else the original zip."""
+    kept = originals.kept_files(lib, row["source_code"])
+    if kept is not None:
+        return Extracted(zip_path=Path(row["original_path"] or row["file_name"]), sha1=row["file_sha1"],
+                         root=originals.kept_dir(lib, row["source_code"]), files=kept)
+    zip_path = Path(row["original_path"] or "")
+    if not zip_path.is_file():
+        raise PipelineError("missing_zip", f"Zip not found and not kept in the library: {zip_path}")
+    return extract(zip_path, tmp_dir)
+
+
+def has_source(lib: Path, row) -> bool:
+    """The zip's (or pack's) audio can still be read: kept in the library, or where it came from."""
+    return originals.is_kept(lib, row["source_code"]) or bool(row["original_path"] and Path(row["original_path"]).exists())
+
+
+def _keep_original(lib: Path, code: str, files: dict[str, Path], settings: Settings, ctx: JobContext,
+                   at: float, span: float) -> str | None:
+    return originals.keep(lib, code, files, settings.thresholds, settings.workers,
+                          lambda pct, n: ctx.progress("keep", at + span * pct, f"Keeping the original: {n}"))
+
+
+def _unkept(lib: Path, db: LibraryDB) -> list:
+    """Zips and packs whose audio isn't (all) kept in the library yet but can still be read where
+    it came from."""
+    out = []
+    for z in db.list_zips():
+        if z["status"] not in ("done", "needs_review") or not z["original_path"] or not Path(z["original_path"]).exists():
+            continue
+        kept = originals.kept_files(lib, z["source_code"])
+        if z["kind"] == "pack":
+            root = Path(z["original_path"])
+            need = {r["file_name"] for r in db.stems_for_zip(z["id"]) if (root / r["file_name"]).exists()}
+            if need - set(kept or {}):
+                out.append(z)
+        elif kept is None:
+            out.append(z)
+    return out
+
+
 def analyze_zip(zip_path: Path | str, settings: Settings, overrides: Overrides | None = None,
                 ctx: JobContext | None = None) -> ZipAnalysis:
     """Classification, BPM and key only. Writes nothing."""
@@ -275,11 +316,12 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
             zip_path = existing["original_path"]
             reprocess = True
         zip_path = Path(zip_path)  # type: ignore[arg-type]
-        if not zip_path.exists():
+        kept = existing is not None and originals.is_kept(lib, existing["source_code"])
+        if not kept and not zip_path.exists():
             raise PipelineError("missing_zip", f"Zip not found: {zip_path}")
 
         ctx.progress("extract", 0.01, "Hashing")
-        sha1 = zipio.sha1_file(zip_path)
+        sha1 = existing["file_sha1"] if kept else zipio.sha1_file(zip_path)
         if existing is None:
             existing = db.find_zip_by_sha1(sha1)
             if existing is not None and not reprocess and existing["status"] in ("done", "needs_review"):
@@ -292,7 +334,9 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
         if existing is not None:
             zid, code = existing["id"], existing["source_code"]
             ov = _merge_overrides(db, existing, overrides)
-            db.update_zip(zid, status="processing", original_path=str(zip_path.resolve()))
+            if not kept:
+                db.update_zip(zid, original_path=str(zip_path.resolve()))
+            db.update_zip(zid, status="processing")
         else:
             if zipio.is_midi_zip(zip_path):
                 raise PipelineError("midi_zip", f"{zip_path.name} holds MIDI files, not stems: add it on the MIDI page")
@@ -321,7 +365,7 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
     with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
         tmp = Path(d)
         ctx.progress("extract", 0.03, "Extracting")
-        ex = extract(zip_path, tmp / "x")
+        ex = _source(lib, db.get_zip(zid), tmp / "x")
         ctx.check()
         analysis = analyze(ex, settings, ov, ctx)
         ex._cache.clear()
@@ -369,6 +413,8 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         ctx.progress("write", 0.86, "Writing samples")
         counts = _write_outputs(db, lib, zid, tag, analysis, outputs, settings, loops_only, ctx)
         db.set_arrangement(zid, analysis.arrangement)
+        if w := _keep_original(lib, code, ex.files, settings, ctx, 0.93, 0.06):
+            warnings.append(w)
 
         db.update_zip(
             zid, file_name=zip_path.name, detected_bpm=t.detected_bpm, bpm_override=ov.bpm,
@@ -601,13 +647,15 @@ def _process_pack(db: LibraryDB, lib: Path, row, names: list[str], settings: Set
         outputs: list[StemOutput] = []
         skipped: list[str] = []
         fixable = False
-        present = [n for n in names if (root / n).exists()]
+        kept = originals.kept_files(lib, code) or {}
+        src = {n: kept.get(n, root / n) for n in names}
+        present = [n for n in names if src[n].exists()]
         for n in names:
             if n not in present:
                 warnings.append(f"File missing: {n}")
         with tempfile.TemporaryDirectory(prefix="drumvault-") as d, \
                 ThreadPoolExecutor(max_workers=max(1, settings.workers)) as pool:
-            futs = [pool.submit(samplemod.process_file, root / n, n, ov.stems.get(n), settings, not loops_only, Path(d))
+            futs = [pool.submit(samplemod.process_file, src[n], n, ov.stems.get(n), settings, not loops_only, Path(d))
                     for n in present]
             try:
                 for j, (n, f) in enumerate(zip(present, futs)):
@@ -635,6 +683,8 @@ def _process_pack(db: LibraryDB, lib: Path, row, names: list[str], settings: Set
                                key=KeyInfo(), warnings=warnings)
         ctx.progress("write", 0.9, "Writing samples")
         counts = _write_outputs(db, lib, zid, tag, analysis, outputs, settings, loops_only, ctx, track=False)
+        if w := _keep_original(lib, code, {n: src[n] for n in present}, settings, ctx, 0.93, 0.06):
+            warnings.append(w)
         # Drum files skipped for a reason a category override or a rename can fix want a look;
         # a 174 BPM loop or a melodic file is only noted.
         status = "needs_review" if fixable and not row["reviewed"] else "done"
@@ -670,6 +720,8 @@ def delete_zip(settings: Settings, zip_id: int, delete_files: bool = True) -> di
             _delete_sample_files(lib, samples)
         trashed = db.removed_ids_for_zip(zip_id)
         db.delete_zip_rows(zip_id)
+    if delete_files:
+        originals.remove(lib, row["source_code"])
     for rid in trashed:
         for f in trash_files(lib, rid):
             f.unlink(missing_ok=True)
@@ -1074,9 +1126,7 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
         if row["kind"] == "pack":
             raise PipelineError("pack", "Loose samples have no shared grid to align")
         stems = db.stems_for_zip(zip_id)
-    zip_path = Path(row["original_path"] or "")
-    if not zip_path.exists():
-        raise PipelineError("missing_zip", f"Zip not found: {zip_path}")
+    zip_path = Path(row["original_path"] or row["file_name"])
     category = {r["file_name"]: r["category_override"] or r["category"] for r in stems}
     names = [n for n, c in category.items() if c in DRUM_CATEGORIES]
     if not names:
@@ -1087,7 +1137,7 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
     phase_sr = next((r["sample_rate"] for r in stems if r["file_name"] in sources and r["sample_rate"]), 44100)
     sr = th.grid_preview_sr
     with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
-        ex = extract(zip_path, Path(d))
+        ex = _source(lib, row, Path(d))
         names = [n for n in names if n in ex.files]
         if not names:
             raise PipelineError("zip_changed", f"{zip_path} no longer has the processed stems")
@@ -1111,8 +1161,8 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
 
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
-    the event files) and each zip's arrangement (from the original zip, on its stored grid).
-    Nothing else changes."""
+    the event files), the kept originals (copied from where the zips and packs came from) and
+    each zip's arrangement (from its stems, on its stored grid). Nothing else changes."""
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)
@@ -1120,7 +1170,8 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
         loops = db.loops_without_groove()
         events = db.events_without_shape()
         zips = db.zips_without_arrangement()
-        total = max(1, len(loops) + len(events) + 10 * len(zips))
+        unkept = _unkept(lib, db)
+        total = max(1, len(loops) + len(events) + 10 * len(unkept) + 10 * len(zips))
         for i, r in enumerate(loops):
             ctx.check()
             if i % 10 == 0:
@@ -1147,13 +1198,35 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             a = load(path)
             db.set_shape(r["id"], _event_shape(a.data, a.sr, float(r["bpm"] or settings.library_bpm), int(r["bars"] or 1),
                                                r["body_bars"], bar, th))
+        not_kept = []
+        for j, z in enumerate(unkept):
+            ctx.check()
+            at = (len(loops) + len(events) + 10 * j) / total
+            ctx.progress("keep", at, f"Keeping {z['file_name']} in the library ({j + 1}/{len(unkept)})")
+            sub = JobContext(progress=lambda st, pct, msg, at=at: ctx.progress(st, at + 10 * pct / total, msg),
+                             is_cancelled=ctx.is_cancelled)
+            src = Path(z["original_path"])
+            with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
+                if z["kind"] == "pack":
+                    files = {r["file_name"]: src / r["file_name"] for r in db.stems_for_zip(z["id"])
+                             if (src / r["file_name"]).exists()}
+                    w = None
+                else:
+                    # Checked before unzipping: a full disk shouldn't cost an extract every launch.
+                    w = originals.no_room(lib, src.stat().st_size, th)
+                    if w is None and zipio.sha1_file(src) != z["file_sha1"]:
+                        w = f"{src} has changed since it was processed; not kept"
+                    files = {} if w else extract(src, Path(d)).files
+                w = w or _keep_original(lib, z["source_code"], files, settings, sub, 0.0, 1.0)
+            if w:
+                not_kept.append(f"{z['file_name']}: {w}")
         missing = []
+        base = len(loops) + len(events) + 10 * len(unkept)
         for j, z in enumerate(zips):
             ctx.check()
-            ctx.progress("arrangement", (len(loops) + len(events) + 10 * j) / total,
+            ctx.progress("arrangement", (base + 10 * j) / total,
                          f"Arrangement of {z['file_name']} ({j + 1}/{len(zips)})")
-            zip_path = Path(z["original_path"] or "")
-            if not zip_path.exists():
+            if not has_source(lib, z):
                 missing.append(z["file_name"])
                 continue
             stems = db.stems_for_zip(z["id"])
@@ -1161,14 +1234,15 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             bar_one_s = _bar_one_s(db, z)
             bpm = float(z["bpm_override"] or z["detected_bpm"] or settings.library_bpm)
             with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
-                ex = extract(zip_path, Path(d))
+                ex = _source(lib, z, Path(d))
                 names = [n for n, c in category.items() if n in ex.files and arrmod.part_of(n, c)]
                 arr = arrmod.measure([(n, category[n], ex.audio(n).mono(), ex.audio(n).sr) for n in names],
                                      bpm, bar_one_s, th)
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loops)} loop grooves, {len(events)} event shapes, "
-                              f"{len(zips) - len(missing)} arrangements")
-    return {"grooves": len(loops), "shapes": len(events), "arrangements": len(zips) - len(missing), "missing": missing}
+                              f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")
+    return {"grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
+            "arrangements": len(zips) - len(missing), "missing": missing}
 
 
 def rebuild_loops(settings: Settings, ctx: JobContext | None = None) -> list[ProcessResult]:
@@ -1180,7 +1254,7 @@ def rebuild_loops(settings: Settings, ctx: JobContext | None = None) -> list[Pro
     for i, r in enumerate(rows):
         ctx.check()
         ctx.progress("rebuild", i / max(1, len(rows)), f"{r['file_name']} ({i + 1}/{len(rows)})")
-        if not Path(r["original_path"] or "").exists():
+        if not has_source(Path(settings.library_path), r):
             results.append(ProcessResult(zip_id=r["id"], source_code=r["source_code"],
                                          file_name=r["file_name"], status="error",
                                          warnings=[f"Original zip missing: {r['original_path']}"]))

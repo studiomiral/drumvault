@@ -121,7 +121,8 @@ def test_analyze_library_fills_in_older_libraries(fixtures, tmp_path):
         # The same shapes as processing measured, the source bar worked out from the stored offset.
         again = dict(db.conn.execute("SELECT id, shape FROM samples WHERE kind = 'event'").fetchall())
         assert {k: json.loads(v) for k, v in again.items()} == {k: json.loads(v) for k, v in shapes.items()}
-    assert pipeline.analyze_library(settings) == {"grooves": 0, "shapes": 0, "arrangements": 0, "missing": []}
+    assert pipeline.analyze_library(settings) == {"grooves": 0, "shapes": 0, "kept": 0, "not_kept": [], "arrangements": 0,
+                                                   "missing": []}
 
 
 def test_old_library_gets_the_new_columns(tmp_path):

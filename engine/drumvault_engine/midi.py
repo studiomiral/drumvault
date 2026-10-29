@@ -1,8 +1,8 @@
 """MIDI import (SCOPE.md §6.7): basslines (and later other parts) added from folders like zips.
 
-Each file is read with mido into notes in beats, its length rounded up to whole bars, its key
-taken from the file name (or found from the notes) and its role (bass or other) guessed from
-the name and register.
+Each file is read with mido into notes in beats from the bar of its first note, its length
+rounded up to whole bars, its key taken from the file name (or found from the notes) and its
+role (bass or other) guessed from the name and register.
 """
 
 from __future__ import annotations
@@ -81,9 +81,26 @@ def read_notes(path: Path | str) -> list[Note]:
     return sorted(notes, key=lambda n: (n.start, n.pitch))
 
 
+def from_first_bar(notes: list[Note], th: Thresholds) -> list[Note]:
+    """Notes moved back by the whole bars before the first one: a region exported from bar 49
+    of a project becomes a loop from bar 1. A note a little early on that bar starts on its 1."""
+    if not notes:
+        return notes
+    shift = math.floor((notes[0].start + th.midi_early_beats) / 4) * 4
+    if shift <= 0:
+        return notes
+    out = []
+    for n in notes:
+        start = n.start - shift
+        if start + n.length <= 0:
+            continue
+        out.append(Note(max(0.0, start), n.length + min(0.0, start), n.pitch, n.velocity))
+    return out
+
+
 def bars_for(notes: list[Note], th: Thresholds) -> int:
     end = max((n.start + n.length for n in notes), default=4.0)
-    need = max(1, math.ceil(end / 4 - 1e-6))
+    need = max(1, math.ceil((end - th.midi_overhang_beats) / 4 - 1e-6))
     return next((b for b in th.midi_bar_lengths if b >= need), th.midi_bar_lengths[-1])
 
 
@@ -132,10 +149,11 @@ def guess_role(name: str, notes: list[Note], th: Thresholds) -> str:
 
 
 def analyze(path: Path | str, th: Thresholds) -> MidiInfo:
-    notes = read_notes(path)
+    notes = from_first_bar(read_notes(path), th)
     warnings = [] if notes else ["No notes in this MIDI file"]
     bars = bars_for(notes, th)
-    notes = [n for n in notes if n.start < bars * 4]
+    end = bars * 4
+    notes = [Note(n.start, min(n.length, end - n.start), n.pitch, n.velocity) for n in notes if n.start < end]
     key = detect_key(Path(path).name, notes)
     return MidiInfo(notes=notes, bars=bars, key_label=make_label(*key) if key else None,
                     key_camelot=camelot(*key) if key else None, role=guess_role(Path(path).name, notes, th),
@@ -155,5 +173,5 @@ def transpose_to(key_from: str | None, key_to: str | None) -> int:
     return d - 12 if d > 5 else d
 
 
-__all__ = ["MIDI_EXTENSIONS", "MidiInfo", "Note", "analyze", "camelot", "detect_key", "guess_role", "has_key_in_name",
-           "make_label", "parse_label", "read_notes", "transpose_to", "PITCH_NAMES"]
+__all__ = ["MIDI_EXTENSIONS", "MidiInfo", "Note", "analyze", "camelot", "detect_key", "from_first_bar", "guess_role",
+           "has_key_in_name", "make_label", "parse_label", "read_notes", "transpose_to", "PITCH_NAMES"]

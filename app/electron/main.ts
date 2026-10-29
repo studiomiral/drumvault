@@ -8,7 +8,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
 import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
-import { LibraryReader } from './db'
+import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
   augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings,
@@ -137,7 +137,7 @@ async function submit(method: JobMethod, params: Record<string, unknown>, label:
 async function analyzeLibraryIfNeeded(): Promise<void> {
   try {
     if (!reader.needsAnalysis() || jobs.list().some((j) => j.method === 'analyze_library' && !j.finished)) return
-    await submit('analyze_library', {}, 'Measure loop grooves and track structures')
+    await submit('analyze_library', {}, 'Measure grooves and track structures, keep originals')
   } catch (e) {
     engineLog(`analyze_library not started: ${e}`)
   }
@@ -374,9 +374,11 @@ function registerIpc(): void {
   })
   ipcMain.handle('shell:revealSample', (_e, relPath: string) => shell.showItemInFolder(libraryFile(lib(), relPath)))
   ipcMain.handle('shell:revealZip', (_e, zipId: number) => {
-    const p = reader.zipDetail(zipId)?.zip.original_path
-    if (!p || !existsSync(p)) return false
-    shell.showItemInFolder(p)
+    const d = reader.zipDetail(zipId)
+    const p = d?.zip.original_path
+    if (p && existsSync(p)) shell.showItemInFolder(p)
+    else if (d?.originalKept) void shell.openPath(keptDir(lib(), d.zip.source_code))
+    else return false
     return true
   })
   ipcMain.handle('shell:openLibrary', async () => {

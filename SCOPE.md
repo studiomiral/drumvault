@@ -256,7 +256,7 @@ Events are not one-shots: they are time-stretched, because they must line up wit
 What the generator needs to sound played rather than programmed (§6.6):
 - **Loop groove** (every loop, when it is written): its hits (onsets refined to the attack, the loop treated as cyclic so a hit on sample 0 counts), placed on the 16th grid of the library BPM. Per 16th step of the bar: the median offset in fractions of a 16th (+ late, − early), relative to the loop's own quarter notes when it plays any (else to the grid, which is the source track's kick grid); the median level in dB below the loudest step; and the hit count. Plus `swing` (mean offset of the odd 16ths: +0.33 = MPC 66 %) and `push` (the offbeat 8ths). Stored as JSON in `samples.groove` (`{}` when the loop has too few hits).
 - **Track arrangement** (every zip, during analysis, before the melodic stems are let go): each stem measured bar by bar on the track's own grid (its BPM and bar 1) and summed into parts: kick, clap (and snare), hats (and shaker), ride, perc, top (top, groove, drums), crash (cymbal), fills (fill, roll), fx, bass (melodic stems named as bass), music (other melodic). Per part and bar: `0` silent (below `arrangement_silence_db` or 20 dB under the part's full level), `1` quiet or filtered, `2` full (within 6 dB of the part's full level = its 90th-percentile bar). Stored in `arrangements` (one row per zip).
-- **Older libraries**: `analyze_library` (a job) fills in grooves from the loop files, event shapes from the event files (the source bar from `source_offset_s` on the zip's stored BPM and bar 1) and arrangements from the original zips (on their stored BPM and bar 1). The app starts it by itself when the engine is up and something is missing.
+- **Older libraries**: `analyze_library` (a job) fills in grooves from the loop files, event shapes from the event files (the source bar from `source_offset_s` on the zip's stored BPM and bar 1), kept originals (§5.8d) for zips and packs imported before, while they are still where they came from, and arrangements from each zip's stems (on their stored BPM and bar 1). The app starts it by itself when the engine is up and something is missing.
 
 ### 5.8c Loose samples (`samples.py`, job `import_samples`)
 
@@ -269,6 +269,15 @@ Zips are whole tracks (tempo, bar 1, key and structure come from all their stems
 - **One-shots** are never stretched: the best hit of the file (§5.6), or the whole file with its tail trimmed when no onset is found.
 - **Events:** stretched when the name has a usable BPM, then cut on bar lines like §5.8a.
 - **Key** from the name only ("_Am_", "F#min", "Bb major"; a bare letter is not a key), else none. BPM, normalization, grooves, peaks and file names as for zips (`LP_Hat_124_NoKey_P0001-house-tools_2bar_01.wav`).
+
+### 5.8d Kept originals (`originals.py`)
+
+The library keeps its own copy of what was imported, so the zips and folders dropped in can be deleted afterwards: reprocessing, a new library BPM (`rebuild_loops`), the Grid view's preview and `analyze_library` read the kept copy first and the original only when nothing is kept.
+
+- **Where:** `<Library>/.drumvault/originals/<source code>/`, every audio file of a zip (its path inside the zip, nested zips included) or the pack's files. `kept.json` maps each stem name to its file and is written last; a folder without it (an interrupted copy), or with a file missing, is not used.
+- **Lossless:** 8-, 16- and 24-bit PCM (WAV, AIFF) become FLAC at the same bit depth: decoded, the samples are bit-identical, so reprocessing gives the same library. About 60 % of the zip's size. Float and 32-bit files, and files that are FLAC already, are copied as they are. WAV metadata chunks are not kept (nothing reads them).
+- **When:** at the end of every import and reprocess of a zip, and for every file a pack gets. Not while the disk would have less than `originals_min_free_gb` free afterwards: the zip then gets a warning to keep the original for now, and `analyze_library` tries again on a later launch (it checks the space before unzipping, and the SHA-1 so a changed zip isn't kept).
+- **Delete:** deleting a zip's samples deletes its kept copy too. The zip's `original_path` keeps saying where it came from; the zip panel says "Kept in the library", and Reveal opens the kept folder once the original is gone.
 
 ### 5.9 Normalization (`normalize.py`)
 

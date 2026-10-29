@@ -4,6 +4,7 @@ import { playback } from '../audio/engine'
 import { openGenerated } from '../arrange/persistence'
 import { IconPlay, IconSparkle, IconStar, IconStop } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle, SectionTitle } from '../components/ui'
+import { Module } from '../components/Module'
 import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
 import { bassBars, KEEPABLE, LANES, laneRole, transposeTo, type Generation, type Role } from '../generate/generator'
 import { isGenerated } from '../generate/bassline'
@@ -442,6 +443,7 @@ const NO_FAVORITES: string[] = []
 function BassPanel({ g }: { g: Generation }) {
   const { basslines, presets, loaded, error } = useBass()
   const opts = useGenerate((s) => s.settings.bass)
+  const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a bass change
   // Default outside the selector: a new [] on every read makes the store re-render forever.
   const favorites = useApp((s) => s.settings?.bass?.favorites) ?? NO_FAVORITES
@@ -464,19 +466,21 @@ function BassPanel({ g }: { g: Generation }) {
   const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.'
     : !presets.length ? 'No Serum 2 patches yet: choose preset folders under Settings → Bass.' : null
 
+  const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
+  const summary = !opts.enabled ? 'Off: G generates without bass'
+    : missing ?? (b ? <>
+        <span className="text-text">{b.midi.name}</span> · {bassBars(b)} bar{bassBars(b) === 1 ? '' : 's'} · {b.preset.name}
+        {kept && <span className="text-accent"> · keeping the {kept}</span>}
+      </> : 'On: the next generation gets a bass')
+
   return (
-    <section className="rounded-2xl border border-line bg-panel-2 px-5 py-4">
-      <div className="flex items-center gap-3 mb-3">
-        <SectionTitle>Bass</SectionTitle>
-        <label className="flex items-center gap-1.5 text-[12px] text-muted -mt-2">
-          <input type="checkbox" className="accent-[#e2c35f]" checked={opts.enabled}
-                 onChange={(e) => setBassOptions({ enabled: e.target.checked })} />
-          In new generations
-        </label>
-        <span className="flex-1" />
-        {rendering && <span className="text-[11.5px] text-accent -mt-2">Rendering with Serum 2…</span>}
-        {error && <span className="text-[11.5px] text-bad -mt-2" title={error}>Engine: {error.slice(0, 80)}</span>}
-      </div>
+    <Module id="bass" title="Bass" enabled={opts.enabled} onEnabled={(on) => setBassOptions({ enabled: on })}
+            enabledTitle={opts.enabled ? 'On: G writes a bass for every new generation' : 'Off: new generations have no bass'}
+            summary={summary}
+            status={<>
+              {rendering && <span className="text-[11.5px] text-accent">Rendering with Serum 2…</span>}
+              {error && <span className="text-[11.5px] text-bad" title={error}>Engine: {error.slice(0, 80)}</span>}
+            </>}>
       {!loaded ? <p className="text-muted text-[12.5px]">Loading basslines and patches…</p>
         : missing ? (
           <p className="text-muted text-[12.5px]">{missing}{' '}
@@ -557,7 +561,7 @@ function BassPanel({ g }: { g: Generation }) {
             </span>
           </div>
         )}
-    </section>
+    </Module>
   )
 }
 

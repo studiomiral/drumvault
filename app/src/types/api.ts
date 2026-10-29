@@ -230,6 +230,8 @@ export interface ZipDetail {
   stems: StemRow[]
   warnings: string[]
   originalExists: boolean
+  /** The library has its own copy (SCOPE.md §5.8d): reprocessing works without the original. */
+  originalKept: boolean
 }
 
 export type PeakPoints = [number, number][]

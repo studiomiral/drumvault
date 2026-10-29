@@ -57,7 +57,8 @@ def test_all_fixtures_processed(library, fixtures):
 
 def test_files_and_rows_agree(library, db):
     rows = db.all_samples()
-    on_disk = {p.relative_to(library.path).as_posix() for p in library.path.rglob("*.wav")}
+    on_disk = {p.relative_to(library.path).as_posix() for p in library.path.rglob("*.wav")
+               if not p.is_relative_to(library_dir(library.path))}   # kept originals (§5.8d) aren't samples
     assert {r["rel_path"] for r in rows} == on_disk
     for r in rows:
         assert OS_RE.match(r["rel_path"]) or LP_RE.match(r["rel_path"]) or EV_RE.match(r["rel_path"]), r["rel_path"]

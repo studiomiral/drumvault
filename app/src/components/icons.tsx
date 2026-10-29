@@ -60,3 +60,9 @@ export const IconSparkle = ({ className }: P) => (
 export const IconKey = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base}><path d="M7.5 3.5v9.5M12.5 3.5v9.5" /><rect x="3" y="3.5" width="14" height="13" rx="2" /><path d="M10 13v3.5" /></svg>
 )
+export const IconChevron = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="m7.5 5 5 5-5 5" /></svg>
+)
+export const IconCheck = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base} strokeWidth={2.2}><path d="m5 10.5 3.2 3.2L15 6.5" /></svg>
+)

@@ -19,6 +19,15 @@ export function dbPath(library: string): string {
   return join(library, '.drumvault', 'library.sqlite')
 }
 
+/** Where the library keeps a zip's or pack's own copy of its audio (SCOPE.md §5.8d). */
+export function keptDir(library: string, sourceCode: string): string {
+  return join(library, '.drumvault', 'originals', sourceCode)
+}
+
+export function isKept(library: string, sourceCode: string): boolean {
+  return existsSync(join(keptDir(library, sourceCode), 'kept.json'))
+}
+
 export function peaksPath(library: string, sampleId: number): string {
   return join(library, '.drumvault', 'peaks', `${sampleId}.json`)
 }
@@ -183,6 +192,7 @@ export class LibraryReader {
     return {
       zip, stems, warnings: parseJsonArray(zip.warnings),
       originalExists: !!zip.original_path && existsSync(zip.original_path),
+      originalKept: !!this.library && isKept(this.library, zip.source_code),
     }
   }
 
@@ -224,6 +234,11 @@ export class LibraryReader {
     const events = this.all<{ n: number }>(
       `SELECT COUNT(*) AS n FROM samples WHERE kind = 'event'${this.hasColumn('samples', 'shape') ? ' AND shape IS NULL' : ''}`)[0]?.n ?? 0
     if (events) return true
+    // Imports from before the library kept its own copy: kept while the zip or folder is still there.
+    const lib = this.library
+    if (lib && this.all<{ source_code: string; original_path: string | null }>(
+      "SELECT source_code, original_path FROM zips WHERE status IN ('done', 'needs_review')")
+      .some((z) => !isKept(lib, z.source_code) && !!z.original_path && existsSync(z.original_path))) return true
     const zips = `SELECT COUNT(*) AS n FROM zips z WHERE z.status IN ('done', 'needs_review')${
       this.hasColumn('zips', 'kind') ? " AND z.kind = 'stems'" : ''}`
     return (this.all<{ n: number }>(this.hasTable('arrangements')

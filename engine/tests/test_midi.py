@@ -56,6 +56,24 @@ def test_analyze_reads_bars_key_and_role(tmp_path):
     assert midimod.guess_role("Organ.mid", [], th) == "other" and midimod.guess_role("Synth Bass.mid", [], th) == "bass"
 
 
+def test_a_region_exported_from_later_in_the_project_starts_on_bar_one(tmp_path):
+    th = Thresholds()
+    # Logic writes the region where it sat: bar 49 (beat 192), with notes up to 8 bars on.
+    late = [(s + 192, l, p) for s, l, p in f_minor_bass(8)]
+    a = midimod.analyze(write_midi(tmp_path / "Bass.mid", late), th)
+    assert len(a.notes) == 64 and a.bars == 8
+    assert a.notes[0].start == pytest.approx(0.25)
+    # A first note pushed a little early still lands on the 1 of its bar; the rest keep their place.
+    pushed = midimod.analyze(write_midi(tmp_path / "Pushed Bass.mid", [(191.9, 0.6, 29), (194.0, 0.5, 32)]), th)
+    assert [(round(n.start, 3), round(n.length, 3)) for n in pushed.notes] == [(0.0, 0.5), (2.0, 0.5)]
+    assert pushed.bars == 1
+    # A last note held a few ticks past bar 8 doesn't make it a 16-bar loop; it ends on the bar.
+    over = midimod.analyze(write_midi(tmp_path / "Over Bass.mid", late[:-1] + [(192 + 31.5, 0.52, 29)]), th)
+    assert over.bars == 8 and over.notes[-1].start + over.notes[-1].length == pytest.approx(32)
+    # A line starting on bar 1 doesn't move, offbeat or not.
+    assert midimod.analyze(write_midi(tmp_path / "groove.mid", f_minor_bass(2)), th).notes[0].start == pytest.approx(0.25)
+
+
 def test_transpose_to_track_key():
     assert midimod.transpose_to("Am", "Fm") == -4
     assert midimod.transpose_to("Fm", "Am") == 4
