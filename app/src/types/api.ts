@@ -20,6 +20,8 @@ export interface AppSettings {
   lastExportDir?: string | null
   /** Bass (SCOPE.md §6.7): Serum 2 presets to draw patches from, and the ones you starred. */
   bass?: BassSettings
+  /** Independent Serum 2 patch pool for keys, piano and organ. */
+  keys?: BassSettings
 }
 
 export interface BassSettings {
@@ -37,7 +39,7 @@ export interface MidiItem {
   file_name: string
   name: string
   rel_path: string
-  role: 'bass' | 'other'
+  role: 'bass' | 'keys' | 'other'
   bars: number
   key_label: string | null
   key_camelot: string | null
@@ -58,7 +60,7 @@ export interface SerumPreset {
 export interface MidiImportResult {
   imported: { id: number; file_name: string; role: string; bars: number; key_label: string | null }[]
   skipped: number
-  /** Parts that aren't basslines (only bass MIDI is kept). */
+  /** Unrelated parts (bass and keys MIDI are kept). */
   ignored: number
   failed: string[]
 }
@@ -286,12 +288,13 @@ export interface DrumvaultAPI {
   sampleShift(sampleId: number): Promise<number>
   /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
   stretchSamples(relPaths: string[], bpm: number): Promise<void>
-  /** Add bass MIDI from .mid files, MIDI zips and folders; already imported ones are skipped. */
+  /** Add bass and keys MIDI from .mid files, MIDI zips and folders; already imported ones are skipped. */
   importMidi(paths: string[]): Promise<MidiImportResult>
   /** File dialog for MIDI zips, .mid files and folders. */
   chooseMidi(): Promise<string[]>
   /** Correct a bassline's key (null: no key, so it isn't transposed). */
   setMidiKey(midiId: number, key: string | null): Promise<void>
+  setMidiRole(midiId: number, role: MidiItem['role']): Promise<void>
   deleteMidi(midiIds: number[]): Promise<void>
   /** Imported MIDI files. */
   listMidi(): Promise<MidiItem[]>
@@ -302,8 +305,8 @@ export interface DrumvaultAPI {
   /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
-  /** Save an edited loop as a new bassline in the MIDI library; returns its id. */
-  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
+  /** Save an edited loop to its bass or keys MIDI library; returns its id. */
+  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null; role?: 'bass' | 'keys' }): Promise<number>
   /** Deleted samples, newest first. */
   listRemoved(): Promise<RemovedSample[]>
   /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */

@@ -4,6 +4,7 @@ import { Button, cx, Field, inputClass, PageTitle, SectionTitle } from '../compo
 import { ENGINE_DEFAULTS, resolveEngine, type ResolvedEngineOptions } from '../lib/defaults'
 import { CATEGORY_LABELS } from '../lib/format'
 import { attempt, useApp } from '../store/app'
+import { keysSettings, loadKeys, saveKeysSettings, useKeys } from '../store/keys'
 import { bassSettings, loadBass, saveBassSettings, useBass } from '../store/bass'
 import type { LibraryFacets } from '../types/api'
 import type { Category } from '../types/engine'
@@ -163,6 +164,7 @@ export function SettingsView() {
           </section>
 
           <BassSettingsSection />
+          <KeysSettingsSection />
 
           <section>
             <SectionTitle right={<Button variant="ghost" onClick={() => void refreshDeps()}>Check again</Button>}>Engine</SectionTitle>
@@ -252,6 +254,76 @@ function BassSettingsSection() {
       <div className="mt-2">
         <div className="text-[12px] text-muted mb-1.5">
           Patch pool: tick the folders to draw bass patches from ({presets.length} presets now). Star patches in Generate to hear them more often.
+        </div>
+        {error ? <p className="text-bad text-[12px]">{error}</p> : !folders ? <p className="text-faint text-[12px]">Reading presets…</p>
+          : !folders.length ? <p className="text-faint text-[12px]">No Serum 2 presets in this folder.</p> : (
+          <div className="max-h-72 overflow-y-auto rounded-lg border border-line bg-panel-2 py-1">
+            {folders.map(({ folder, count }) => {
+              const depth = folder.split('/').length - 1
+              const on = chosen.has(folder) || covered(folder)
+              return (
+                <label key={folder} className={cx('flex items-center gap-2 h-7 pr-3 text-[12.5px] hover:bg-raised', covered(folder) && 'opacity-60')}
+                       style={{ paddingLeft: 10 + depth * 18 }}>
+                  <input type="checkbox" className="accent-[#e2c35f]" checked={on} disabled={covered(folder)}
+                         onChange={() => void toggle(folder)} />
+                  <span className="flex-1 truncate">{folder.split('/').pop()}</span>
+                  <span className="text-faint tabular-nums">{count}</span>
+                </label>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function KeysSettingsSection() {
+  const { libraryVersion } = useApp()
+  const s = keysSettings()
+  const { parts, presets } = useKeys()
+  const [root, setRoot] = useState(s.presetRoot)
+  const [folders, setFolders] = useState<{ folder: string; count: number }[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    setFolders(null)
+    api.serumPresets(s.presetRoot, null).then((r) => alive && (setFolders(r.folders), setError(null)),
+      (e) => alive && setError((e as Error).message))
+    return () => {
+      alive = false
+    }
+  }, [s.presetRoot])
+  useEffect(() => {
+    void loadKeys()
+  }, [libraryVersion])
+
+  const chosen = new Set(s.folders)
+  const toggle = async (folder: string) => {
+    const next = chosen.has(folder) ? s.folders.filter((f) => f !== folder)
+      // A folder replaces its own sub-folders (they're included).
+      : [...s.folders.filter((f) => !f.startsWith(`${folder}/`)), folder]
+    await saveKeysSettings({ folders: next })
+    await loadKeys()
+  }
+  const covered = (f: string) => [...chosen].some((c) => f.startsWith(`${c}/`))
+
+  return (
+    <section>
+      <SectionTitle>Keys (Serum 2)</SectionTitle>
+      <Field label="Keys parts" hint="add MIDI zips on the MIDI page">
+        <span className="text-[12.5px]">{parts.length} imported</span>
+      </Field>
+      <Field label="Serum 2 presets" hint="the folder with Serum 2's .SerumPreset files">
+        <span className="flex items-center gap-2">
+          <input className={cx(inputClass, 'w-[420px]')} value={root} onChange={(e) => setRoot(e.target.value)}
+                 onBlur={() => root.trim() !== s.presetRoot && void saveKeysSettings({ presetRoot: root.trim(), folders: [] }).then(loadKeys)} />
+        </span>
+      </Field>
+      <div className="mt-2">
+        <div className="text-[12px] text-muted mb-1.5">
+          Patch pool: tick the folders to draw keys, piano and organ patches from ({presets.length} presets now). Star patches in Generate to hear them more often.
         </div>
         {error ? <p className="text-bad text-[12px]">{error}</p> : !folders ? <p className="text-faint text-[12px]">Reading presets…</p>
           : !folders.length ? <p className="text-faint text-[12px]">No Serum 2 presets in this folder.</p> : (

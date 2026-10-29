@@ -42,6 +42,7 @@ const api: DrumvaultAPI = {
   stretchSamples: (relPaths, bpm) => ipcRenderer.invoke('samples:stretch', relPaths, bpm),
   importMidi: (paths) => ipcRenderer.invoke('midi:import', paths),
   chooseMidi: () => ipcRenderer.invoke('dialog:midi'),
+  setMidiRole: (id, role) => ipcRenderer.invoke('midi:role', id, role),
   setMidiKey: (midiId, key) => ipcRenderer.invoke('midi:key', midiId, key),
   deleteMidi: (midiIds) => ipcRenderer.invoke('midi:delete', midiIds),
   listMidi: () => ipcRenderer.invoke('lib:midi'),

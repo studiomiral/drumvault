@@ -765,7 +765,7 @@ def _track_key(db: LibraryDB, label: str) -> tuple[str | None, str | None]:
 
 def import_midi(settings: Settings, paths: list[str]) -> dict:
     """Add bass MIDI to the library (SCOPE.md §6.7) from loose .mid files, MIDI zips (a track's
-    parts) and folders of either. Only basslines are kept (copied to MIDI/Bass/, indexed with
+    parts) and folders of either. Bass and keys parts are kept (copied to MIDI/Bass/ or MIDI/Keys/, indexed with
     bars and key); other parts are counted as ignored. Files already imported are skipped.
 
     A zip's bassline is named after the zip ("83686 Bass") and gets the key of the processed
@@ -822,17 +822,17 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
                 if not info.notes:
                     failed.append(f"{name}: no notes")
                     continue
-                if midimod.guess_role(f"{name}.mid", info.notes, th) != "bass":
-                    ignored += 1   # only basslines are used (Serum bass)
+                role = midimod.guess_role(f"{name}.mid", info.notes, th)
+                if role not in ("bass", "keys"):
+                    ignored += 1   # unrelated leads, strings, etc. are only used for key detection
                     continue
-                role = "bass"
                 sha1 = hashlib.sha1(data).hexdigest()
                 if db.midi_by_sha1(sha1):
                     skipped += 1
                     continue
                 key_label = midimod.make_label(*named) if named else track_key or info.key_label
                 title = f"{label} {name}" if label else name
-                folder = "Bass" if role == "bass" else "Other"
+                folder = {"bass": "Bass", "keys": "Keys"}.get(role, "Other")
                 base = naming.slugify(title, 60) or "midi"
                 rel, k = f"MIDI/{folder}/{base}.mid", 1
                 while db.midi_path_taken(rel) or (lib / rel).exists():
@@ -851,13 +851,13 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
 
 
 def set_midi_meta(settings: Settings, midi_id: int, role: str | None, key_label: str | None, clear_key: bool) -> dict:
-    """Correct a MIDI file's role (bass / other) or key."""
+    """Correct a MIDI file's role (bass / keys / other) or key."""
     from . import midi as midimod
     with LibraryDB(settings.library_path) as db:
         if db.get_midi(midi_id) is None:
             raise PipelineError("not_found", f"No MIDI file with id {midi_id}")
         fields: dict = {}
-        if role in ("bass", "other"):
+        if role in ("bass", "keys", "other"):
             fields["role"] = role
         if clear_key:
             fields.update(key_label=None, key_camelot=None)
@@ -907,7 +907,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith(".drumvault/bass/") or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
     _drop_stale_bass_renders(out.parent)
@@ -969,7 +969,7 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
         tr.append(msg.copy(time=tick - t))
         t = tick
     tr.append(mido.MetaMessage("end_of_track", time=max(0, bars * 4 * tpb - t)))
-    folder = "Bass" if role == "bass" else "Other"
+    folder = {"bass": "Bass", "keys": "Keys"}.get(role, "Other")
     base = naming.slugify(name, 60) or "bassline"
     with LibraryDB(lib) as db:
         rel, k = f"MIDI/{folder}/{base}.mid", 1

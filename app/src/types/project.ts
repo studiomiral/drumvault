@@ -60,6 +60,9 @@ interface ClipBase {
 
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
+  /** Absent on older bass projects. Keys share the Serum render pipeline. */
+  role?: 'bass' | 'keys'
+  keyLabel?: string | null
   /** Absolute path of the .SerumPreset. */
   preset: string
   presetName: string

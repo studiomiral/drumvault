@@ -284,7 +284,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('dialog:midi', async () => {
     const r = await dialog.showOpenDialog(win!, {
-      title: 'Add bass MIDI', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
+      title: 'Add bass and keys MIDI', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
       filters: [{ name: 'MIDI zips and files', extensions: ['zip', 'mid', 'midi'] }],
     })
     return r.canceled ? [] : r.filePaths
@@ -292,6 +292,11 @@ function registerIpc(): void {
   ipcMain.handle('midi:key', async (_e, midiId: number, key: string | null) => {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('set_midi_meta', { midi_id: midiId, key_label: key, clear_key: key == null, settings: engineSettings() })
+    send('library-changed')
+  })
+  ipcMain.handle('midi:role', async (_e, midiId: number, role: 'bass' | 'keys' | 'other') => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('set_midi_meta', { midi_id: midiId, role, settings: engineSettings() })
     send('library-changed')
   })
   ipcMain.handle('midi:delete', async (_e, midiIds: number[]) => {
@@ -314,10 +319,10 @@ function registerIpc(): void {
       notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, settings: engineSettings(),
     }, 300_000)
   })
-  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
+  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null; role?: 'bass' | 'keys' }) => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request<{ id: number }>('save_midi', {
-      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, settings: engineSettings(),
+      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, role: p.role ?? 'bass', settings: engineSettings(),
     }, 60_000)
     send('library-changed')
     return r.id

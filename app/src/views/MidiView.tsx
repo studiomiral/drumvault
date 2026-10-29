@@ -4,13 +4,15 @@ import { IconDrop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
+import { loadKeys } from '../store/keys'
+import { learnKeys } from '../generate/keys'
 import { loadBass } from '../store/bass'
 import { learnBass, type BassModel } from '../generate/bassline'
 import type { MidiItem } from '../types/api'
 
 /**
  * Samples → MIDI (SCOPE.md §6.7): the basslines Generate learns to write its own from, added from
- * MIDI zips, .mid files or folders. Only basslines are kept; a zip's other parts help find its key.
+ * MIDI zips, .mid files or folders. Bass and Keys have independent learning pools.
  */
 export function MidiView() {
   const { libraryVersion, engine, toast } = useApp()
@@ -18,9 +20,10 @@ export function MidiView() {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [search, setSearch] = useState('')
+  const [role, setRole] = useState<'all' | 'bass' | 'keys'>('all')
 
   useEffect(() => {
-    void api.listMidi().then((m) => setItems(m.filter((x) => x.role === 'bass').reverse()))
+    void api.listMidi().then((m) => setItems(m.reverse()))
   }, [libraryVersion])
 
   const add = useCallback(async (paths: string[]) => {
@@ -30,8 +33,9 @@ export function MidiView() {
     setBusy(false)
     if (!r) return
     void loadBass()
+    void loadKeys()
     const parts: string[] = []
-    parts.push(r.imported.length ? `Added ${r.imported.length} bassline${r.imported.length === 1 ? '' : 's'}` : 'No new basslines')
+    parts.push(r.imported.length ? `Added ${r.imported.length} MIDI part${r.imported.length === 1 ? '' : 's'}` : 'No new MIDI parts')
     if (r.skipped) parts.push(`${r.skipped} already in`)
     if (r.ignored) parts.push(`${r.ignored} other part${r.ignored === 1 ? '' : 's'} left out`)
     if (r.failed.length) parts.push(`${r.failed.length} unreadable: ${r.failed.slice(0, 2).join('; ')}`)
@@ -45,19 +49,27 @@ export function MidiView() {
   }
 
   const remove = async (m: MidiItem) => {
-    if (!window.confirm(`Remove "${m.name}" from your basslines? Projects that use it keep their bass.`)) return
+    if (!window.confirm(`Remove "${m.name}" from your MIDI library? Projects that use it keep their rendered parts.`)) return
     await attempt(() => api.deleteMidi([m.id]))
     void loadBass()
+    void loadKeys()
   }
 
   const setKey = async (m: MidiItem, key: string) => {
     await attempt(() => api.setMidiKey(m.id, key || null))
     void loadBass()
+    void loadKeys()
   }
 
+  const setPartRole = async (m: MidiItem, nextRole: MidiItem['role']) => {
+    await attempt(() => api.setMidiRole(m.id, nextRole))
+    void loadBass()
+    void loadKeys()
+  }
+  const keys = useMemo(() => items ? learnKeys(items) : null, [items])
   const model = useMemo(() => (items ? learnBass(items) : null), [items])
   const q = search.trim().toLowerCase()
-  const shown = (items ?? []).filter((m) => !q || m.name.toLowerCase().includes(q) || (m.source_code ?? '').toLowerCase().includes(q))
+  const shown = (items ?? []).filter((m) => (role === 'all' || m.role === role) && (!q || m.name.toLowerCase().includes(q) || (m.source_code ?? '').toLowerCase().includes(q)))
   const ready = engine.state === 'ready'
 
   return (
@@ -70,9 +82,12 @@ export function MidiView() {
          onDrop={(e) => void onDrop(e)}>
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
         <PageTitle className="mr-3">MIDI</PageTitle>
-        <input className={cx(inputClass, 'w-64')} placeholder="Search basslines" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input className={cx(inputClass, 'w-64')} placeholder="Search MIDI parts" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select aria-label="MIDI role filter" className={cx(inputClass, 'w-32')} value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
+          <option value="all">All parts</option><option value="bass">Bass</option><option value="keys">Keys</option>
+        </select>
         <div className="flex-1" />
-        <span className="text-muted text-[12px]">{items ? `${items.length} bassline${items.length === 1 ? '' : 's'}` : ''}</span>
+        <span className="text-muted text-[12px]">{items ? `${items.length} MIDI part${items.length === 1 ? '' : 's'}` : ''}</span>
         <Button variant="primary" disabled={!ready || busy} onClick={() => void api.chooseMidi().then(add)}>Add MIDI…</Button>
       </header>
 
@@ -86,34 +101,45 @@ export function MidiView() {
           <span>
             <span className="block text-text font-medium">{busy ? 'Importing…' : 'Drop MIDI zips, .mid files or folders'}</span>
             <span className="block mt-1 text-[12px] text-muted">
-              Only basslines are kept: Generate learns from them to write its own. A zip&apos;s other parts (chords, leads) help find its key;
+              Bass and keys (key, piano, organ, Rhodes and chords) are kept: Generate learns each separately. A zip&apos;s other parts (chords, leads) help find its key;
               a MIDI zip named like a processed stem zip (83686_midi ↔ 83686_stems) takes that track&apos;s key.
             </span>
           </span>
         </button>
 
-        {model && <Learned model={model} />}
+        {model && role !== 'keys' && <Learned model={model} />}
+        {keys && role !== 'bass' && (
+          <section className="rounded-xl border border-line bg-panel-2 px-4 py-3 text-[12px] space-y-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">What Keys learned</span>
+            <p className="text-muted">{keys.parts} parts · {keys.phrases.length} phrases · typically {keys.polyphony} notes per voicing.
+              Rhythms, chord voicings, register, note lengths and velocities are combined into new parts in the track key.</p>
+          </section>
+        )}
 
         {items && !items.length ? (
-          <Empty title="No basslines yet">Drop the MIDI zips of your tracks here.</Empty>
+          <Empty title="No MIDI parts yet">Drop the MIDI zips of your tracks here.</Empty>
         ) : (
           <div className="rounded-xl border border-line bg-panel-2 divide-y divide-line">
             {shown.map((m) => (
               <div key={m.id} className="h-12 px-4 flex items-center gap-4 text-[12.5px]">
-                <NotesThumb notes={m.notes} bars={m.bars} />
+                <NotesThumb notes={m.notes} bars={m.bars} color={m.role === 'keys' ? '#c4b5fd' : '#fda4af'} />
                 <div className="flex-1 min-w-0">
                   <div className="truncate font-medium">{m.name}</div>
                   <div className="text-[11px] text-faint truncate">
                     {m.notes.length} notes{m.source_code ? ` · track ${m.source_code}` : ''}{m.source ? ` · from ${m.source}` : ''}
                   </div>
                 </div>
+                <select aria-label={`Role for ${m.name}`} className={cx(inputClass, 'w-24 h-7 text-[12px]')} value={m.role}
+                        onChange={(e) => void setPartRole(m, e.target.value as MidiItem['role'])}>
+                  <option value="bass">Bass</option><option value="keys">Keys</option><option value="other">Other</option>
+                </select>
                 <span className="w-16 text-muted">{m.bars} bar{m.bars === 1 ? '' : 's'}</span>
-                <select className={cx(inputClass, 'w-36 h-7 text-[12px]')} value={m.key_label ?? ''} title="Key: the bassline is moved from this key into each track's key"
+                <select className={cx(inputClass, 'w-36 h-7 text-[12px]')} value={m.key_label ?? ''} title="Key: the part is moved from this key into each track's key"
                         onChange={(e) => void setKey(m, e.target.value)}>
                   <option value="">No key (not moved)</option>
                   {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
                 </select>
-                <button title="Remove from your basslines" className="text-faint hover:text-bad" onClick={() => void remove(m)}>
+                <button title="Remove from your MIDI library" className="text-faint hover:text-bad" onClick={() => void remove(m)}>
                   <IconX className="w-4 h-4" />
                 </button>
               </div>
@@ -126,7 +152,7 @@ export function MidiView() {
 }
 
 /** The bassline's notes as a tiny picture: time across, pitch up. */
-function NotesThumb({ notes, bars }: { notes: [number, number, number, number][]; bars: number }) {
+function NotesThumb({ notes, bars, color }: { color: string; notes: [number, number, number, number][]; bars: number }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const c = ref.current
@@ -143,12 +169,12 @@ function NotesThumb({ notes, bars }: { notes: [number, number, number, number][]
     const lo = Math.min(...notes.map((n) => n[2]))
     const hi = Math.max(...notes.map((n) => n[2]), lo + 6)
     const span = bars * 4
-    g.fillStyle = '#fda4af'
+    g.fillStyle = color
     for (const [s, l, p] of notes) {
       const y = H - 3 - ((p - lo) / (hi - lo)) * (H - 6)
       g.fillRect((s / span) * W, y - 1.5, Math.max(1.5, (l / span) * W - 0.5), 3)
     }
-  }, [notes, bars])
+  }, [notes, bars, color])
   return <canvas ref={ref} style={{ width: 120, height: 28 }} className="shrink-0 rounded bg-[rgb(0_0_0/0.2)]" />
 }
 

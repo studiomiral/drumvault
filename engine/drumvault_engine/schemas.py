@@ -208,7 +208,7 @@ class RenderBassParams(BaseModel):
 class SetMidiMetaParams(BaseModel):
     """Correct an imported MIDI file's role or key."""
     midi_id: int
-    role: Optional[str] = None
+    role: Optional[Literal["bass", "keys", "other"]] = None
     key_label: Optional[str] = None
     clear_key: bool = False
     settings: dict[str, Any] = Field(default_factory=dict)
@@ -225,7 +225,7 @@ class SaveMidiParams(BaseModel):
     notes: list[list[float]]
     bars: int = Field(ge=1, le=16)
     key_label: Optional[str] = None
-    role: str = "bass"
+    role: Literal["bass", "keys", "other"] = "bass"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -78,7 +78,7 @@ function shortHash(s: string): string {
 export function bassPath(b: BassRender, bpm: number): string {
   const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
   const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
-  return `.drumvault/bass/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+  return `.drumvault/${b.role === 'keys' ? 'keys' : 'bass'}/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
 }
 
 /** The file a clip plays at the project tempo. */

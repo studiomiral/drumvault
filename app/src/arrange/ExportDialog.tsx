@@ -7,7 +7,7 @@ import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import type { WavFormat } from '../audio/wav'
-import { exportStems, exportTargets, midiFileName, type ExportOptions, type ExportResult } from './exporter'
+import { exportStems, exportTargets, midiFileNames, type ExportOptions, type ExportResult } from './exporter'
 
 type Phase =
   | { kind: 'setup' }
@@ -52,7 +52,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const run = async (opts: ExportOptions, checkExisting: boolean) => {
     cancelled.current = false
     if (checkExisting) {
-      const names = [...exportTargets(project, opts).map((t) => t.file), ...(opts.midi ? [midiFileName(opts.prefix)] : [])]
+      const names = [...exportTargets(project, opts).map((t) => t.file), ...(opts.midi ? midiFileNames(project, opts.prefix) : [])]
       const existing = await api.existingFiles(opts.dir, names)
       if (existing.length && !window.confirm(`Replace ${existing.length} existing file${existing.length > 1 ? 's' : ''} in ${opts.dir}?\n\n${existing.join('\n')}`)) return
       void saveSettings({ lastExportDir: opts.dir })

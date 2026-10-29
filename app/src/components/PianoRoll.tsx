@@ -52,8 +52,8 @@ export function PianoRoll({ notes, bars, onChange, playhead, color = '#fda4af' }
   // Pitch range: the notes with room around them, at least two octaves.
   const [lo, hi] = useMemo(() => {
     const ps = draft.map((n) => n.at(2)!)
-    const min = Math.min(...ps, 36)
-    const max = Math.max(...ps, 52)
+    const min = ps.length ? Math.min(...ps) : 36
+    const max = ps.length ? Math.max(...ps) : 52
     const a = Math.max(0, min - 5)
     return [a, Math.min(127, Math.max(max + 6, a + 24))]
   }, [draft])

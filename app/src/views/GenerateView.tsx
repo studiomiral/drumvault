@@ -5,6 +5,7 @@ import { openGenerated } from '../arrange/persistence'
 import { IconPlay, IconSparkle, IconStar, IconStop } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle, SectionTitle } from '../components/ui'
 import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
+import { KeysPanel } from '../components/KeysPanel'
 import { bassBars, KEEPABLE, LANES, laneRole, transposeTo, type Generation, type Role } from '../generate/generator'
 import { isGenerated } from '../generate/bassline'
 import { PianoRoll, type RollNote } from '../components/PianoRoll'
@@ -117,7 +118,10 @@ export function GenerateView() {
           {g ? (
             <>
               <Overview g={g} />
-              <BassPanel g={g} />
+              <div className="grid grid-cols-1 min-[1280px]:grid-cols-2 gap-5 items-start">
+                <BassPanel g={g} />
+                <KeysPanel g={g} />
+              </div>
               <div className="grid grid-cols-[1fr_340px] gap-5">
                 <Details g={g} />
                 <KeepPanel g={g} keep={keep} setKeep={setKeep} />
@@ -203,7 +207,7 @@ function Options() {
   const minutes = [3, 4, 5, 6, 7, 8]
   const sel = 'h-7 rounded-lg bg-[rgb(0_0_0/0.25)] px-2 text-text text-[12px] outline-none shadow-[0_0_0_1px_rgb(255_255_255/0.08)]'
   return (
-    <div className="flex items-center gap-2 text-[12px] text-muted relative">
+    <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted relative">
       Length
       <select className={sel} value={settings.minMinutes} onChange={(e) => {
         const v = Number(e.target.value)
@@ -488,7 +492,7 @@ function BassPanel({ g }: { g: Generation }) {
         ) : (
           <div className="grid grid-cols-[86px_1fr] gap-y-2 items-center text-[12.5px]">
             <span className="text-muted">Patch</span>
-            <span className="flex items-center gap-1.5 min-w-0">
+            <span className="flex flex-wrap items-center gap-1.5 min-w-0">
               <button className={btn} title="Previous patch" onClick={() => setGenerationBass({ preset: step(presets, b.preset, -1, (x, y) => x.path === y.path) })}>‹</button>
               <span className="truncate font-medium" title={b.preset.path}>{b.preset.name}</span>
               <span className="text-faint truncate text-[11.5px]">{b.preset.folder}</span>
@@ -501,7 +505,7 @@ function BassPanel({ g }: { g: Generation }) {
               <span className="text-faint text-[11.5px] ml-1">{presets.length} patches</span>
             </span>
             <span className="text-muted">Bassline</span>
-            <span className="flex items-center gap-1.5 min-w-0">
+            <span className="flex flex-wrap items-center gap-1.5 min-w-0">
               <button className={btn} title="Write a new bassline, learned from your MIDI basslines" onClick={() => newBassline()}>New bassline</button>
               {([null, 1, 2, 4] as const).map((n) => (
                 <button key={n ?? 'any'} className={cx(btn, opts.bars === n && 'bg-accent/20 text-accent')}
@@ -538,7 +542,7 @@ function BassPanel({ g }: { g: Generation }) {
                 <PianoRoll notes={(b.notes ?? b.midi.notes).map(([s, l, p, v]) => [s, l, p + b.transpose, v] as RollNote)}
                            bars={bassBars(b)} playhead={() => bassPlayhead(g)}
                            onChange={(notes, bars) => setGenerationBass({ notes: notes.map(([s, l, p, v]) => [s, l, p - b.transpose, v] as RollNote), bars })} />
-                <div className="flex items-center gap-2 text-[12px]">
+                <div className="flex flex-wrap items-center gap-2 text-[12px]">
                   <span className="text-faint">Edits apply to this track only.</span>
                   <span className="flex-1" />
                   <input className={cx(inputClass, 'w-48 h-7 text-[12px]')} value={saveName} onChange={(e) => setSaveName(e.target.value)} />
@@ -565,7 +569,7 @@ function BassPanel({ g }: { g: Generation }) {
 function bassPlayhead(g: Generation): number | null {
   if (!playback.playing || !g.bass) return null
   const pos = playback.position()
-  const c = g.project.clips.find((k) => k.type === 'audio' && k.bass && pos >= k.start && pos < k.start + k.length)
+  const c = g.project.clips.find((k) => k.type === 'audio' && k.bass && k.bass.role !== 'keys' && pos >= k.start && pos < k.start + k.length)
   if (!c || c.type !== 'audio') return null
   const L = bassBars(g.bass) * 4
   return (((pos - c.start + c.trimBeats) % L) + L) % L
@@ -602,6 +606,8 @@ function KeepPanel({ g, keep, setKeep }: { g: Generation; keep: KeepToggles; set
       {toggle(keep.structure, 'Structure', () => setKeep({ structure: !keep.structure }), `${g.sections.length} sections`)}
       {toggle(keep.key, 'Key', () => setKeep({ key: !keep.key }), g.key ?? 'no key')}
       {g.bass && toggle(keep.bassline, 'Bassline', () => setKeep({ bassline: !keep.bassline }), g.bass.midi.name)}
+      {g.keys && toggle(keep.keysPart, 'Keys part', () => setKeep({ keysPart: !keep.keysPart }), g.keys.midi.name)}
+      {g.keys && toggle(keep.keysPatch, 'Keys patch', () => setKeep({ keysPatch: !keep.keysPatch }), g.keys.preset.name)}
       {g.bass && toggle(keep.patch, 'Bass patch', () => setKeep({ patch: !keep.patch }), g.bass.preset.name)}
       {KEEPABLE.filter((r) => g.picks[r]).map((role) => {
         const on = keep.lanes.includes(role)

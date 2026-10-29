@@ -21,13 +21,17 @@ export async function ensureTempo(project: Project): Promise<void> {
 
 const bassReady = new Set<string>()
 const bassInflight = new Map<string, Promise<void>>()
-const bassListeners = new Set<(rendering: boolean) => void>()
-let bassPending = 0
+const renderState = {
+  bass: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  keys: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+}
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */
-export function onBassRendering(fn: (rendering: boolean) => void): () => void {
-  bassListeners.add(fn)
-  return () => bassListeners.delete(fn)
+export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' = 'bass'): () => void {
+  const state = renderState[role]
+  state.listeners.add(fn)
+  fn(state.pending > 0)
+  return () => state.listeners.delete(fn)
 }
 
 /** Render one bass part (if not cached). Several parts render one after another in the engine. */
@@ -36,14 +40,15 @@ export function renderBass(b: BassRender, bpm: number): Promise<void> {
   if (bassReady.has(path)) return Promise.resolve()
   let p = bassInflight.get(path)
   if (!p) {
-    if (bassPending++ === 0) for (const fn of bassListeners) fn(true)
+    const state = renderState[b.role ?? 'bass']
+    if (state.pending++ === 0) for (const fn of state.listeners) fn(true)
     p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove })
       .then(() => {
         bassReady.add(path)
       })
       .finally(() => {
         bassInflight.delete(path)
-        if (--bassPending === 0) for (const fn of bassListeners) fn(false)
+        if (--state.pending === 0) for (const fn of state.listeners) fn(false)
       })
     bassInflight.set(path, p)
   }
