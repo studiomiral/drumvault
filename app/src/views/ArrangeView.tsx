@@ -11,7 +11,8 @@ import { useApp } from '../store/app'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Marker } from '../types/project'
-import { BEATS_PER_BAR, duplicateClips, shiftContent, uid } from '../lib/project'
+import { BEATS_PER_BAR } from '../lib/project'
+import { deleteSelection, duplicateSelection, shiftSelection, splitSelectionAt } from '../arrange/commands'
 
 /** Mini DAW (SCOPE.md §6.4). */
 export function ArrangeView() {
@@ -51,6 +52,9 @@ export function ArrangeView() {
         st.edit('Nudge clips', (d) => {
           for (const c of d.clips) if (ids.has(c.id)) c.start = Math.max(0, c.start + delta)
         }, { coalesce: 'nudge' })
+      } else if (e.key.toLowerCase() === 's' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        splitSelectionAt(Math.round(playback.position() * 4) / 4)  // at the playhead, on a 16th
       } else if (e.key === 'Home' || e.key === 'Enter') {
         playback.setPosition(0)
       }
@@ -76,49 +80,4 @@ export function ArrangeView() {
       {modal === 'export' && <ExportDialog onClose={() => setModal(null)} />}
     </div>
   )
-}
-
-export function deleteSelection(): void {
-  const st = useProject.getState()
-  if (st.selection.length) {
-    const ids = new Set(st.selection)
-    st.edit(`Delete ${ids.size} clip${ids.size > 1 ? 's' : ''}`, (d) => {
-      d.clips = d.clips.filter((c) => !ids.has(c.id))
-    })
-  } else if (st.selectedMarker) {
-    const id = st.selectedMarker
-    st.edit('Delete marker', (d) => {
-      d.markers = d.markers.filter((m) => m.id !== id)
-    })
-  }
-}
-
-/** ⇧← / ⇧→: move the sound of the selected clips a beat earlier/later inside their loop. */
-export function shiftSelection(beats: number): void {
-  const st = useProject.getState()
-  const ids = new Set(st.selection)
-  if (!ids.size) return
-  st.edit('Move sound in clip', (d) => {
-    d.clips = d.clips.map((c) => (ids.has(c.id) ? shiftContent(c, beats) : c))
-  }, { coalesce: 'shift-content' })
-}
-
-/**
- * ⌘D / R: copies of the selection placed right after it. With a section marker selected the
- * whole section is duplicated: its clips move by the section length and the marker is copied.
- */
-export function duplicateSelection(): void {
-  const st = useProject.getState()
-  const sel = st.project.clips.filter((c) => st.selection.includes(c.id))
-  const marker = st.project.markers.find((m) => m.id === st.selectedMarker)
-  if (!sel.length && !marker) return
-  const span = marker ? marker.end - marker.start : undefined
-  const copies = duplicateClips(sel, span)
-  const markerCopy = marker ? { ...marker, id: uid('m'), start: marker.end, end: marker.end + span! } : null
-  st.edit(markerCopy ? `Duplicate section ${marker!.name}` : `Duplicate ${copies.length} clip${copies.length > 1 ? 's' : ''}`, (d) => {
-    d.clips.push(...copies)
-    if (markerCopy) d.markers.push(markerCopy)
-  })
-  st.select(copies.map((c) => c.id))
-  if (markerCopy) st.selectMarker(markerCopy.id)
 }

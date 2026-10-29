@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { augmentedPath, expandZipPaths, libraryFile, loadSettings, saveSettings } from '../electron/fs'
+import { augmentedPath, expandSamplePaths, expandZipPaths, libraryFile, loadSettings, saveSettings } from '../electron/fs'
 
 describe('fs helpers', () => {
   it('finds zips in dropped folders, skipping junk', async () => {
@@ -14,6 +14,18 @@ describe('fs helpers', () => {
     }
     const zips = await expandZipPaths([join(d, 'a'), join(d, 'top.zip'), join(d, 'a', 'x.zip'), join(d, 'missing')])
     expect(zips).toEqual([join(d, 'a', 'b', 'y.ZIP'), join(d, 'a', 'x.zip'), join(d, 'top.zip')])
+  })
+
+  it('finds loose samples in dropped folders, skipping junk and zips', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'dv-fs-'))
+    mkdirSync(join(d, 'Pack', 'Loops'), { recursive: true })
+    for (const f of ['Pack/Kick.wav', 'Pack/Loops/Top 124.AIFF', 'Pack/Loops/hat.flac', 'Pack/preview.mp3',
+      'Pack/._Kick.wav', 'Pack/stems.zip', 'Snare.aif']) {
+      writeFileSync(join(d, f), 'x')
+    }
+    expect(await expandSamplePaths([join(d, 'Pack'), join(d, 'Snare.aif')])).toEqual([
+      join(d, 'Pack', 'Kick.wav'), join(d, 'Pack', 'Loops', 'hat.flac'), join(d, 'Pack', 'Loops', 'Top 124.AIFF'),
+      join(d, 'Snare.aif')])
   })
 
   it('keeps sample paths inside the library', () => {

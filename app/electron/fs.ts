@@ -37,7 +37,18 @@ function isJunk(name: string): boolean {
 }
 
 /** Dropped/selected files and folders -> zip files (folders searched recursively). */
-export async function expandZipPaths(paths: string[]): Promise<string[]> {
+export function expandZipPaths(paths: string[]): Promise<string[]> {
+  return expandFiles(paths, (p) => p.toLowerCase().endsWith('.zip'))
+}
+
+export const SAMPLE_EXTENSIONS = ['wav', 'aif', 'aiff', 'flac']
+
+/** Loose audio files (Splice and other samples) in dropped files and folders. */
+export function expandSamplePaths(paths: string[]): Promise<string[]> {
+  return expandFiles(paths, (p) => SAMPLE_EXTENSIONS.includes(p.split('.').pop()?.toLowerCase() ?? ''))
+}
+
+async function expandFiles(paths: string[], wanted: (path: string) => boolean): Promise<string[]> {
   const out: string[] = []
   const walk = async (p: string): Promise<void> => {
     let st
@@ -52,7 +63,7 @@ export async function expandZipPaths(paths: string[]): Promise<string[]> {
       for (const e of entries) {
         if (!isJunk(e.name)) await walk(join(p, e.name))
       }
-    } else if (st.isFile() && p.toLowerCase().endsWith('.zip') && !isJunk(basename(p))) {
+    } else if (st.isFile() && wanted(p) && !isJunk(basename(p))) {
       out.push(resolve(p))
     }
   }

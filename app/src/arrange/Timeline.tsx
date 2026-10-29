@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { playback } from '../audio/engine'
-import { BEATS_PER_BAR, clipEnd, clipsInRange, loopBeats, makeClip, makeLane, makeMarker, nextMarkerName, snap, uid } from '../lib/project'
+import { BEATS_PER_BAR, canReplace, clipEnd, clipsInRange, loopBeats, makeClip, makeLane, makeMarker, nextMarkerName, snap, uid } from '../lib/project'
+import { ContextMenu, type MenuEntry } from '../components/ContextMenu'
+import {
+  clipboardSample, copySelection, cutSelection, deleteSelection, duplicateSelection, hasClipboard, pasteAt, removeFades,
+  changeBass, hasBass, newClipBassline, pitchSelection, replaceWith, revealInFinder, shiftSelection, showInLibrary, splitSelectionAt, stepBass, swapForSimilar,
+} from './commands'
 import { CATEGORY_LABELS } from '../lib/format'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
@@ -451,7 +456,111 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
       return
     }
     const hit = clipAt(x, y)
-    if (hit?.clip.type === 'pattern') useProject.getState().openEditor(hit.clip.id)
+    if (hit?.clip.type === 'pattern' || (hit?.clip.type === 'audio' && hit.clip.bass)) useProject.getState().openEditor(hit.clip.id)
+  }
+
+  // ---- right-click menu ---------------------------------------------------------------
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const { x, y } = pos(e)
+    const st = useProject.getState()
+    const beat = xToBeat(x, px, sx)
+    const u = unit(false)
+    const at = Math.max(0, Math.floor(beat / u) * u)    // paste / play position
+    const cutAt = Math.max(0, snap(beat, u))             // split position
+    const play: MenuEntry = { label: 'Play from here', onClick: () => void playback.play(at) }
+    const paste: MenuEntry = { label: 'Paste here', shortcut: '⌘V', disabled: !hasClipboard(), onClick: () => pasteAt(at) }
+    let items: MenuEntry[]
+
+    if (y < MARKER_H) {
+      const hit = markerAt(x)
+      if (!hit) return
+      const m = hit.marker
+      st.select(clipsInRange(project.clips, m.start, m.end).map((c) => c.id))
+      st.selectMarker(m.id)
+      items = [
+        { label: 'Rename section…', onClick: () => onMarkerEdit(m, beatToX(m.start, px, sx)) },
+        { label: 'Duplicate section', shortcut: '⌘D', onClick: duplicateSelection },
+        { label: 'Loop this section', onClick: () => st.edit('Set loop', (d) => {
+          d.loop = { start: m.start, end: m.end, enabled: true }
+        }) },
+        { label: 'Play section', onClick: () => void playback.play(m.start) },
+        'separator',
+        { label: 'Delete section marker', danger: true, title: 'The clips stay', onClick: () => st.edit('Delete marker', (d) => {
+          d.markers = d.markers.filter((k) => k.id !== m.id)
+        }) },
+      ]
+    } else if (y < TOP) {
+      items = [play, paste]
+    } else {
+      const hit = clipAt(x, y)
+      if (!hit) {
+        items = [paste, { label: 'Select all', shortcut: '⌘A', onClick: () => st.select(project.clips.map((c) => c.id)) }, 'separator', play]
+      } else {
+        const c = hit.clip
+        if (!st.selection.includes(c.id)) st.select([c.id])
+        const sel = useProject.getState().selection
+        const selClips = project.clips.filter((k) => sel.includes(k.id))
+        const copied = clipboardSample()
+        const n = sel.length
+        const many = n > 1 ? ` (${n})` : ''
+        items = [
+          { label: `Cut${many}`, shortcut: '⌘X', onClick: cutSelection },
+          { label: `Copy${many}`, shortcut: '⌘C', onClick: copySelection },
+          paste,
+          { label: `Duplicate${many}`, shortcut: '⌘D', onClick: duplicateSelection },
+          { label: `Delete${many}`, shortcut: '⌫', danger: true, onClick: deleteSelection },
+          'separator',
+          { label: 'Split here', shortcut: 'S', disabled: !selClips.some((k) => cutAt > k.start && cutAt < clipEnd(k)),
+            onClick: () => splitSelectionAt(cutAt) },
+          { label: 'Move sound a beat earlier', shortcut: '⇧←', onClick: () => shiftSelection(-1) },
+          { label: 'Move sound a beat later', shortcut: '⇧→', onClick: () => shiftSelection(1) },
+          ...(selClips.some((k) => k.fadeIn || k.fadeOut) ? [{ label: 'Remove fades', onClick: removeFades }] : []),
+          ...(c.type === 'pattern' ? [{ label: 'Edit pattern…', onClick: () => st.openEditor(c.id) }] : []),
+          'separator',
+          ...(hasBass(selClips) ? [
+            { label: 'Edit notes…', title: 'Piano roll: changes every clip of this bassline', onClick: () => st.openEditor(c.id) },
+            { label: 'Transpose up a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 1) })) },
+            { label: 'Transpose down a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 1) })) },
+            { label: 'Octave up', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 12) })) },
+            { label: 'Octave down', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 12) })) },
+            { label: 'Next bass patch', title: 'From the Serum patch pool', onClick: () => void stepBass('patch', 1) },
+            { label: 'Previous bass patch', onClick: () => void stepBass('patch', -1) },
+            { label: 'Random bass patch', onClick: () => void stepBass('patch', 'random') },
+            { label: 'New bassline', title: 'Written from what your MIDI basslines have in common, in the same key', onClick: () => void newClipBassline() },
+            'separator' as const,
+          ] : []),
+          ...(selClips.some((k) => !(k.type === 'audio' && k.bass)) ? [
+            { label: 'Pitch up a semitone', title: 'Faster and higher, like a sampler; loops stay in time',
+              onClick: () => pitchSelection(1) },
+            { label: 'Pitch down a semitone', onClick: () => pitchSelection(-1) },
+            ...(selClips.some((k) => k.pitch) ? [{ label: 'Original pitch', onClick: () => pitchSelection(null) }] : []),
+            ...(selClips.some((k) => k.type === 'audio' && k.loopBars) ? [{ label: 'Play the whole loop', title: 'Not only its first bars',
+              onClick: () => st.edit('Play the whole loop', (d) => {
+                for (const k of d.clips) if (sel.includes(k.id) && k.type === 'audio') delete k.loopBars
+              }) }] : []),
+            ...(selClips.some((k) => k.type === 'pattern' && k.groove) ? [{ label: 'Play straight', title: "Without the loop's groove (timing and accents)",
+              onClick: () => st.edit('Play straight', (d) => {
+                for (const k of d.clips) if (sel.includes(k.id) && k.type === 'pattern') delete k.groove
+              }) }] : []),
+            'separator' as const,
+          ] : []),
+          ...(copied && selClips.some((k) => canReplace(k, copied)) && copied.relPath !== c.sample.relPath
+            ? [{ label: `Replace with copied sample`, title: copied.name, onClick: () => void replaceWith(copied, 'Replace with copied sample') }]
+            : []),
+          ...(c.type === 'audio' && c.bass ? [] : [
+            { label: 'Swap for a similar sound', title: 'The most similar sample in the library (again for the next one)', onClick: () => void swapForSimilar() },
+            'separator' as const,
+            { label: 'Show in Library', onClick: () => void showInLibrary(c) },
+          ]),
+          { label: 'Reveal in Finder', onClick: () => revealInFinder(c) },
+        ]
+      }
+    }
+    setMenu({ x: e.clientX, y: e.clientY, items })
   }
 
   // ---- drop from the library panel ------------------------------------------------
@@ -501,7 +610,8 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
          onDragOver={onDragOver} onDragLeave={() => setDrop(null)} onDrop={onDrop}>
       <canvas ref={base} className="absolute inset-0" style={{ width: size.w, height: size.h }} />
       <canvas ref={over} className="absolute inset-0" style={{ width: size.w, height: size.h }}
-              onMouseDown={onMouseDown} onMouseMove={onMouseMove} onDoubleClick={onDoubleClick} />
+              onMouseDown={onMouseDown} onMouseMove={onMouseMove} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
       <HScrollbar width={size.w} contentWidth={(project.lengthBars * BEATS_PER_BAR + 8) * px} />
     </div>
   )

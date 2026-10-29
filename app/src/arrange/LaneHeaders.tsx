@@ -149,6 +149,11 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
             <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}
                        color={lane.color} title={`Pan ${fmtPan(lane.pan)} (double-click: centre)`} dragging={controlDrag}
                        onChange={(v) => set('Lane pan', { pan: v }, `pan-${lane.id}`)} />
+            {lane.duck !== undefined && (
+              <BarSlider className="w-10" min={0} max={1} step={0.05} value={lane.duck} reset={0.6} color="#fda4af"
+                         title={`Sidechain: ducks ${Math.round(lane.duck * 100)}% under the kick (double-click: 60%)`} dragging={controlDrag}
+                         onChange={(v) => set('Sidechain', { duck: v }, `duck-${lane.id}`)} />
+            )}
           </div>
         )}
       </div>

@@ -2,30 +2,35 @@ import { useEffect } from 'react'
 import { initProjects, startAutosave } from './arrange/persistence'
 import { setAudioSampleRate } from './audio/context'
 import { EngineStatusDot } from './components/EngineBanner'
-import { IconArrange, IconFolder, IconGrid, IconKeyboard, IconLibrary, IconProcess, IconSettings, IconSparkle, IconX } from './components/icons'
+import { IconFolder, IconX } from './components/icons'
+import { MenuIcon, type MenuIconName } from './components/MenuIcon'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { cx } from './components/ui'
 import { useApp, type View } from './store/app'
-import { ArrangeView, duplicateSelection } from './views/ArrangeView'
+import { ArrangeView } from './views/ArrangeView'
+import { copySelection, cutSelection, duplicateSelection, pasteAtPlayhead } from './arrange/commands'
 import { useProject } from './store/project'
 import { GenerateView } from './views/GenerateView'
 import { GridView } from './views/GridView'
+import { MidiView } from './views/MidiView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
 import { WelcomeView } from './views/WelcomeView'
 
-const NAV_GROUPS: { label: string; items: { view: View; label: string; Icon: typeof IconProcess }[] }[] = [
+const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = [
   { label: 'Samples', items: [
-    { view: 'process', label: 'Process', Icon: IconProcess },
-    { view: 'library', label: 'Library', Icon: IconLibrary },
-    { view: 'grid', label: 'Grid', Icon: IconGrid },
+    { view: 'process', label: 'Process' },
+    { view: 'library', label: 'Library' },
+    { view: 'grid', label: 'Grid' },
+    { view: 'midi', label: 'MIDI' },
   ] },
   { label: 'Create', items: [
-    { view: 'generate', label: 'Generate', Icon: IconSparkle },
-    { view: 'arrange', label: 'Arrange', Icon: IconArrange },
+    { view: 'generate', label: 'Generate' },
+    { view: 'arrange', label: 'Arrange' },
   ] },
-  { label: 'Settings', items: [{ view: 'settings', label: 'Settings', Icon: IconSettings }] },
+  { label: 'Settings', items: [{ view: 'settings', label: 'Settings' }] },
 ]
 
 export function App() {
@@ -58,7 +63,8 @@ export function App() {
       if (!mod || e.altKey) return
       const k = e.key.toLowerCase()
       const cmd = k === 'z' ? (e.shiftKey ? 'redo' : 'undo') : k === 'y' && !e.shiftKey ? 'redo'
-        : k === 'd' && !e.shiftKey ? 'duplicate' : k === 'a' && !e.shiftKey ? 'select-all' : null
+        : k === 'd' && !e.shiftKey ? 'duplicate' : k === 'a' && !e.shiftKey ? 'select-all'
+          : k === 'x' && !e.shiftKey ? 'cut' : k === 'c' && !e.shiftKey ? 'copy' : k === 'v' && !e.shiftKey ? 'paste' : null
       if (cmd && runEditCommand(cmd)) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
@@ -77,18 +83,18 @@ export function App() {
     <div className="h-full flex bg-bg">
       <nav className="w-[224px] shrink-0 bg-panel border-r border-line flex flex-col">
         {/* Room for the window buttons; lines up with the views' top bars. */}
-        <div className="app-drag h-14 shrink-0 border-b border-line" />
+        <div className="app-drag topbar-art topbar-art-sidebar h-14 shrink-0 border-b border-line" />
         <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-5 space-y-6">
           {NAV_GROUPS.map((g) => (
             <div key={g.label}>
               <div className="px-2.5 mb-2 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint">{g.label}</div>
               <div className="flex flex-col gap-1">
-                {g.items.map(({ view: v, label, Icon }) => (
-                  <NavItem key={v} label={label} Icon={Icon} active={view === v} onClick={() => setView(v)}
+                {g.items.map(({ view: v, label }) => (
+                  <NavItem key={v} label={label} icon={v} active={view === v} onClick={() => setView(v)}
                            badge={v === 'process' && active > 0 ? active : null} />
                 ))}
                 {g.label === 'Settings' && (
-                  <NavItem label="Shortcuts" Icon={IconKeyboard} active={false} onClick={() => setModal('shortcuts')} hint="?" />
+                  <NavItem label="Shortcuts" icon="shortcuts" active={false} onClick={() => setModal('shortcuts')} hint="?" />
                 )}
               </div>
             </div>
@@ -108,12 +114,15 @@ export function App() {
         </div>
       </nav>
       <main className="flex-1 min-w-0 flex flex-col">
+        <ErrorBoundary resetKey={view}>
         {view === 'process' && <ProcessView />}
         {view === 'library' && <LibraryView />}
         {view === 'grid' && <GridView />}
+        {view === 'midi' && <MidiView />}
         {view === 'generate' && <GenerateView />}
         {view === 'arrange' && <ArrangeView />}
         {view === 'settings' && <SettingsView />}
+        </ErrorBoundary>
       </main>
       <Toasts />
       {modal === 'shortcuts' && <ShortcutsDialog onClose={() => setModal(null)} />}
@@ -121,19 +130,19 @@ export function App() {
   )
 }
 
-function NavItem({ label, Icon, active, onClick, badge, hint }: {
+function NavItem({ label, icon, active, onClick, badge, hint }: {
   label: string
-  Icon: typeof IconProcess
+  icon: MenuIconName
   active: boolean
   onClick: () => void
   badge?: number | null
   hint?: string
 }) {
   return (
-    <button onClick={onClick}
-            className={cx('flex items-center gap-3 h-9 px-2.5 rounded-lg text-[13px] transition-colors',
-              active ? 'bg-raised text-text font-medium' : 'text-muted hover:text-text hover:bg-[#2d2e32]')}>
-      <Icon className={cx('w-[17px] h-[17px]', active && 'text-accent')} />
+    <button onClick={onClick} aria-current={active ? 'page' : undefined}
+            className={cx('menu-item flex items-center gap-3 h-12 px-2.5 rounded-xl text-[13px] transition-colors',
+              active ? 'menu-item-active text-text font-medium' : 'text-muted hover:text-text hover:bg-[#2d2e32]')}>
+      <MenuIcon name={icon} />
       <span className="flex-1 text-left">{label}</span>
       {badge != null && <span className="text-[10.5px] rounded-full bg-brand text-on-accent px-1.5 font-semibold">{badge}</span>}
       {hint && <kbd className="text-[10.5px] text-faint font-sans">{hint}</kbd>}
@@ -173,6 +182,12 @@ function runEditCommand(cmd: string): boolean {
   } else if (cmd === 'duplicate') {
     if (!arrange || typing) return false
     duplicateSelection()
+  } else if (cmd === 'cut' || cmd === 'copy' || cmd === 'paste') {
+    // Text fields keep the system clipboard (the Edit menu's own items); the arrangement has clips.
+    if (!arrange || typing || el?.tagName === 'SELECT') return false
+    if (cmd === 'cut') cutSelection()
+    else if (cmd === 'copy') copySelection()
+    else pasteAtPlayhead()
   } else {
     return false
   }

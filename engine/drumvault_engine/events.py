@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .audioutil import amp_to_db, cosine, db_to_amp, logmel_fingerprint, peak, to_mono
+from .audioutil import amp_to_db, cosine, db_to_amp, logmel_fingerprint, peak, rms_db, to_mono
 from .config import Settings, Thresholds
 from .loops import bar_length, beat_levels, fade_in_if_needed
 
@@ -25,6 +25,7 @@ class Event:
     start: int                # sample offset in the stretched stem (a bar line)
     fingerprint: np.ndarray
     body_bars: int = 0        # bars from the start to the end of the main sound (tail excluded)
+    bar: int = 0              # the bar it starts on, counted from the stem's bar one
 
 
 def active_floor_db(mono: np.ndarray, th: Thresholds) -> float:
@@ -138,7 +139,7 @@ def extract_events(data: np.ndarray, sr: int, phase: int, bpm: float, settings: 
             _fade(seg, len(seg), fade, out=True)  # a bed chunk cut mid-sound
         fp = logmel_fingerprint(to_mono(seg), sr, th, frames_per_chunk=th.loop_fingerprint_frames_per_bar * bars,
                                 top_db=th.loop_fingerprint_top_db)
-        cands.append(Event(seg, sr, bars, start, fp, min(bars, body_bars(mono, beat_len, phase, bar0, a, b, th))))
+        cands.append(Event(seg, sr, bars, start, fp, min(bars, body_bars(mono, beat_len, phase, bar0, a, b, th)), bar0))
 
     # Dedupe: the same riser before every drop is one sample (first occurrence kept).
     kept: list[Event] = []
@@ -146,3 +147,56 @@ def extract_events(data: np.ndarray, sr: int, phase: int, bpm: float, settings: 
         if all(similarity(c, k) <= settings.event_dedupe_threshold for k in kept):
             kept.append(c)
     return farthest_point(kept, settings.max_events_per_stem)
+
+
+def shape(data: np.ndarray, sr: int, bpm: float, bars: int, body: int, th: Thresholds) -> dict:
+    """How an event (cut on the grid at `bpm`) plays, in 16ths from its start:
+
+    - `end`: where its sound ends, and `gap` the 16ths of silence from there to the end of its
+      body (`body` bars): a riser that stops on beat 7 of 8 leaves the producer's beat of
+      silence before the drop;
+    - `peak`: its loudest 16th; `onset`: where it starts sounding;
+    - `dir`: "rise" (louder or brighter towards its peak at the end), "fall" (the other way),
+      "hit" (loudest at once, a beat later well down) or "flat";
+    - `noise`: spectral flatness of its sound (1 white noise, 0 a tone), to layer a noise
+      sweep with a tonal riser rather than two of a kind.
+    """
+    mono = to_mono(data)
+    step = 60.0 / bpm / 4 * sr
+    n = max(1, int(round(bars * 16)))
+    edges = np.round(np.arange(n + 1) * step).astype(int)
+    levels = np.array([rms_db(mono[a:b]) for a, b in zip(edges[:-1], edges[1:])])
+    body16 = max(1, min(n, body * 16))
+    loud = levels[:body16]
+    sounding = np.nonzero(loud >= loud.max() + th.shape_sound_rel_db)[0]
+    onset, end = int(sounding[0]), int(sounding[-1]) + 1
+    # The sound running on past the body's bar line (into the tail) counts as reaching it.
+    if end == body16 or (body16 < n and levels[body16] >= loud.max() + th.shape_sound_rel_db):
+        end = body16
+    peak_at = onset + int(np.argmax(loud[onset:end]))
+
+    centroid, flat = [], []
+    for a, b in zip(edges[onset:end], edges[onset + 1:end + 1]):
+        seg = mono[a:b]
+        if len(seg) < 64:
+            continue
+        sp = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) + 1e-12
+        f = np.fft.rfftfreq(len(seg), 1 / sr)
+        centroid.append(float((sp * f).sum() / sp.sum()))
+        flat.append(float(np.exp(np.mean(np.log(sp))) / np.mean(sp)))
+    length = end - onset
+    k = max(1, min(4, length // 4))                  # first and last beat (or less) of the sound
+    lv = loud[onset:end]
+    slope = float(lv[-k:].mean() - lv[:k].mean())
+    bright = float(np.log2((np.mean(centroid[-k:]) + 1) / (np.mean(centroid[:k]) + 1))) if centroid else 0.0
+    where = (peak_at - onset) / max(1, length - 1)
+    if where >= th.shape_peak_late and (slope >= th.shape_slope_db or bright >= th.shape_bright_oct):
+        direction = "rise"
+    elif peak_at - onset <= 1 and loud[min(peak_at + 4, end - 1)] <= loud[peak_at] - th.shape_slope_db:
+        direction = "hit"                            # at once, and a beat later well down
+    elif where <= th.shape_peak_early and (slope <= -th.shape_slope_db or bright <= -th.shape_bright_oct):
+        direction = "fall"
+    else:
+        direction = "flat"
+    return {"onset": onset, "end": end, "gap": body16 - end, "peak": peak_at, "dir": direction,
+            "noise": round(float(np.mean(flat)), 3) if flat else 0.0}

@@ -7,9 +7,9 @@ import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
-import { applyLane, createLaneNodes, laneAudible, playEvent, type LaneNodes } from './graph'
-import { eventsInRange, metronomeTicks } from './schedule'
-import { ensureTempo, projectSounds } from './tempo'
+import { applyLane, createLaneNodes, duckAt, laneAudible, playEvent, resetDuck, type LaneNodes } from './graph'
+import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
+import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
 const TICK_MS = 25
 const LOOKAHEAD = 0.12      // seconds scheduled ahead
@@ -21,12 +21,16 @@ class PlaybackEngine {
   private master: GainNode | null = null
   private lanes = new Map<string, LaneNodes>()
   private sources = new Set<AudioScheduledSourceNode>()
+  /** The clip each playing sound belongs to (to swap a clip's sound while playing). */
+  private sourceClip = new WeakMap<AudioScheduledSourceNode, string>()
   private timer: ReturnType<typeof setInterval> | null = null
   private listeners = new Set<Listener>()
   private getProject: () => Project = () => { throw new Error('no project') }
 
   playing = false
   loading = false
+  /** Bumped by every play and stop: a play still loading gives up when a later one (or a stop) came. */
+  private playToken = 0
   /** Where playback started / stopped (beats) when not playing. */
   private stoppedAt = 0
   // Mapping between context time and project time for the current segment
@@ -96,27 +100,40 @@ class PlaybackEngine {
 
   /** Decode everything the project uses up front (stretched FX first), so pressing play starts at once. */
   async preload(project: Project): Promise<string[]> {
+    // The files as they are now: a bass change made while this waits loads its own part.
+    const sounds = projectSounds(project)
     try {
       await ensureTempo(project)
     } catch (e) {
       console.error('stretching for the project tempo failed', e)  // those FX stay silent
     }
-    return buffers.loadAll(projectSounds(project))
+    return buffers.loadAll(sounds)
   }
 
   async play(fromBeat = this.stoppedAt): Promise<void> {
     this.halt()
+    const token = ++this.playToken
     const ctx = audioContext()
     if (ctx.state === 'suspended') await ctx.resume()
     const project = this.getProject()
     this.syncLanes(project.lanes)
-    const missing = projectSounds(project).some((p) => !buffers.get(p))
-    if (missing) {
+    // Bass renders through Serum can take a while (the first one loads the plugin), so play
+    // doesn't wait for them: the bass comes in, from the playhead, once it's rendered.
+    const isBass = (c: Project['clips'][number]) => c.type === 'audio' && !!c.bass
+    const sounds = [...new Set(project.clips.filter((c) => !isBass(c)).map((c) => soundPath(c, project.bpm)))]
+    if (sounds.some((p) => !buffers.get(p))) {
       this.loading = true
       this.emit()
-      await this.preload(project)
-      this.loading = false
+      try {
+        await ensureStretched(project)
+      } catch (e) {
+        console.error('stretching for the project tempo failed', e)  // those FX stay silent
+      }
+      await buffers.loadAll(sounds)
     }
+    if (token !== this.playToken) return  // stopped, or played again, while loading
+    this.loading = false
+    const bass = project.clips.filter((c) => isBass(c) && !buffers.get(soundPath(c, project.bpm)))
     this.stoppedAt = fromBeat
     this.segCtx = ctx.currentTime + START_DELAY
     this.segProj = beatToSec(fromBeat, project.bpm)
@@ -126,17 +143,20 @@ class PlaybackEngine {
     this.tick()
     this.timer = setInterval(() => this.tick(), TICK_MS)
     this.emit()
+    if (bass.length) void this.reloadClips(project, bass.map((c) => c.id))
   }
 
   stop(): void {
     const at = this.position()
     this.halt()
+    this.playToken++
+    this.loading = false
     this.stoppedAt = at
     this.emit()
   }
 
   toggle(fromBeat?: number): void {
-    if (this.playing) this.stop()
+    if (this.playing || this.loading) this.stop()
     else void this.play(fromBeat)
   }
 
@@ -152,6 +172,8 @@ class PlaybackEngine {
     }
     this.sources.clear()
     this.stopAudition()
+    const now = audioContext().currentTime
+    for (const n of this.lanes.values()) resetDuck(n, now)
     this.playing = false
   }
 
@@ -210,16 +232,62 @@ class PlaybackEngine {
       const lane = this.lanes.get(ev.laneId)
       if (!buf || !lane) continue
       const src = playEvent(ctx, ev, buf, lane.gain, this.ctxAt(ev.start), cutAt)
-      if (src) this.track(src)
+      if (src) this.track(src, ev.clipId)
     }
     if (p.metronome) {
       for (const t of metronomeTicks(p.bpm, from, to)) this.click(this.ctxAt(t.start), t.downbeat)
     }
+    // Sidechain: lanes with `duck` dip on every kick hit in this window.
+    const ducking = p.lanes.filter((l) => l.duck)
+    if (ducking.length) {
+      const hits = kickHits(p, from, to)
+      for (const l of ducking) {
+        const n = this.lanes.get(l.id)
+        if (n) for (const t of hits) duckAt(n, this.ctxAt(t), l.duck!, duckRelease(p.bpm))
+      }
+    }
   }
 
-  private track(src: AudioScheduledSourceNode): void {
+  private track(src: AudioScheduledSourceNode, clipId?: string): void {
     this.sources.add(src)
+    if (clipId) this.sourceClip.set(src, clipId)
     src.onended = () => this.sources.delete(src)
+  }
+
+  /**
+   * These clips' sound changed (a new bass render): load it, then — if playing — stop the old
+   * sound and start the new one right away from the playhead, instead of at the next repetition
+   * (a long bass loop would otherwise stay silent for up to its whole length).
+   */
+  async reloadClips(project: Project, clipIds: Iterable<string>): Promise<void> {
+    await this.preload(project)
+    const ids = new Set(clipIds)
+    if (!this.playing || !ids.size) return
+    const ctx = audioContext()
+    // The project as it is now: it may have been edited (a volume, say) while rendering.
+    const p = this.getProject()
+    for (const src of [...this.sources]) {
+      if (!ids.has(this.sourceClip.get(src) ?? '')) continue
+      try {
+        src.stop()
+      } catch {
+        // not started yet
+      }
+      this.sources.delete(src)
+    }
+    const from = this.segProj + (ctx.currentTime + START_DELAY - this.segCtx)
+    if (from >= this.scheduledTo) return  // the next tick schedules them anyway
+    const loopEnd = beatToSec(p.loop.end, p.bpm)
+    const looping = p.loop.enabled && p.loop.end > p.loop.start && this.segProj < loopEnd - 1e-9
+    const cutAt = looping ? this.ctxAt(loopEnd) : undefined
+    for (const ev of eventsInRange(p, from, this.scheduledTo, { includeOngoing: true })) {
+      if (!ids.has(ev.clipId)) continue
+      const buf = buffers.get(ev.relPath)
+      const lane = this.lanes.get(ev.laneId)
+      if (!buf || !lane) continue
+      const src = playEvent(ctx, ev, buf, lane.gain, this.ctxAt(ev.start), cutAt)
+      if (src) this.track(src, ev.clipId)
+    }
   }
 
   private click(when: number, downbeat: boolean): void {

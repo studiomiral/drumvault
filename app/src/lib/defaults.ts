@@ -30,6 +30,15 @@ export const ENGINE_DEFAULTS: Required<Omit<EngineOptions, 'thresholds' | 'rubbe
   loop_dedupe_threshold: 0.96,
   event_dedupe_threshold: 0.96,
   workers: 4,
+  serum_plugin: '/Library/Audio/Plug-Ins/VST3/Serum2.vst3',
+  serum_plugin_name: 'Serum 2',
+}
+
+/** Bass patch pool (SCOPE.md §6.7): Serum 2's presets folder; you pick the folders in Settings. */
+export const BASS_DEFAULTS = {
+  presetRoot: '/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Presets',
+  folders: [] as string[],
+  favorites: [] as string[],
 }
 
 export type ResolvedEngineOptions = typeof ENGINE_DEFAULTS & EngineOptions

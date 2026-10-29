@@ -68,6 +68,8 @@ class ZipAnalysis(BaseModel):
     tempo: TempoInfo
     key: KeyInfo
     warnings: list[str] = Field(default_factory=list)
+    # Where each part plays, bar by bar (arrangement.py); stored, not sent to the app.
+    arrangement: Optional[dict[str, Any]] = Field(default=None, exclude=True)
 
 
 class SampleCounts(BaseModel):
@@ -101,8 +103,10 @@ class Overrides(BaseModel):
 # RPC envelopes (JSON lines over stdin/stdout)
 # ---------------------------------------------------------------------------
 
-Method = Literal["process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "cancel", "health",
-                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "shutdown"]
+Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
+                 "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
+                 "render_bass", "serum_presets", "save_midi", "set_midi_meta",
+                 "delete_midi", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -115,6 +119,12 @@ class ProcessZipParams(BaseModel):
     path: str
     settings: dict[str, Any] = Field(default_factory=dict)
     reprocess: bool = False
+
+
+class ImportSamplesParams(BaseModel):
+    """Loose audio files or folders of them (Splice and other packs), SCOPE.md §5.16."""
+    paths: list[str] = Field(min_length=1)
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReprocessZipParams(BaseModel):
@@ -171,6 +181,58 @@ class StretchSamplesParams(BaseModel):
     """Time-stretch samples (library-relative paths) to a project tempo, cached per tempo."""
     rel_paths: list[str]
     bpm: float = Field(gt=40, lt=250)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportMidiParams(BaseModel):
+    """Add MIDI files or folders of them to the library (SCOPE.md §6.7)."""
+    paths: list[str]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class RenderBassParams(BaseModel):
+    """Render an imported MIDI part through a Serum 2 preset as a loop at `bpm`."""
+    preset: str
+    midi_id: int
+    transpose: int = Field(default=0, ge=-24, le=24)
+    bpm: float = Field(gt=40, lt=250)
+    out_rel: str
+    # Edited in the piano roll: these replace the imported file's notes / length.
+    notes: Optional[list[list[float]]] = None
+    bars: Optional[int] = Field(default=None, ge=1, le=16)
+    # The track's groove: per 16th step of the bar, how late (16ths) notes starting there play.
+    groove: Optional[list[float]] = Field(default=None, min_length=16, max_length=16)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SetMidiMetaParams(BaseModel):
+    """Correct an imported MIDI file's role or key."""
+    midi_id: int
+    role: Optional[str] = None
+    key_label: Optional[str] = None
+    clear_key: bool = False
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteMidiParams(BaseModel):
+    midi_ids: list[int]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SaveMidiParams(BaseModel):
+    """Save an edited loop as a new MIDI file in the library."""
+    name: str
+    notes: list[list[float]]
+    bars: int = Field(ge=1, le=16)
+    key_label: Optional[str] = None
+    role: str = "bass"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SerumPresetsParams(BaseModel):
+    """Preset folders under `root` (with counts), and the presets in the chosen `folders`."""
+    root: str
+    folders: Optional[list[str]] = None
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

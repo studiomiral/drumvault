@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 9
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS zips (
   status TEXT,
   reviewed INTEGER DEFAULT 0,
   warnings TEXT,
-  processed_at TEXT, settings_hash TEXT
+  processed_at TEXT, settings_hash TEXT,
+  kind TEXT DEFAULT 'stems'         -- 'stems' (a zip of one track) | 'pack' (loose samples, v8)
 );
 
 CREATE TABLE IF NOT EXISTS stems (
@@ -56,6 +57,16 @@ CREATE TABLE IF NOT EXISTS samples (
   fingerprint BLOB,
   favorite INTEGER DEFAULT 0, rating INTEGER, tags TEXT,
   shift_beats INTEGER DEFAULT 0,    -- loops/events: sound rotated this many beats later (v5)
+  groove TEXT,                      -- loops: timing and accents per 16th, JSON (v7; '{}' = none found)
+  shape TEXT,                       -- events: how it plays (events.shape) and the source bar its body ends on, JSON (v9)
+  created_at TEXT
+);
+
+-- Where each part plays in the zip's track, bar by bar (v7): the generator's structure templates.
+CREATE TABLE IF NOT EXISTS arrangements (
+  zip_id INTEGER PRIMARY KEY REFERENCES zips(id) ON DELETE CASCADE,
+  bpm REAL, bars INTEGER,
+  parts TEXT,                       -- JSON {part: "0122…"} (0 silent, 1 quiet/filtered, 2 full)
   created_at TEXT
 );
 
@@ -68,6 +79,19 @@ CREATE TABLE IF NOT EXISTS removed_samples (
   sample TEXT,                      -- the sample row (JSON) to restore
   fingerprint BLOB,
   removed_at TEXT
+);
+
+-- MIDI files imported like zips (schema v6), copied into <Library>/MIDI/<Role>/.
+CREATE TABLE IF NOT EXISTS midi_files (
+  id INTEGER PRIMARY KEY,
+  file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, file_sha1 TEXT UNIQUE,
+  role TEXT,                        -- "bass" | "other"
+  bars INTEGER, key_label TEXT, key_camelot TEXT,
+  notes TEXT,                       -- JSON [[start beats, length beats, pitch, velocity], ...]
+  favorite INTEGER DEFAULT 0,
+  source TEXT,                      -- the MIDI zip it came from ("83686"), null for loose files
+  source_code TEXT,                 -- the processed stem zip of the same track (S0001), if any
+  created_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_samples_cat ON samples(kind, category);
@@ -113,13 +137,23 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE samples ADD COLUMN body_bars INTEGER")
         if "shift_beats" not in cols:  # v5: "Move sound" in the Library
             self.conn.execute("ALTER TABLE samples ADD COLUMN shift_beats INTEGER DEFAULT 0")
+        if "groove" not in cols:  # v7: loop grooves (filled by analyze_library or a reprocess)
+            self.conn.execute("ALTER TABLE samples ADD COLUMN groove TEXT")
+        if "shape" not in cols:  # v9: event shapes (filled by analyze_library or a reprocess)
+            self.conn.execute("ALTER TABLE samples ADD COLUMN shape TEXT")
         removed_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(removed_samples)")}
         for col, typ in (("sample", "TEXT"), ("fingerprint", "BLOB"), ("removed_at", "TEXT")):
             if col not in removed_cols:  # v4: restorable deleted samples
                 self.conn.execute(f"ALTER TABLE removed_samples ADD COLUMN {col} {typ}")
+        midi_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(midi_files)")}
+        for col in ("source", "source_code"):
+            if col not in midi_cols:  # v6 libraries from before MIDI zips
+                self.conn.execute(f"ALTER TABLE midi_files ADD COLUMN {col} TEXT")
         zip_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(zips)")}
         if "reviewed" not in zip_cols:  # v2: "Mark as reviewed" survives reprocessing
             self.conn.execute("ALTER TABLE zips ADD COLUMN reviewed INTEGER DEFAULT 0")
+        if "kind" not in zip_cols:  # v8: packs of loose samples
+            self.conn.execute("ALTER TABLE zips ADD COLUMN kind TEXT DEFAULT 'stems'")
 
     def close(self) -> None:
         self.conn.close()
@@ -165,9 +199,11 @@ class LibraryDB:
     def list_zips(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM zips ORDER BY id").fetchall()
 
-    def next_source_number(self) -> int:
+    def next_source_number(self, prefix: str = "S") -> int:
+        """Zips are S0001…, packs of loose samples P0001…."""
         row = self.conn.execute(
-            "SELECT MAX(CAST(SUBSTR(source_code, 2) AS INTEGER)) FROM zips").fetchone()
+            "SELECT MAX(CAST(SUBSTR(source_code, 2) AS INTEGER)) FROM zips WHERE source_code LIKE ?",
+            (f"{prefix}%",)).fetchone()
         return int(row[0] or 0) + 1
 
     def insert_zip(self, **fields: Any) -> int:
@@ -239,6 +275,62 @@ class LibraryDB:
 
     def get_sample(self, sample_id: int) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE id = ?", (sample_id,)).fetchone()
+
+    # ---- MIDI ----------------------------------------------------------------
+    def midi_by_sha1(self, sha1: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM midi_files WHERE file_sha1 = ?", (sha1,)).fetchone()
+
+    def get_midi(self, midi_id: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM midi_files WHERE id = ?", (midi_id,)).fetchone()
+
+    def insert_midi(self, **fields: Any) -> int:
+        with self._lock:
+            return self._insert("midi_files", fields)
+
+    def update_midi(self, midi_id: int, **fields: Any) -> None:
+        with self._lock:
+            self._update("midi_files", midi_id, fields)
+
+    def delete_midi(self, midi_id: int) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM midi_files WHERE id = ?", (midi_id,))
+
+    def midi_path_taken(self, rel_path: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM midi_files WHERE rel_path = ?", (rel_path,)).fetchone() is not None
+
+    def loops_without_groove(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT id, rel_path, bpm FROM samples WHERE kind = 'loop' AND groove IS NULL").fetchall()
+
+    def set_groove(self, sample_id: int, groove: dict | None) -> None:
+        with self._lock:
+            self.conn.execute("UPDATE samples SET groove = ? WHERE id = ?", (json.dumps(groove or {}), sample_id))
+
+    def set_arrangement(self, zip_id: int, arrangement: dict | None) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM arrangements WHERE zip_id = ?", (zip_id,))
+            if arrangement:
+                self.conn.execute(
+                    "INSERT INTO arrangements(zip_id, bpm, bars, parts, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (zip_id, arrangement["bpm"], arrangement["bars"], json.dumps(arrangement["parts"]), now_iso()))
+
+    def get_arrangement(self, zip_id: int) -> dict | None:
+        r = self.conn.execute("SELECT bpm, bars, parts FROM arrangements WHERE zip_id = ?", (zip_id,)).fetchone()
+        return {"bpm": r["bpm"], "bars": r["bars"], "parts": json.loads(r["parts"])} if r else None
+
+    def events_without_shape(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT s.id, s.rel_path, s.bpm, s.bars, s.body_bars, s.source_offset_s, s.zip_id, z.kind AS zip_kind "
+            "FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.kind = 'event' AND s.shape IS NULL").fetchall()
+
+    def set_shape(self, sample_id: int, shape: dict) -> None:
+        with self._lock:
+            self.conn.execute("UPDATE samples SET shape = ? WHERE id = ?", (json.dumps(shape), sample_id))
+
+    def zips_without_arrangement(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM zips WHERE status IN ('done', 'needs_review') AND kind = 'stems' "
+            "AND id NOT IN (SELECT zip_id FROM arrangements)").fetchall()
 
     def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()

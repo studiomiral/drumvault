@@ -1,10 +1,7 @@
 // The contract between the Electron main process and the renderer
 // (exposed by electron/preload.ts as `window.drumvault`).
 
-import type {
-  Category, EngineSettings, GridPreview, HealthResult, Overrides, ProcessResult, RpcError, SampleKind,
-  StemRow, ZipRow, ZipStatus,
-} from './engine'
+import type { Category, EngineSettings, GridPreview, HealthResult, Overrides, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
 import type { ProjectFileInfo } from './project'
 
 /** Engine settings as stored by the app (the library path is kept separately). */
@@ -21,6 +18,49 @@ export interface AppSettings {
   lastProject: string | null
   /** Folder of the last stem export. */
   lastExportDir?: string | null
+  /** Bass (SCOPE.md §6.7): Serum 2 presets to draw patches from, and the ones you starred. */
+  bass?: BassSettings
+}
+
+export interface BassSettings {
+  /** The Serum 2 presets folder. */
+  presetRoot: string
+  /** Folders under presetRoot that make up the patch pool. */
+  folders: string[]
+  /** Starred presets (absolute paths): picked more often. */
+  favorites: string[]
+}
+
+/** An imported MIDI file (SCOPE.md §6.7). Notes: [start beats, length beats, pitch, velocity]. */
+export interface MidiItem {
+  id: number
+  file_name: string
+  name: string
+  rel_path: string
+  role: 'bass' | 'other'
+  bars: number
+  key_label: string | null
+  key_camelot: string | null
+  notes: [number, number, number, number][]
+  favorite: number
+  /** The MIDI zip it came from ("83686"), and the processed stem zip of the same track (S0001). */
+  source: string | null
+  source_code: string | null
+}
+
+export interface SerumPreset {
+  path: string
+  name: string
+  folder: string
+  tags: string[]
+}
+
+export interface MidiImportResult {
+  imported: { id: number; file_name: string; role: string; bars: number; key_label: string | null }[]
+  skipped: number
+  /** Parts that aren't basslines (only bass MIDI is kept). */
+  ignored: number
+  failed: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -48,7 +88,7 @@ export interface DepsReport {
   checks: DepCheck[]
 }
 
-export type JobMethod = 'process_zip' | 'reprocess_zip' | 'delete_zip' | 'rebuild_loops'
+export type JobMethod = 'process_zip' | 'import_samples' | 'reprocess_zip' | 'delete_zip' | 'rebuild_loops' | 'analyze_library'
 
 export interface JobInfo {
   job_id: string
@@ -105,6 +145,52 @@ export interface SampleListItem {
   tags: string | null
   zip_id: number
   source_code: string
+  /** Loops: timing and accents per 16th (engine groove.py); null if not measured or none found. */
+  groove?: LoopGroove | null
+  /** Events: how it plays (engine events.shape); null until measured. */
+  shape?: EventShape | null
+}
+
+/**
+ * How an event plays, in 16ths from its start (the bar line it was cut on): where its sound
+ * starts, peaks and ends, the silence from there to the end of its body (`gap`: the producer's
+ * moment of silence before the drop), which way it goes, how noisy it is (0 a tone … 1 white
+ * noise) and the bar of its source track its body ends on (null for loose samples).
+ */
+export interface EventShape {
+  onset: number
+  end: number
+  gap: number
+  peak: number
+  dir: 'rise' | 'fall' | 'hit' | 'flat'
+  noise: number
+  boundary: number | null
+}
+
+/**
+ * A loop's groove, per 16th step of the bar: how late (+) or early its hits land, in fractions
+ * of a 16th, and how loud (dB below the loudest step); null where it plays nothing.
+ */
+export interface LoopGroove {
+  offsets: (number | null)[]
+  levels: (number | null)[]
+  hits: number[]
+  /** Mean offset of the odd 16ths (MPC swing: +0.33 = 66 %), and of the offbeat 8ths. */
+  swing: number | null
+  push: number | null
+}
+
+/**
+ * Where each part plays in a processed track, bar by bar on its own grid (engine arrangement.py):
+ * per part (kick, clap, hats, ride, perc, top, crash, fills, fx, bass, music) a string with one
+ * character per bar: 0 silent, 1 quiet or filtered, 2 full.
+ */
+export interface TrackArrangement {
+  zip_id: number
+  source_code: string
+  bpm: number
+  bars: number
+  parts: Record<string, string>
 }
 
 export interface LibraryFacets {
@@ -164,12 +250,14 @@ export interface DrumvaultAPI {
   getSettings(): Promise<AppSettings>
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   chooseLibraryFolder(): Promise<string | null>
-  /** File dialog for zips and folders; folders are searched for zips. */
+  /** File dialog for zips, loose samples and folders (the chosen paths, not yet searched). */
   chooseZips(): Promise<string[]>
   /** Absolute paths of dropped files/folders. */
   pathsForFiles(files: File[]): string[]
   /** Dropped files/folders -> zip paths (folders searched recursively). */
   expandPaths(paths: string[]): Promise<string[]>
+  /** Dropped files/folders -> loose audio files in them (.wav, .aif, .aiff, .flac). */
+  findSamples(paths: string[]): Promise<string[]>
 
   checkDeps(): Promise<DepsReport>
   engineStatus(): Promise<EngineStatus>
@@ -179,6 +267,8 @@ export interface DrumvaultAPI {
   listJobs(): Promise<JobInfo[]>
   onJobs(cb: (jobs: JobInfo[]) => void): () => void
   processZips(paths: string[], reprocess?: boolean): Promise<void>
+  /** Loose samples or folders of them, added as packs (P0001…). */
+  importSamples(paths: string[]): Promise<void>
   reprocessZip(zipId: number, overrides: Overrides): Promise<void>
   deleteZip(zipId: number): Promise<void>
   rebuildLoops(): Promise<void>
@@ -196,6 +286,24 @@ export interface DrumvaultAPI {
   sampleShift(sampleId: number): Promise<number>
   /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
   stretchSamples(relPaths: string[], bpm: number): Promise<void>
+  /** Add bass MIDI from .mid files, MIDI zips and folders; already imported ones are skipped. */
+  importMidi(paths: string[]): Promise<MidiImportResult>
+  /** File dialog for MIDI zips, .mid files and folders. */
+  chooseMidi(): Promise<string[]>
+  /** Correct a bassline's key (null: no key, so it isn't transposed). */
+  setMidiKey(midiId: number, key: string | null): Promise<void>
+  deleteMidi(midiIds: number[]): Promise<void>
+  /** Imported MIDI files. */
+  listMidi(): Promise<MidiItem[]>
+  /** Every processed track's arrangement (the Generate view's structure templates). */
+  arrangements(): Promise<TrackArrangement[]>
+  /** Preset folders under `root` with counts, and the presets in `folders`. */
+  serumPresets(root: string, folders: string[] | null): Promise<{ folders: { folder: string; count: number }[]; presets: SerumPreset[] }>
+  /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
+  renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
+    notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
+  /** Save an edited loop as a new bassline in the MIDI library; returns its id. */
+  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
   /** Deleted samples, newest first. */
   listRemoved(): Promise<RemovedSample[]>
   /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */

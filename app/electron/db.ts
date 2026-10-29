@@ -9,7 +9,8 @@ import { expandCompatible } from '../src/lib/camelot'
 import { fileName, parseJsonArray } from '../src/lib/format'
 import type { PeaksFile, SampleKind, StemRow } from '../src/types/engine'
 import type {
-  LibraryFacets, PeakPoints, RemovedSample, SampleFilter, SampleListItem, ZipDetail, ZipListItem,
+  EventShape, LibraryFacets, LoopGroove, MidiItem, PeakPoints, RemovedSample, SampleFilter, SampleListItem, TrackArrangement,
+  ZipDetail, ZipListItem,
 } from '../src/types/api'
 
 type Row = Record<string, unknown>
@@ -39,8 +40,12 @@ const SORTS: Record<string, string> = {
 }
 
 /** SQL WHERE clause + parameters for a sample filter (exported for tests). */
-/** `bodyCol` selects body_bars (libraries from before schema v2 lack the column). */
-export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars'): { sql: string; params: (string | number)[] } {
+/**
+ * `bodyCol` selects body_bars (libraries from before schema v2 lack the column), `grooveCol` the
+ * groove (v7), `shapeCol` the event shape (v9).
+ */
+export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', grooveCol = 's.groove',
+                                 shapeCol = 's.shape'): { sql: string; params: (string | number)[] } {
   const where: string[] = []
   const params: (string | number)[] = []
   const inList = (col: string, values: (string | number)[]) => {
@@ -74,11 +79,34 @@ export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars'): { sq
   }
   const sql = `
     SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${bodyCol} AS body_bars, s.key_label, s.key_camelot,
-           s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
+           s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${grooveCol} AS groove,
+           ${shapeCol} AS shape
     FROM samples s JOIN zips z ON z.id = s.zip_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY ${SORTS[f.sort ?? 'name'] ?? SORTS.name}`
   return { sql, params }
+}
+
+type SampleRow = Omit<SampleListItem, 'name' | 'groove' | 'shape'> & { groove?: string | null; shape?: string | null }
+
+/** A JSON column, or null (a damaged value counts as none). */
+function parsed<T>(json: string | null | undefined, ok: (v: T) => boolean): T | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as T
+    return v && ok(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** A sample row as the app sees it: a name, the groove ('{}' = measured, none found) and shape parsed. */
+function toListItem({ groove, shape, ...r }: SampleRow): SampleListItem {
+  return {
+    ...r, name: fileName(r.rel_path),
+    groove: parsed<LoopGroove>(groove, (v) => Array.isArray(v.offsets)),
+    shape: parsed<EventShape>(shape, (v) => typeof v.gap === 'number'),
+  }
 }
 
 export class LibraryReader {
@@ -130,6 +158,20 @@ export class LibraryReader {
     })
   }
 
+  private hasColumn(table: string, column: string): boolean {
+    return this.all<{ name: string }>(`PRAGMA table_info(${table})`).some((c) => c.name === column)
+  }
+
+  /** Imported MIDI files (schema v6), oldest first. */
+  listMidi(): MidiItem[] {
+    if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'midi_files'").length) return []
+    return this.all<Omit<MidiItem, 'notes' | 'name'> & { notes: string }>(
+      `SELECT id, file_name, rel_path, role, bars, key_label, key_camelot, notes, favorite,
+              ${this.hasColumn('midi_files', 'source') ? 'source, source_code' : 'NULL AS source, NULL AS source_code'}
+       FROM midi_files ORDER BY id`)
+      .map((r) => ({ ...r, name: r.file_name.replace(/\.midi?$/i, ''), notes: JSON.parse(r.notes) }))
+  }
+
   listZips(): ZipListItem[] {
     return this.all<ZipListItem>(`${ZIP_LIST_SQL} ORDER BY z.id DESC`)
   }
@@ -150,16 +192,52 @@ export class LibraryReader {
     return cols.some((c) => c.name === 'body_bars') ? 's.body_bars' : 'NULL'
   }
 
+  /** `s.groove`, or NULL before schema v7. */
+  private grooveCol(): string {
+    return this.hasColumn('samples', 'groove') ? 's.groove' : 'NULL'
+  }
+
+  /** `s.shape`, or NULL before schema v9. */
+  private shapeCol(): string {
+    return this.hasColumn('samples', 'shape') ? 's.shape' : 'NULL'
+  }
+
   querySamples(filter: SampleFilter): SampleListItem[] {
-    const { sql, params } = buildSampleQuery(filter, this.bodyCol())
-    return this.all<Omit<SampleListItem, 'name'>>(sql, ...params)
-      .map((r) => ({ ...r, name: fileName(r.rel_path) }))
+    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol())
+    return this.all<SampleRow>(sql, ...params).map(toListItem)
+  }
+
+  /** Every track's arrangement (schema v7), for Generate's structure templates. */
+  arrangements(): TrackArrangement[] {
+    if (!this.hasTable('arrangements')) return []
+    return this.all<Omit<TrackArrangement, 'parts'> & { parts: string }>(
+      `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts FROM arrangements a JOIN zips z ON z.id = a.zip_id
+       ORDER BY a.zip_id`).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string> }))
+  }
+
+  /** Loops without a measured groove, events without a shape, or tracks without an arrangement (older libraries). */
+  needsAnalysis(): boolean {
+    if (!this.conn()) return false
+    const loops = this.all<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM samples WHERE kind = 'loop'${this.hasColumn('samples', 'groove') ? ' AND groove IS NULL' : ''}`)[0]?.n ?? 0
+    if (loops) return true
+    const events = this.all<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM samples WHERE kind = 'event'${this.hasColumn('samples', 'shape') ? ' AND shape IS NULL' : ''}`)[0]?.n ?? 0
+    if (events) return true
+    const zips = `SELECT COUNT(*) AS n FROM zips z WHERE z.status IN ('done', 'needs_review')${
+      this.hasColumn('zips', 'kind') ? " AND z.kind = 'stems'" : ''}`
+    return (this.all<{ n: number }>(this.hasTable('arrangements')
+      ? `${zips} AND z.id NOT IN (SELECT zip_id FROM arrangements)` : zips)[0]?.n ?? 0) > 0
+  }
+
+  private hasTable(name: string): boolean {
+    return this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).length > 0
   }
 
   sample(id: number): SampleListItem | null {
-    const [r] = this.all<Omit<SampleListItem, 'name'>>(
+    const [r] = this.all<SampleRow>(
       `SELECT s.*, z.source_code FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.id = ?`, id)
-    return r ? { ...r, name: fileName(r.rel_path) } : null
+    return r ? toListItem(r) : null
   }
 
   samplesByPath(relPaths: string[]): SampleListItem[] {
@@ -167,11 +245,12 @@ export class LibraryReader {
     const body = this.bodyCol()
     for (let i = 0; i < relPaths.length; i += 500) {
       const chunk = relPaths.slice(i, i + 500)
-      out.push(...this.all<Omit<SampleListItem, 'name'>>(
+      out.push(...this.all<SampleRow>(
         `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${body} AS body_bars, s.key_label, s.key_camelot,
-                s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code
+                s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${this.grooveCol()} AS groove,
+                ${this.shapeCol()} AS shape
          FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.rel_path IN (${chunk.map(() => '?').join(', ')})`,
-        ...chunk).map((r) => ({ ...r, name: fileName(r.rel_path) })))
+        ...chunk).map(toListItem))
     }
     return out
   }

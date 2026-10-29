@@ -3,7 +3,7 @@ import { Modal } from './ui'
 const SECTIONS: { title: string; rows: [string, string][] }[] = [
   {
     title: 'Everywhere',
-    rows: [['⌘1 – ⌘4', 'Process / Library / Generate / Arrange'], ['⌘5', 'Grid'], ['⌘,', 'Settings'], ['⌘O', 'Add zips'],
+    rows: [['⌘1 – ⌘4', 'Process / Library / Generate / Arrange'], ['⌘5 / ⌘6', 'Grid / MIDI'], ['⌘,', 'Settings'], ['⌘O', 'Add zips'],
       ['⌘E', 'Export stems'], ['⌘/', 'This overview']],
   },
   {
@@ -34,8 +34,11 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
       ['Drag', 'Move / resize (snaps to the grid: finer when zoomed in, down to 16ths)'],
       ['⌥ while dragging', 'Snap 4× finer'], ['⌥ when clicking, then drag', 'Copy'],
       ['Drag a clip edge (bottom half)', 'Extend (repeats) / trim'], ['Drag a clip edge (top half)', 'Fade in / fade out'], ['R / ⌘D', 'Duplicate after the selection (or the selected section)'],
+      ['⌘X / ⌘C / ⌘V', 'Cut / copy / paste clips (paste at the playhead\'s bar)'], ['S', 'Split the selected clips at the playhead'],
+      ['Right-click', 'Clip, section and empty-space commands'],
       ['← / →', 'Nudge a bar (⌥: a beat)'], ['⇧← / ⇧→', 'Move the sound a beat inside its loop (the clip stays)'], ['⌫', 'Delete'], ['⌘Z / ⇧⌘Z', 'Undo / redo'],
       ['Double-click a pattern', 'Step editor (click cycles full → medium → soft → off)'],
+      ['Double-click a bass clip', 'Piano roll: edits change every clip of that bassline'],
       ['Drag in the top band', 'Add a section marker; click it to select its clips'],
       ['⌘-scroll / pinch', 'Zoom']],
   },

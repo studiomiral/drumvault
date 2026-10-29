@@ -24,7 +24,7 @@
 
 - Melodic samples (bass, synths, vocals). Melodic stems are only used for key detection, never exported. Vocals (including "Vocal FX") are ignored.
 - Effects, automation, MIDI, recording, plugins (VST/AU) in the DAW. One exception (Phase 5): a per-clip low-pass/high-pass filter, fixed or swept over the clip, for filtered kicks and filter builds.
-- Real-time time-stretching or pitch-shifting in the DAW. The DAW plays samples at native speed at the library BPM.
+- Real-time time-stretching or pitch-shifting in the DAW. The DAW plays samples at native speed at the library BPM (exceptions: 16th slicing for other tempos, §6.4a, and sampler-style pitch on drum clips, §6.4 — both just a playback rate per slice, no DSP).
 - Windows/Linux support, auto-updates, code signing, notarization, multi-user anything.
 - Stem separation (Demucs etc.) — inputs are already separate stems.
 
@@ -247,8 +247,28 @@ Stems in the categories `fill`, `roll` and `fx_*` / `fx` are mostly silent with 
 5. Regions longer than 32 bars (atmos beds) are cut into 8-bar chunks.
 6. Skip events quieter than −30 dB relative to the stem's loudest. **Dedupe**: same fingerprint as loops (per bar), only events of equal length compared, cosine > 0.96 = duplicate, first occurrence kept. Cap: 6 per stem (farthest-point selection).
 7. Peak normalize to −1.0 dBFS. Key label, BPM and bar count are stored like loops.
+8. **Shape** (`events.shape`, stored as JSON in `samples.shape`): per 16th of the written file, its level. Where the sound starts (`onset`), peaks (`peak`) and ends (`end`: the last 16th within `shape_sound_rel_db` = −24 dB of its loudest, up to the body's end; sound ringing on past it counts as reaching it), and `gap` = 16ths from `end` to the end of the body: the producer's silence before the line it leads into (a riser stopping on beat 7 of 8 has a gap of 4). `dir`: `rise` (peaks late and gets ≥ 6 dB louder or ≥ 0.7 octave brighter from its first to its last beat of sound), `hit` (loudest at once and ≥ 6 dB down a beat later), `fall` (peaks early and gets that much quieter or darker) or `flat`. `noise`: mean spectral flatness (0 a tone, 1 white noise). `boundary`: the bar of the source track (from its bar 1) its body ends on, so events a producer layered at one moment can be found again; null for loose samples (§5.8c). Library "Move sound" measures the shape again.
 
 Events are not one-shots: they are time-stretched, because they must line up with the bar grid at the library BPM.
+
+### 5.8b Grooves and arrangements (`groove.py`, `arrangement.py`)
+
+What the generator needs to sound played rather than programmed (§6.6):
+- **Loop groove** (every loop, when it is written): its hits (onsets refined to the attack, the loop treated as cyclic so a hit on sample 0 counts), placed on the 16th grid of the library BPM. Per 16th step of the bar: the median offset in fractions of a 16th (+ late, − early), relative to the loop's own quarter notes when it plays any (else to the grid, which is the source track's kick grid); the median level in dB below the loudest step; and the hit count. Plus `swing` (mean offset of the odd 16ths: +0.33 = MPC 66 %) and `push` (the offbeat 8ths). Stored as JSON in `samples.groove` (`{}` when the loop has too few hits).
+- **Track arrangement** (every zip, during analysis, before the melodic stems are let go): each stem measured bar by bar on the track's own grid (its BPM and bar 1) and summed into parts: kick, clap (and snare), hats (and shaker), ride, perc, top (top, groove, drums), crash (cymbal), fills (fill, roll), fx, bass (melodic stems named as bass), music (other melodic). Per part and bar: `0` silent (below `arrangement_silence_db` or 20 dB under the part's full level), `1` quiet or filtered, `2` full (within 6 dB of the part's full level = its 90th-percentile bar). Stored in `arrangements` (one row per zip).
+- **Older libraries**: `analyze_library` (a job) fills in grooves from the loop files, event shapes from the event files (the source bar from `source_offset_s` on the zip's stored BPM and bar 1) and arrangements from the original zips (on their stored BPM and bar 1). The app starts it by itself when the engine is up and something is missing.
+
+### 5.8c Loose samples (`samples.py`, job `import_samples`)
+
+Zips are whole tracks (tempo, bar 1, key and structure come from all their stems together). Loose samples (Splice and other packs) are already cut, so they don't go through that pipeline: each file is read on its own and lands in the same library.
+
+- **Packs.** Files are grouped by their Splice pack (`…/sounds/packs/<Pack>/…`), else by the dropped folder, else by the file's own folder. A pack is a source like a zip: its own code (`P0001`, separate from `S0001…`), in the Process list with its files as "stems", in the Library's source filter, in Generate's spread over sources. It has no arrangement, so it is never a structure template (§6.6), and no grid (the Grid view leaves packs out). Adding files to a pack's folder later and dropping them adds them to the same pack (the pack is re-cut, favourites and deletions kept); files already in it are skipped.
+- **Category:** filename rules (§5.3) on the file name, else on its folders from the nearest up ("Kicks/BBH_03.wav"), else the audio fallback. Overridable per file like stems, then reprocess.
+- **Kind:** FX, fills and rolls → event. "One shot"/"hit" in the path (and not "loop" in the file name) → one-shot. Otherwise a **loop** when its length is whole bars: at the BPM in the name ("124bpm", or a bare 60–200 like `BBH_124_Hat_Loop`; a tail after the last whole bar is cut), or without one at the tempo within the max stretch that makes it 1, 2, 4, 8 or 16 bars (closest to the library BPM). Short files (≤ `sample_oneshot_max_s`) that aren't whole bars are one-shots. A "loop" that isn't whole bars, melodic files, longer files and loops too far from the library BPM to stretch are skipped with a warning; only skips a category override or a rename can fix (a loop that isn't whole bars, a one-shot without a single-sound category) flag the pack `needs_review`.
+- **Loops** start on their downbeat. Three cycles are stretched to the library BPM (Rubber Band, §5.7) and the middle one kept, so the ends join like a repeat; cut sample-exact to `bars × bar length`, no end fades (§5.8 step 5). Kick and cymbal loops (no loop lengths) give their distinct hits as one-shots instead.
+- **One-shots** are never stretched: the best hit of the file (§5.6), or the whole file with its tail trimmed when no onset is found.
+- **Events:** stretched when the name has a usable BPM, then cut on bar lines like §5.8a.
+- **Key** from the name only ("_Am_", "F#min", "Bb major"; a bare letter is not a key), else none. BPM, normalization, grooves, peaks and file names as for zips (`LP_Hat_124_NoKey_P0001-house-tools_2bar_01.wav`).
 
 ### 5.9 Normalization (`normalize.py`)
 
@@ -305,7 +325,8 @@ CREATE TABLE zips (
   status TEXT,                      -- queued|processing|done|needs_review|error
   reviewed INTEGER DEFAULT 0,       -- "Mark as reviewed": stays done when reprocessed (schema v2)
   warnings TEXT,                    -- JSON array
-  processed_at TEXT, settings_hash TEXT
+  processed_at TEXT, settings_hash TEXT,
+  kind TEXT DEFAULT 'stems'         -- 'stems' (a zip of one track) | 'pack' (loose samples, schema v8, §5.16)
 );
 
 CREATE TABLE stems (
@@ -333,6 +354,8 @@ CREATE TABLE samples (
   fingerprint BLOB,                 -- for dedupe + "similar sounds"
   favorite INTEGER DEFAULT 0, rating INTEGER, tags TEXT,
   shift_beats INTEGER DEFAULT 0,    -- loops/events: Library "Move sound", beats later (schema v5)
+  groove TEXT,                      -- loops: timing and accents per 16th, JSON (v7, §5.8b)
+  shape TEXT,                       -- events: how it plays and the source bar it leads into, JSON (v9, §5.8a)
   created_at TEXT
 );
 
@@ -349,6 +372,12 @@ CREATE TABLE removed_samples (
 CREATE INDEX idx_samples_cat ON samples(kind, category);
 CREATE INDEX idx_samples_key ON samples(key_label);
 ```
+
+Schema v7 adds `arrangements (zip_id PRIMARY KEY, bpm, bars, parts TEXT, created_at)`: per part a string with one character per bar (§5.8b).
+
+Schema v9 adds `samples.shape` (§5.8a); `analyze_library` fills it in for older libraries.
+
+Schema v8 adds `zips.kind`: a pack of loose samples is a row like a zip (code `P0001…`, `original_path` = its folder, `file_sha1` = `pack-` + the SHA-1 of the folder path), its files are its `stems` rows (paths relative to the folder). Zips keep their own numbering (`S0001…`).
 
 Reprocessing a zip deletes that zip's samples (files + rows) and regenerates them. `favorite`, `rating` and `tags` survive reprocessing where a regenerated sample matches an old one by stem + kind + length + offset (nearest, within a tolerance so a moved bar 1 still matches); samples matching a `removed_samples` row are not written at all.
 
@@ -378,6 +407,7 @@ JSON lines on stdin/stdout; logs go to stderr only.
 Requests from the app:
 ```json
 {"id": "uuid", "method": "process_zip", "params": {"path": "...", "settings": {...}}}
+{"id": "uuid", "method": "import_samples", "params": {"paths": ["/…/Splice/sounds/packs/House Tools", "/…/Kick.wav"], "settings": {...}}}
 {"id": "uuid", "method": "reprocess_zip", "params": {"zip_id": 12, "overrides": {"bpm": 123, "key": "Fm", "stems": {"34": "perc"}}}}
 {"id": "uuid", "method": "delete_zip", "params": {"zip_id": 12, "delete_files": true}}
 {"id": "uuid", "method": "rebuild_loops", "params": {"settings": {...}}}
@@ -386,7 +416,10 @@ Requests from the app:
 {"id": "uuid", "method": "delete_samples", "params": {"sample_ids": [301, 302], "settings": {...}}}
 {"id": "uuid", "method": "restore_samples", "params": {"removed_ids": [7], "settings": {...}}}
 {"id": "uuid", "method": "shift_sample", "params": {"sample_id": 301, "beats": 1, "settings": {...}}}
+{"id": "uuid", "method": "render_bass", "params": {"preset": "/…/X.SerumPreset", "midi_id": 3, "transpose": -4, "bpm": 124, "out_rel": ".drumvault/bass/….wav", "notes": null, "bars": null, "settings": {...}}}
+{"id": "uuid", "method": "save_midi", "params": {"name": "Roll edit", "notes": [[0.25, 0.25, 41, 100]], "bars": 2, "key_label": "Fm", "settings": {...}}}
 {"id": "uuid", "method": "stretch_samples", "params": {"rel_paths": ["FX/Risers/..."], "bpm": 128, "settings": {...}}}
+{"id": "uuid", "method": "analyze_library", "params": {"settings": {...}}}
 {"id": "uuid", "method": "health", "params": {}}
 ```
 
@@ -419,7 +452,7 @@ A single window with a left nav: **Process**, **Library**, **Grid**, **Generate*
 
 ### 6.2 Process view
 
-- A large drop zone; it accepts multiple zips or a folder (all zips inside it are found recursively).
+- A large drop zone; it accepts multiple zips or a folder (all zips inside it are found recursively), and loose samples (WAV/AIFF/FLAC, or folders of them), which become packs (§5.8c). A pack's panel shows its files with their category, and no tempo, grid or key controls (each file has its own).
 - A job queue list: zip name, status chip, progress bar with the current stage, detected BPM + confidence, key, and sample counts.
 - Clicking a zip opens a detail panel:
   - Stem table: filename, category (dropdown to override), an "auto" badge if auto-classified, and which roles the stem was used for.
@@ -467,7 +500,8 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 **Clip types**
 1. **Audio clip** (loops): placed on the bar grid. Dragging the right edge extends the clip by repeating the loop (a whole number of loop lengths, or any bar count, ending mid-loop is allowed). Per-clip gain. Optional left trim in whole beats. **Fades:** dragging the top half of a clip's edge (or the fade handle inside it) sets a linear fade-in or fade-out, snapped like everything else; the bottom half still resizes. Fades follow the edges when a clip is resized, never overlap, apply to pattern clips too, and are scheduled in `schedule.ts` (`fadeAt`), so playback and export match. **Move sound** (−1 / +1 in the clip bar, ⇧← / ⇧→) moves the sound a beat later or earlier inside the clip's loop, wrapping around, while the clip stays where it is (e.g. a fill on beat 3 moved to beat 4); pattern clips rotate their steps the same way.
    FX & fills (events) also become audio clips: placed at a bar, they play once over their length; extending one repeats it like a loop.
-2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4".
+2. **Pattern clip** (one-shots): references 1 one-shot sample and holds a step grid of 16 steps per bar, pattern length 1, 2 or 4 bars, and 3 velocity levels per step. A pattern clip repeats when extended, like an audio clip. Double-click opens a step editor beneath the timeline. Quick presets: "4 on the floor", "offbeat", "every 2 & 4". A pattern may carry a **groove** (16 step offsets in 16ths and 16 accents in dB, taken from a loop, §6.6): each step lands that much late or early (by its place in the bar) at that accent.
+3. **Loop variations** (audio and pattern clips, not bass): **pitch** in semitones, played faster/slower like a sampler; a pitched loop plays as 16th slices that each start on the grid (the same slicing as another tempo, §6.4a), so it stays in time. **Only the first bars** (`loopBars`): an audio clip repeats only its loop's first 1 or 2 bars. Both show in the clip label (`+1 st`, `bar 1`), are scheduled in `schedule.ts` (playback = export) and are set from the right-click menu.
 
 **Editing**
 - Snapping follows the zoom: moves and resizes snap to the finest division at least 14 px wide (several bars zoomed far out, bars at the default zoom, then beats, 8ths and 16ths zoomed in close). Hold ⌥ to snap four times finer, down to 16ths.
@@ -486,6 +520,12 @@ Sets bar 1 of one zip by ear and eye. All stems of a zip share one timeline (the
 - Lookahead scheduler: a 25 ms timer tick schedules everything in the next 120 ms with `AudioBufferSourceNode.start(when, offset, duration)`.
 - Graph: source → clip gain → lane gain/pan → master gain → destination.
 - Playback must be sample-accurate: no drift over 192 bars.
+
+**Right-click menu** (Arrange timeline), the same commands as the keys:
+- On clips (the clicked one joins or becomes the selection): Cut ⌘X, Copy ⌘C, Paste here ⌘V, Duplicate ⌘D, Delete ⌫; Split here (S splits at the playhead; a split clip plays exactly as before: the loop or pattern carries on); Move sound a beat earlier/later; Remove fades; Edit pattern; Replace with copied sample (copy one clip, then replace the sample of others, keeping place, length and pattern); Swap for a similar sound (the most similar library sample, again for the next); Pitch up / down a semitone, Original pitch; Play the whole loop (a clip on its first bars); Play straight (a pattern without its groove); Show in Library; Reveal in Finder.
+- On a section marker: Rename, Duplicate section, Loop this section, Play section, Delete marker (the clips stay).
+- On empty space / the ruler: Paste here, Select all, Play from here.
+- The clipboard holds clips inside the app; ⌘X/⌘C/⌘V act on clips when no text field has focus.
 
 ### 6.4a Project tempo
 
@@ -520,10 +560,16 @@ A view of its own (sidebar: Create → **Generate**) that instantly builds compl
 - **Keep** toggles hold parts while cycling: keep the structure, keep the kick, keep a lane's sample, keep the key. Everything not kept is re-rolled.
 - Options: length range (default 4–6 min), sources (all zips or a selection), favourites/ratings bias (on), and a seed field (the same seed + library + options gives the same generation).
 - **Volume** slider on every lane of the overview, the same control as Arrange's lane headers (double-click: the starting level): it changes the current generation at once (no re-roll), applies to the next ones and to what is sent to Arrange, and is remembered between sessions (per lane: Kick, Clap 2, Tops 3, …). The starting mix has the kick at −2 dB.
+- **Per lane, on the right of the overview:** M and S (mute and solo, kept by lane name while cycling, and carried to Arrange) and a re-roll button: that lane made again, the rest of the track exactly as it is. It gets a new sample (not one already in the track) and draws the lane's own track rules again: how often the crash comes (every 8 or 16 bars, into breakdowns, into the outro), where the kick drops out, clap rolls and ghost notes, how many tops and when they come in, fills into which parts, FX density, the bass in breakdowns and builds. The structure, key, tempo and track-wide rules (the silence before drops) stay, so the new lane still fits. On the Bass lane it also picks another bassline and/or patch. The result is a new history entry right after the current one (← goes back), swapped in at the playhead while playing. Drops can also crash every 8 bars (a rule of its own).
 - **Send to Arrange** (Enter) creates a new project ("Generated 01", …), opens it in Arrange and keeps the Generate history, so you can go back and send another. The current Arrange project is never overwritten.
 
-**Structure: a grammar, not a template**
-An arrangement is a sequence of sections, each a whole number of 8-bar phrases, generated from weighted rules and then fitted to the chosen length. Hard constraints only where DJs need them:
+**Structure: a real track's, changed a little, or the grammar**
+Most generations (80 % when the library has arrangements, §5.8b) follow a **real track's** structure and the decisions its producer made, about 90 % of the way (`template.ts`):
+- The track's arrangement is read phrase by phrase: no full kick = breakdown; kick with the bass full or near the track's highest energy (the full parts that play) = drop; the first four phrases before the first drop the intro, more than that a build; after the last drop the outro; a quieter kick part after a breakdown builds into the next drop. Sections are kept within the limits below (an intro of 48 bars becomes 32) and the generator's grammar (a build runs into a drop); a track that ends on its drop gets its last 16 bars as the outro.
+- Its rules where they can be read: hats in breakdowns, claps and perc in the intro, when the top loops come into the intro, bass in breakdowns / builds / intro (low-passed or out), the ride (later in drop 1 and/or the later drops), four kicks out before drops, crashes every 16 and every 8 bars, fills into 16-bar marks and drops, FX density, the breakdown kick (out, thin/filtered when quiet).
+- Then made new: each rule read is drawn again with a chance of 12 %; one section a phrase longer or shorter (60 %); sometimes another breakdown kick or build style; always at least one change. Fitted to the length range only when outside it. The choices list starts with "structure after S0012 (drop longer, …)".
+
+Otherwise an arrangement is a sequence of sections, each a whole number of 8-bar phrases, generated from weighted rules and then fitted to the chosen length. Hard constraints only where DJs need them:
 - **Always:** a mix-in intro and a mix-out outro of ≥ 16 bars each, with a steady kick and hats (beatmatchable, nothing tonal); the kick there is subtly high-passed (60–110 Hz) so it mixes over another track, and top loops come in (intro) and thin out (outro); the track starts and ends on a bar line.
 - **Everything else varies.** Examples of what the rules can produce:
   - Intro → build → drop → break → drop → long break → drop → outro (the classic shape).
@@ -538,12 +584,18 @@ Every variation below is decided once per track and applied to every section of 
 **Variation dimensions** (each chosen per generation as one of the track's rules; breakdowns per section)
 - **Kick in breakdowns:** fully out; thin (high-passed at 180–350 Hz, the common filtered one); low-passed (fixed or sweeping open into the drop, kept rare); only on the downbeat of each bar; kept (no half-time kick: it sounded off).
 - **Announcing parts:** usually the last bar before a drop has no kick (four kicks out), and inside drops the bar before bar 17, 33, … often too; the next bar starts with a crash. Most tracks also go silent for one or two beats right before each drop, except FX, fills and hits (risers, rolls and impacts ring through).
+- **One moment into every drop** (the producer's): an event is placed by its body, so the silence its producer left before the line (its shape's `gap`) comes with it. Everything leading into a drop stops together: the riser decides (or, without one, the fill or roll), and the fill or roll and any second FX layer must agree with it: all run up to the line (gap ≤ 1 16th), or all stop early within 2 16ths of each other. Never one riser into the drop and another, or the fill, leaving a beat of silence. A riser the track's fill can stop with is preferred, so the track keeps one fill. When they stop early, the rest of the track (every lane but fills, FX and hits) goes silent there too, up to 2 beats; when they run up to the line, the track's own beat or two of silence applies and they ring through it. Events silent for more than 2 beats before their line (a hit on the 1 and a rest, cut from a fill stem) never lead into one. The measured stops per drop are stored with the rules (`dropGaps`) and kept by lane re-rolls, so a re-rolled FX or fill lane stops where the rest of the track does (or the re-roll finds nothing new). Libraries without shapes count every event as running up to the line.
+- **Layered FX:** in normal and busy tracks, often a second FX layer into drops (lane FX 2): a riser or a sweep/other FX that measures as rising, never two of a kind from two tracks: another length (a long build with a short lift on top), another texture (noise with a tone), or the same track's. Sometimes a downlifter as the drop hits, next to the impact (on a lane free there: FX lanes never stack sounds). Tonal FX stay in key when the library has any in key, even if that leaves no layer.
+- **The producer's own FX:** events of one track that lead into the same bar of it (bodies ending there) or start on it (an impact, a downlifter) were layered there by its producer. Half the tracks (when the library has such moments with a riser in key) take one moment as their FX into drops: its riser(s), fill or roll, impact and downlifter are the track's picks for those jobs, and the rules follow it (a roll if it had one, the impact, two layers if it had two risers). Its own track's moments are preferred when the structure is that track's.
 - **Crashes** (their own lane) on the 1 of key moments: every drop, after a four-kicks-out bar, where a ride comes in, usually the outro and sometimes a breakdown.
 - **Rides** (their own lane, never in intros or outros): coming in later in the first drop, all through from the second drop, or both. Each breakdown chooses on its own.
 - **Drum patterns:** kick dropouts at phrase ends (e.g. the last beat or two of an 8-bar phrase), skipped kicks before a drop, clap/snare rolls, ghost notes, open-hat accents, offbeat vs 16th hats, perc swaps between sections. Applied through pattern clips (one-shots) and by gaps/edits on loop clips.
-- **Fills and FX:** drum fills at phrase ends (more often before breaks and drops); a riser or snare roll that **ends** on the drop downbeat; downlifters and impacts that **start** on a section downbeat; atmos in breakdowns. FX density varies from sparse to busy.
+- **Fills and FX:** drum fills at phrase ends (more often before breaks and drops); a riser or snare roll whose body **ends** on the drop downbeat; downlifters and impacts that **start** on a section downbeat; into breakdowns a sweep that rises **ending** on its downbeat and/or a downlifter falling away from it. Sweeps and other FX go where their measured shape says (rising ones end on a line, falling ones start on one); unmeasured sweeps count as falling. Atmos in breakdowns. FX density varies from sparse to busy.
 - **Layering:** more of the same stem where it makes sense, each layer on its own lane a little quieter: two to four **top loops** (several at once in drops, all of them in the last drop, one more per phrase in layered builds), up to three **claps** stacked on the backbeat in drops, a second hat loop and a second perc loop in drops. Never a second kick.
-- **Sample picks:** one main sample per lane for the track (so it sounds like one record), variations for later drops; picks come from different zips while the library allows it (the same zip may repeat once there are fewer zips than lanes); favourites and ratings bias the picks.
+- **Sample picks:** one main sample per lane for the track (so it sounds like one record), variations for later drops; picks come from different zips while the library allows it (the same zip may repeat once there are fewer zips than lanes); favourites and ratings bias the picks. Loops are picked to fit the track's feel first (similar swing and push), then spread over zips.
+- **Feel** (`feel.ts`): the groove of the track's main loop (its groove loop, else its first top, perc or hat loop with enough hits measured, §5.8b) is applied, 70–100 % of the way (a track rule), to every one-shot pattern except the kick and crash (offsets clamped to ±0.4 of a 16th; accents at half strength, at most −6 dB, relative to each pattern's loudest step so nothing gets quieter overall) and to the bass (its notes rendered on the groove). Shown as "feel of S0021's groove loop (62 % swing)".
+- **Loop variations:** a top layer, the second perc or the second hat loop pitched ±1–2 semitones for the whole track (sometimes); intro loops repeating only their first bar or two in the intro's first half, the outro mirroring it (sometimes).
+- **Something changes every 8 bars.** At every 8-bar mark inside a section where nothing changes by itself (no element in or out, no fill, kick variation or crash in the bars around it), one subtle variation is added, not the same kind twice in a row: a kick variation in the bar before (not in intro/outro), the hats stopping for the last beat or two (not in intro/outro), a loop layer out for the last bar or half bar, a loop playing another part of itself for the next 8 bars (only its first bar or two, from another bar, a semitone up or down, or a short gap), a clap ghost note, a fill into the mark, a high-pass lift on a top loop. In the DJ intro and outro the kick and hats keep playing (hat loops may vary there, never stop).
 - **Key:** one key per track. Tonal FX and atmos are picked from that key or its Camelot neighbours; drums ignore key.
 
 **What it needs from the rest of the app**
@@ -556,6 +608,20 @@ Every variation below is decided once per track and applied to every section of 
 - Generations are ordinary `Project` objects played by the existing engine; buffers are preloaded per generation, so cycling is instant after the first load. Nothing changes in export.
 
 ---
+
+### 6.7 Bass: MIDI through Serum 2 (Phase 6)
+
+Basslines are written by the app, learned from the MIDI library's basslines (funky house lines); the sound comes from Serum 2 presets, rendered by the engine.
+- **MIDI import** (Samples → **MIDI**, ⌘6, its own page and drop zone; Process takes stem zips only and refuses a MIDI-only zip with a pointer to this page): MIDI zips (a track's parts: Bass, Organ, Strings, …), .mid files and folders of either. Only basslines are kept (`import_midi`, `midi.py`): the role comes from the part's name (bass/sub/808/reese; organ, guitar, strings, piano, lead, chords … are other) or else its register; other parts are counted as left out. The engine reads all notes (in beats), rounds the length up to 1/2/4/8/16 bars and finds the key: a key in the part's name ("Fm", "F#min", "A_maj") wins; else a MIDI zip named like a processed stem zip ("83686_midi" ↔ "83686_stems") takes that track's key; else the key all the zip's parts point to together (duration-weighted pitch classes against key profiles); a loose file uses its own notes. A zip's bassline is named after the zip ("83686 Bass"). Files are copied to `<Library>/MIDI/Bass/` and indexed in `midi_files` (schema v6: notes as JSON, `source` zip, `source_code` of the linked stem zip); the same file twice is skipped. The page lists the basslines (a note thumbnail, bars, notes, source and linked track) with search, a key dropdown to correct the key (`set_midi_meta`; "No key" means not moved) and remove (`delete_midi`).
+- **Serum 2 in the engine** (`serum.py`): Pedalboard hosts the VST3 offline, one instance for the engine's lifetime (loading takes ~10 s, rendering a few bars ~0.1 s). A `.SerumPreset` is loaded without Serum's browser: Serum's plugin state is JUCE binary XML whose `<IComponent>` holds an "XferJson" container (JSON header with an MD5 of the payload + zstd-compressed CBOR patch); a preset file is the same CBOR except that untouched sections say `"default"` and the processor's `component` entry is missing, so the engine fills those in, re-compresses, re-hashes and sets the state. Serum 1 `.fxp` presets are not supported yet.
+- **Writing basslines** (`src/generate/bassline.ts`, pure and seeded). The MIDI library is what the generator learns from (`learnBass`); the MIDI page shows what it took from it (where notes start per 16th, the notes it plays most, how later bars vary). Every file is read on the 16th grid relative to the root it plays on its very first 1 (the files' key labels are often wrong), one note per step, an 8-bar file as two 4-bar loops, a major line with its 3rd and 6th as the minor ones (so a move to its VI is the minor VI). Learned: where the next note starts after one on each 16th (and where notes start at all, to fall back on after a rare step); the intervals from the root (octave included) per beat position (the 1, the 3, beats 2 and 4, 8th offbeats, 16ths) and from note to note; how many different notes a main bar plays; note lengths as a share of the room to the next note (one articulation per line) and the longest usual note (90th percentile); the register (median root on the 1); loop lengths; how often bar 2 of 2 and bars 2, 3, 4 of 4 differ from bar 1, from which 16th they differ (the 1: the whole bar; 9: its second half turned around), the notes of those turnarounds, and how often a whole-bar change is the bar on another root (and which). `generateBassline` writes a loop of 1, 2 or 4 bars (the length chosen, else as the library's tend to be): the main bar's rhythm a walk over the learned moves (between the usual fewest and most notes), the root on the 1, the other notes by beat position and after each other (note-to-note tempered, so the many repeats of the library don't make one-note bars) until the bar plays as many different notes as a library line; later bars repeat it or vary like the library's (its second half rewritten from a learned 16th with the turnaround notes, or the bar on another root), at least one in a 2- or 4-bar loop; lengths in one learned articulation, capped by the longest usual note; velocities as learned. Notes are in the track key's scale (minor, or mixolydian major with the b7; both with the note a semitone under the root, the turnarounds' approach), the root at the octave nearest the learned register. A generated line is a bassline like an imported one (`generatedMidi`: a negative id named after its notes, "Bassline 3fa1c (2 bars)", key = the track key, transpose 0): it renders from its notes (`render_bass` with `midi_id` < 1 needs `notes` and `bars`), and its notes go into every bass clip (`BassRender.notes`). Its timing stays on the grid: the track's feel moves it (as for imported lines). Saving a line or an edit adds it to the MIDI library, so it is learned from too.
+- **Patch pool:** the Serum 2 presets folder (default `/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Presets`) and the folders under it you tick in Settings → Bass (a folder includes its sub-folders). Patches can be starred (picked more often). App settings `bass: {presetRoot, folders, favorites}`.
+- **Rendering** (`render_bass`): Serum back on its init patch first (a preset lists only what differs from the defaults, so nothing may carry over from the preset before), then the MIDI, transposed, through the preset, as a seamless loop at the project tempo (two cycles rendered, the second kept, so tails and modulation wrap like a repeat), loudness-matched (`bass_lufs_target`), written to `.drumvault/bass/<preset hash>-<midi id>[-g<groove hash>]-<transpose>-<bpm>.wav` (the app names the file, `bassPath`), cached until the preset or MIDI changes (renders from an older `BASS_RENDER_VERSION` are deleted once and redone). With the track's feel (`groove`: 16 step offsets in 16ths), notes that start on a 16th move by their step's offset (their ends stay). Another tempo means another render, never slicing.
+- **In Generate** (a separate Bass section): each generation writes a new bassline in the track key and picks a patch. **New bassline** writes another one for the current generation; **Any / 1 / 2 / 4** sets the length of new basslines (remembered) and writes one at once. A transpose of a written line (an octave up) carries over to the next one. (A line from the MIDI library, kept from an older session or saved, still plays transposed into the key the nearest way, a major part in a minor track via the relative key.) The bassline repeats through every drop; breakdowns get it low-passed or not at all, builds out / low-passed / a low-pass opening up, intro and outro usually without (sometimes low-passed in their inner half), all as the track's rules. The section browses in place: previous / next / random patch (with ★), a new bassline, transpose by semitone or octave, sidechain depth, and bass on/off for new generations. Keep toggles hold the bassline and the patch. "Rendering with Serum 2…" shows while a part renders (the first one loads Serum).
+- **Sidechain:** a lane with `duck` (0…1) dips by that much on every kick hit (pattern clips with a kick one-shot, also kick lanes not being exported), reaching full depth in 4 ms and recovering over 0.6 beat; scheduled by the shared scheduler (`kickHits`) for live playback and export alike. The Bass lane gets it from Generate; in Arrange a lane with a sidechain shows an extra slider in its header.
+- **In Arrange** a bass clip is an audio clip with `bass: {preset, presetName, midiId, midiName, transpose}`; it moves, repeats, trims, splits, filters and fades like a loop. The right-click menu adds transpose ±1 semitone / octave, next / previous / random patch and **New bassline** (one written line for all selected bass clips, in the key they play now: the root on its first note, minor unless it plays a major 3rd and no minor one); they re-render and play on. A written line has no "back to the imported MIDI": it is its notes.
+- **Piano roll** (one loop of 1–16 bars): double-click a bass clip in Arrange (or "Edit notes…" in its menu), or **Edit notes** in Generate's Bass section. Click to add a note (a 16th, or the selected note's length; drag right away to size it), drag to move in time and pitch (16ths, ⌥ 64ths), drag a note's end to resize, right-click / double-click / ⌫ to delete, ↑↓ ←→ to nudge the selected note (⇧↑↓ an octave); a velocity lane below; loop length 1/2/4/8/16 bars. The roll shows the pitches as heard (with the transpose). Each edit (on mouse-up) re-renders the loop through Serum; the edited notes live in the project (`BassRender.notes` / `bars`, at the MIDI's own pitch) and apply to every clip of that bassline in the track (Generate: the current generation, and kept generations when the bassline is kept); the render file is named after the notes. **Revert** goes back to the imported file; **Save as new bassline** writes the loop as a .mid to `MIDI/Bass/` and indexes it (engine `save_midi`; saving the same loop twice gives the existing one), and the track switches to it.
+- **Export:** next to `<Prefix>_markers.mid`, `<Prefix>_Bass.mid` holds the bass parts as notes (looped, trimmed and transposed as in the arrangement), to play through the real Serum patch in Logic.
 
 ## 7. Phases & acceptance criteria
 
@@ -587,6 +653,12 @@ Every variation below is decided once per track and applied to every section of 
 ### Phase 5 — Generate view
 - The Generate view in §6.6: the structure grammar and variation dimensions, fast cycling with history, keep toggles and seeds, the overview and section jumps, and Send to Arrange. Plus what it needs elsewhere: the per-clip filter (playback, export, Arrange inspector, project file), `body_bars` for events (engine, schema, reprocess), and short gaps in loop clips.
 - **Acceptance:** with ≥ 5 processed zips, a new generation is ready and playing in under a second (after the first buffer load); every generation is 4–6 minutes with a DJ intro and outro of ≥ 16 bars on kick + hats, phrase-aligned sections, and risers/rolls ending exactly on drop downbeats; samples come from ≥ 3 different zips and tonal FX match the track key; over 100 seeds the structures differ and every variation dimension (kick treatments, build styles, pattern variations) occurs; the same seed gives the same generation; Send to Arrange opens an editable project that plays and exports like any other.
+
+---
+
+### Phase 6 — Bass (MIDI + Serum 2)
+- §6.7: MIDI import, the Serum 2 host and preset loading, bass rendering, the patch pool in Settings, the Bass section in Generate, sidechain ducking, bass clips in Arrange, and the bass MIDI in the export.
+- **Acceptance:** dropping a folder of bass MIDI imports every file with bars, key and role (duplicates skipped); with preset folders chosen, every generation has a Bass lane playing a newly written bassline (learned from the MIDI library) through a Serum 2 patch in the track key in every drop (low-passed or out elsewhere, by the track's rules); next/random patch or a new bassline is heard within a second once Serum is loaded; the bass ducks under the kick by the chosen amount in playback and export; Send to Arrange keeps the bass editable (transpose, patch, bassline); the export writes the bass as a stem and as `<Prefix>_Bass.mid`.
 
 ---
 

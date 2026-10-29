@@ -17,7 +17,7 @@ export function Toolbar() {
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
 
   return (
-    <div className="app-drag h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
+    <div className="app-drag topbar-art h-14 shrink-0 flex items-center gap-3 px-5 border-b border-line">
       <PageTitle className="mr-3">Arrange</PageTitle>
       <ProjectMenu />
       <input className={cx(inputClass, 'w-44 font-medium')} value={project.name} title="Project name"

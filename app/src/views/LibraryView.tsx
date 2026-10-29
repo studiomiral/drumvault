@@ -199,7 +199,7 @@ export function LibraryView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+      <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
         <PageTitle className="mr-3">Library</PageTitle>
         <input ref={searchRef} className={cx(inputClass, 'w-64')} placeholder="Search names and tags  ⌘F"
                value={search} onChange={(e) => setSearch(e.target.value)} />

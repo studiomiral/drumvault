@@ -8,7 +8,7 @@ import { api } from '../api'
 import { renderLanes, type RenderRange } from '../audio/render'
 import { encodeWav, peakOf, type WavFormat } from '../audio/wav'
 import { formatBpm } from '../lib/format'
-import { markersMidi } from '../lib/midi'
+import { bassNotes, markersMidi, notesMidi } from '../lib/midi'
 import type { Project } from '../types/project'
 
 export interface ExportOptions {
@@ -91,6 +91,14 @@ export async function exportStems(project: Project, o: ExportOptions,
     const data = markersMidi(project.markers, project.bpm, o.range.startBeat, o.range.endBeat, project.name)
     await api.writeExportFile(o.dir, file, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
     result.written.push(file)
+    // The bass as notes, to play through the real Serum patch in Logic.
+    if (project.clips.some((c) => c.type === 'audio' && c.bass)) {
+      const notes = bassNotes(project, await api.listMidi())
+      const bassFile = `${safeName(o.prefix)}_Bass.mid`
+      const bass = notesMidi(notes, project.bpm, o.range.startBeat, o.range.endBeat, `${project.name} Bass`)
+      await api.writeExportFile(o.dir, bassFile, bass.buffer.slice(bass.byteOffset, bass.byteOffset + bass.byteLength) as ArrayBuffer)
+      result.written.push(bassFile)
+    }
   }
   onProgress('Done', 1)
   return result

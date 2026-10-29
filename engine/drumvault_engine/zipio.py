@@ -41,6 +41,23 @@ def is_junk(rel_path: str) -> bool:
     return any(p.startswith(".") or p.lower() in JUNK_NAMES for p in parts)
 
 
+MIDI_EXTS = {".mid", ".midi"}
+
+
+def midi_members(zip_path: Path | str) -> list[str]:
+    """MIDI files inside a zip (junk skipped)."""
+    with zipfile.ZipFile(zip_path) as zf:
+        return [n for n in zf.namelist() if not n.endswith("/") and not is_junk(n)
+                and PurePosixPath(n).suffix.lower() in MIDI_EXTS]
+
+
+def is_midi_zip(zip_path: Path | str) -> bool:
+    """MIDI files and no audio: a MIDI pack, not stems (SCOPE.md §6.7)."""
+    with zipfile.ZipFile(zip_path) as zf:
+        exts = {PurePosixPath(n).suffix.lower() for n in zf.namelist() if not is_junk(n)}
+    return bool(exts & MIDI_EXTS) and not exts & (AUDIO_EXTS | UNSUPPORTED_AUDIO_EXTS)
+
+
 def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> list[str]:
     """Extract everything except junk; refuse paths escaping `dest`."""
     dest = dest.resolve()

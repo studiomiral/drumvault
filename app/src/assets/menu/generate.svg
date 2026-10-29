@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="6" y1="1" x2="26" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F0DFFF"/><stop offset=".45" stop-color="#BE9BE7"/><stop offset="1" stop-color="#7450A4"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="16" y1="13" x2="16" y2="31" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BE9BE7"/><stop offset="1" stop-color="#7450A4"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="8" y1="1" x2="25" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity=".85"/><stop offset=".45" stop-color="white" stop-opacity=".12"/><stop offset="1" stop-color="white" stop-opacity=".02"/>
+    </linearGradient>
+    <linearGradient id="symbol" x1="11" y1="7" x2="21" y2="25" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A17AC8"/><stop offset=".55" stop-color="#432563"/><stop offset="1" stop-color="#432563"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0" cy="0" r="1" gradientTransform="translate(8 3) rotate(55) scale(22 27)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity=".38"/><stop offset="1" stop-color="white" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="raised" x="-35%" y="-35%" width="180%" height="185%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation=".7" result="blur"/>
+      <feOffset in="blur" dx=".5" dy="2" result="shadow"/>
+      <feFlood flood-color="#432563" flood-opacity=".45"/>
+      <feComposite in2="shadow" operator="in" result="shadow"/>
+      <feFlood flood-color="#432563"/>
+      <feComposite in2="SourceAlpha" operator="in" result="depth"/>
+      <feOffset in="depth" dy="1.4" result="depth"/>
+      <feOffset in="SourceAlpha" dx="-.4" dy="-.5" result="lightEdge"/>
+      <feComposite in="lightEdge" in2="SourceAlpha" operator="out" result="lightEdge"/>
+      <feFlood flood-color="white" flood-opacity=".7"/>
+      <feComposite in2="lightEdge" operator="in" result="lightEdge"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="depth"/><feMergeNode in="lightEdge"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="1" y="4" width="30" height="27" rx="9" fill="url(#edge)"/>
+  <rect x="1" y="1" width="30" height="27" rx="9" fill="url(#tile)"/>
+  <rect x="1" y="1" width="30" height="27" rx="9" fill="url(#sheen)"/>
+  <rect x="1.6" y="1.6" width="28.8" height="25.8" rx="8.4" stroke="url(#rim)" stroke-width="1.2"/>
+  <path d="M5 25.5c1.4 2.5 3.4 3.4 6 3.4h10c2.5 0 4.6-.9 6-3.4" stroke="#F0DFFF" stroke-opacity=".22" stroke-linecap="round"/>
+  <g transform="translate(.6 -.4) scale(.96)" filter="url(#raised)">
+    <path d="M14 6c1 6 3 8 9 9-6 1-8 3-9 9-1-6-3-8-9-9 6-1 8-3 9-9Z" fill="url(#symbol)"/>
+  <path d="M23 19c.4 2.6 1.4 3.6 4 4-2.6.4-3.6 1.4-4 4-.4-2.6-1.4-3.6-4-4 2.6-.4 3.6-1.4 4-4Z" fill="#F8EDFF"/>
+  <circle cx="24" cy="8" r="1.5" fill="#F8EDFF" fill-opacity=".8"/>
+  </g>
+</svg>

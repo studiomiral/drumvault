@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { listProjects, projectFileName, readProjectFile, writeProjectFile } from '../electron/fs'
 import {
   clipsInRange, contentShift, duplicateClips, formatPosition, formatTime, makeClip, newProject, nextMarkerName, parseProject, presetSteps,
-  resizePattern, serializeProject, shiftContent,
+  canReplace, pasteClips, replaceSample, resizePattern, sampleRef, serializeProject, shiftContent, splitClip,
 } from '../src/lib/project'
 import { SNAP_MIN_PX, snapUnit } from '../src/arrange/geometry'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT } from '../src/store/arrange'
@@ -210,5 +210,50 @@ describe('moving the sound inside a clip', () => {
     const r = shiftContent(p, 1) as PatternClip
     expect(r.steps.indexOf(3)).toBe(12)
     expect((shiftContent(p, -3) as PatternClip).steps.indexOf(3)).toBe(12)
+  })
+})
+
+describe('clip commands: split, paste, replace', () => {
+  const sample = (kind: 'loop' | 'oneshot', bars: number | null, rel = 'x.wav') => ({
+    id: 1, rel_path: rel, name: rel, kind, category: kind === 'loop' ? 'top' : 'kick', bpm: 124, bars, body_bars: null,
+    key_label: null, key_camelot: null, duration_s: 1, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001',
+  }) as SampleListItem
+
+  it('splits an audio clip so the right part carries on in the loop, fades staying at the edges', () => {
+    const c = { ...makeClip(sample('loop', 2), 'l', 8), length: 16, fadeIn: 2, fadeOut: 3 }
+    const [a, b] = splitClip(c, 14)!
+    expect([a.start, a.length, b.start, b.length]).toEqual([8, 6, 14, 10])
+    expect(b.type === 'audio' && b.trimBeats).toBe(6)                       // 6 beats into the 8-beat loop
+    expect([a.fadeIn, a.fadeOut, b.fadeIn, b.fadeOut]).toEqual([2, undefined, undefined, 3])
+    expect(splitClip(c, 8)).toBeNull()
+    expect(splitClip(c, 24)).toBeNull()
+    const [, c2] = splitClip({ ...c, trimBeats: 4 } as typeof c, 14)!
+    expect(c2.type === 'audio' && c2.trimBeats).toBe(2)                      // (4 + 6) mod 8
+  })
+
+  it('splits a pattern clip so its steps continue where they were', () => {
+    const c = makeClip(sample('oneshot', null), 'l', 0) as PatternClip
+    const p = { ...c, steps: c.steps.map((_, i) => (i === 6 ? 3 : 0)) } as PatternClip
+    const [, b] = splitClip(p, 1) as [PatternClip, PatternClip]
+    expect(b.steps.indexOf(3)).toBe(2)                                      // 16th 6 is 2 steps after beat 1
+  })
+
+  it('pastes copies with the earliest at the target, on their lanes or the first one', () => {
+    const a = { ...makeClip(sample('loop', 1), 'L1', 4) }
+    const b = { ...makeClip(sample('loop', 1), 'gone', 12) }
+    const out = pasteClips([a, b], 32, ['L1', 'L2'], 'L1')
+    expect(out.map((c) => [c.laneId, c.start])).toEqual([['L1', 32], ['L1', 40]])
+    expect(out[0].id).not.toBe(a.id)
+  })
+
+  it('replaces a sample only with one of the same kind, keeping place and length', () => {
+    const loop = makeClip(sample('loop', 2), 'l', 4)
+    const shot = makeClip(sample('oneshot', null), 'l', 0)
+    const other = sampleRef(sample('loop', 1, 'y.wav'))
+    expect(canReplace(loop, other)).toBe(true)
+    expect(canReplace(shot, other)).toBe(false)
+    const r = replaceSample({ ...loop, trimBeats: 6 } as typeof loop, other)
+    expect([r.sample.relPath, r.start, r.length]).toEqual(['y.wav', 4, 8])
+    expect(r.type === 'audio' && r.trimBeats).toBe(2)                        // wraps to the 4-beat loop
   })
 })

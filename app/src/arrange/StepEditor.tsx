@@ -4,6 +4,7 @@ import { playback } from '../audio/engine'
 import { Button, cx, Segmented } from '../components/ui'
 import { BEATS_PER_BAR, contentShift, formatPosition, loopBeats, shiftContent, PRESETS, presetSteps, resizePattern, STEPS_PER_BAR, STEPS_PER_BEAT } from '../lib/project'
 import { useProject } from '../store/project'
+import { BassEditor } from './BassEditor'
 import type { Clip, ClipFilter, PatternClip, Velocity } from '../types/project'
 
 /** Bottom panel: step editor for the open pattern clip, or an inspector for one selected clip. */
@@ -11,6 +12,7 @@ export function BottomPanel() {
   const { project, selection, editingClip, openEditor } = useProject()
   const editing = project.clips.find((c) => c.id === editingClip)
   if (editing?.type === 'pattern') return <StepEditor clip={editing} onClose={() => openEditor(null)} />
+  if (editing?.type === 'audio' && editing.bass) return <BassEditor clip={editing} onClose={() => openEditor(null)} />
   const single = selection.length === 1 ? project.clips.find((c) => c.id === selection[0]) : undefined
   if (single) return <ClipInspector clip={single} />
   return (

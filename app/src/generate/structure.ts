@@ -27,7 +27,7 @@ export interface Section {
 export const PHRASE = 8
 const MIN_DJ = 16
 
-const LIMITS: Record<SectionKind, [number, number]> = {
+export const LIMITS: Record<SectionKind, [number, number]> = {
   intro: [16, 32], outro: [16, 32], build: [8, 32], drop: [16, 48], break: [8, 32],
 }
 
@@ -78,6 +78,11 @@ export function makeStructure(rng: Rng, targetBars: number): Section[] {
     long.bars = Math.min(32, Math.max(16, ...breaks.filter((b) => b !== long).map((b) => b.bars + PHRASE), long.bars))
   }
   fit(rng, s, targetBars)
+  return layout(s)
+}
+
+/** Sections in order with their start bars and names ("Drop 2"). */
+export function layout(s: Omit<Section, 'start' | 'label'>[]): Section[] {
   let start = 0
   const counts: Partial<Record<SectionKind, number>> = {}
   return s.map((x) => {
@@ -94,7 +99,7 @@ function label(kind: SectionKind, n: number, total: number): string {
 }
 
 /** Stretch or shrink flexible sections by whole phrases until the total is `target` bars. */
-function fit(rng: Rng, s: Omit<Section, 'start' | 'label'>[], target: number): void {
+export function fit(rng: Rng, s: Omit<Section, 'start' | 'label'>[], target: number): void {
   const total = () => s.reduce((n, x) => n + x.bars, 0)
   const longBreak = s.find((x) => x.long)
   const otherBreakMax = () => Math.max(0, ...s.filter((x) => x.kind === 'break' && x !== longBreak).map((x) => x.bars))

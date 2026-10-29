@@ -25,20 +25,23 @@ from pydantic import ValidationError
 from . import __version__, key as keymod, pipeline, stretch
 from .config import Settings
 from .schemas import (
-    AnalyzeZipParams, CancelParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
-    HealthResult, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
-    RebuildLoopsParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts,
-    SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
+    AnalyzeZipParams, CancelParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
+    HealthResult, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
+    RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
+    SerumPresetsParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
 log = logging.getLogger(__name__)
 
-JOB_METHODS = {"process_zip", "reprocess_zip", "delete_zip", "rebuild_loops", "analyze_zip"}
+JOB_METHODS = {"process_zip", "import_samples", "reprocess_zip", "delete_zip", "rebuild_loops", "analyze_zip", "analyze_library"}
 # Answered directly (not queued), each on its own thread.
 DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSamplesParams,
                   "restore_samples": RestoreSamplesParams, "shift_sample": ShiftSampleParams,
-                  "stretch_samples": StretchSamplesParams}
+                  "stretch_samples": StretchSamplesParams, "import_midi": ImportMidiParams,
+                  "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams,
+                  "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
+                  "delete_midi": DeleteMidiParams}
 
 
 @dataclass
@@ -162,12 +165,13 @@ class RpcServer:
             self._reply(req.id, {"ok": True})
             self._stopping = True
         elif m in JOB_METHODS:
-            model = {"process_zip": ProcessZipParams, "reprocess_zip": ReprocessZipParams,
+            model = {"process_zip": ProcessZipParams, "import_samples": ImportSamplesParams,
+                     "reprocess_zip": ReprocessZipParams,
                      "delete_zip": DeleteZipParams, "rebuild_loops": RebuildLoopsParams,
-                     "analyze_zip": AnalyzeZipParams}[m]
+                     "analyze_zip": AnalyzeZipParams, "analyze_library": RebuildLoopsParams}[m]
             params = model.model_validate(req.params)
             label = getattr(params, "path", None) or (f"zip {params.zip_id}" if hasattr(params, "zip_id")
-                                                      else "library")
+                                                      else (params.paths[0] if hasattr(params, "paths") else "library"))
             job = Job(job_id=str(uuid.uuid4()), method=m, params=params, label=os.path.basename(str(label)))
             with self._cond:
                 self._queue.append(job)
@@ -201,8 +205,21 @@ class RpcServer:
                 self._reply(req_id, pipeline.restore_samples(settings, p.removed_ids))
             elif method == "shift_sample":
                 self._reply(req_id, pipeline.shift_sample(settings, p.sample_id, p.beats))
-            else:
+            elif method == "stretch_samples":
                 self._reply(req_id, pipeline.stretch_samples(settings, p.rel_paths, p.bpm))
+            elif method == "import_midi":
+                self._reply(req_id, pipeline.import_midi(settings, p.paths))
+            elif method == "render_bass":
+                self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
+                                                         p.notes, p.bars, p.groove))
+            elif method == "save_midi":
+                self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label, p.role))
+            elif method == "set_midi_meta":
+                self._reply(req_id, pipeline.set_midi_meta(settings, p.midi_id, p.role, p.key_label, p.clear_key))
+            elif method == "delete_midi":
+                self._reply(req_id, pipeline.delete_midi(settings, p.midi_ids))
+            else:
+                self._reply(req_id, pipeline.serum_presets(settings, p.root, p.folders))
         except pipeline.PipelineError as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
@@ -250,6 +267,9 @@ class RpcServer:
             if job.method == "process_zip":
                 r = pipeline.process_zip(p.path, settings, reprocess=p.reprocess, ctx=ctx)
                 self._done(job, r.status, r.zip_id, r.counts, r)
+            elif job.method == "import_samples":
+                rs = pipeline.import_samples(settings, p.paths, ctx=ctx)
+                self._done_many(job, rs)
             elif job.method == "reprocess_zip":
                 r = pipeline.process_zip(None, settings, zip_id=p.zip_id, overrides=p.overrides, ctx=ctx)
                 self._done(job, r.status, r.zip_id, r.counts, r)
@@ -259,13 +279,11 @@ class RpcServer:
             elif job.method == "delete_zip":
                 r = pipeline.delete_zip(settings, p.zip_id, p.delete_files)
                 self._done(job, "done", p.zip_id, SampleCounts(), r)
+            elif job.method == "analyze_library":
+                r = pipeline.analyze_library(settings, ctx=ctx)
+                self._done(job, "done", None, SampleCounts(), r)
             elif job.method == "rebuild_loops":
-                rs = pipeline.rebuild_loops(settings, ctx=ctx)
-                counts = SampleCounts(oneshots=sum(r.counts.oneshots for r in rs),
-                                      loops=sum(r.counts.loops for r in rs),
-                                      events=sum(r.counts.events for r in rs))
-                status = "done" if all(r.status in ("done", "needs_review") for r in rs) else "needs_review"
-                self._done(job, status, None, counts, [r.model_dump(mode="json") for r in rs])
+                self._done_many(job, pipeline.rebuild_loops(settings, ctx=ctx), zip_id=None)
         except pipeline.Cancelled:
             self.send(JobDoneEvent(job_id=job.job_id, zip=job.label, status="cancelled"))
         except pipeline.PipelineError as e:
@@ -275,6 +293,16 @@ class RpcServer:
             log.error("job %s failed:\n%s", job.job_id, traceback.format_exc())
             self.send(JobDoneEvent(job_id=job.job_id, zip=job.label, status="error",
                                    error=RpcError(code="internal", message=f"{type(e).__name__}: {e}")))
+
+    def _done_many(self, job: Job, rs: list, zip_id: Any = "last") -> None:
+        """One job over several zips or packs: counts summed, results listed."""
+        counts = SampleCounts(oneshots=sum(r.counts.oneshots for r in rs), loops=sum(r.counts.loops for r in rs),
+                              events=sum(r.counts.events for r in rs))
+        status = "done" if all(r.status in ("done", "needs_review", "skipped") for r in rs) else "needs_review"
+        if rs and all(r.status == "skipped" for r in rs):
+            status = "skipped"
+        self._done(job, status, rs[-1].zip_id if zip_id == "last" and rs else zip_id, counts,
+                   [r.model_dump(mode="json") for r in rs])
 
     def _done(self, job: Job, status: str, zip_id, counts: SampleCounts, result: Any) -> None:
         if hasattr(result, "model_dump"):

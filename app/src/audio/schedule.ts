@@ -5,8 +5,8 @@
 // Every event time is computed from integer grid positions (beats, 16th steps), never by
 // accumulating durations, so there is no drift: bar 192 is as exact as bar 1.
 
-import { BEATS_PER_BAR, beatToSec, clipEnd, dbToGain, loopBeats, STEPS_PER_BEAT, VELOCITY_GAIN } from '../lib/project'
-import type { AudioClip, Clip, PatternClip, Project, SampleRef } from '../types/project'
+import { BEATS_PER_BAR, beatToSec, clipEnd, dbToGain, loopBeats, pitchRate, STEPS_PER_BAR, STEPS_PER_BEAT, VELOCITY_GAIN } from '../lib/project'
+import type { AudioClip, BassRender, Clip, PatternClip, Project, SampleRef } from '../types/project'
 
 export interface ScheduledEvent {
   laneId: string
@@ -16,8 +16,10 @@ export interface ScheduledEvent {
   start: number
   /** Seconds into the sample. */
   offset: number
-  /** Seconds to play; null = to the end of the sample. */
+  /** Seconds to play (project time); null = to the end of the sample. */
   duration: number | null
+  /** Playback rate of a pitched clip (sampler style); 1 when left out. */
+  rate?: number
   /** Linear gain (clip gain × step velocity). */
   gain: number
   /** Clip filter, with its cutoff at the event's start and end (Hz). */
@@ -45,12 +47,16 @@ export function sampleBpm(s: SampleRef): number | null {
   return Math.round(((s.bars * BEATS_PER_BAR * 60) / s.durationS) * 100) / 100
 }
 
-export type TempoMode = 'native' | 'sliced' | 'stretched'
+export type TempoMode = 'native' | 'sliced' | 'stretched' | 'rendered'
 
 export function tempoMode(clip: Clip, bpm: number): TempoMode {
+  if (clip.type !== 'audio') return 'native'
+  if (clip.bass) return 'rendered'
   const sb = sampleBpm(clip.sample)
-  if (clip.type !== 'audio' || sb == null || Math.abs(sb - bpm) < 1e-6) return 'native'
-  return STRETCHED_CATEGORIES.has(clip.sample.category) ? 'stretched' : 'sliced'
+  const same = sb == null || Math.abs(sb - bpm) < 1e-6
+  if (STRETCHED_CATEGORIES.has(clip.sample.category)) return same ? 'native' : 'stretched'
+  // A pitched loop plays faster or slower: as slices on the grid, so it stays in time.
+  return same && !clip.pitch ? 'native' : 'sliced'
 }
 
 /** Library-relative path of a sample stretched to `bpm` (the engine's naming.tempo_rel_path). */
@@ -58,8 +64,26 @@ export function tempoPath(relPath: string, bpm: number): string {
   return `.drumvault/tempo/${Math.round(bpm * 100) / 100}/${relPath}`
 }
 
+/** FNV-1a, hex: a short stable id for a preset path in render file names. */
+function shortHash(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** Library-relative path of a bass part rendered through Serum at `bpm` (the engine writes it). */
+export function bassPath(b: BassRender, bpm: number): string {
+  const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
+  const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
+  return `.drumvault/bass/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+}
+
 /** The file a clip plays at the project tempo. */
 export function soundPath(clip: Clip, bpm: number): string {
+  if (clip.type === 'audio' && clip.bass) return bassPath(clip.bass, bpm)
   return tempoMode(clip, bpm) === 'stretched' ? tempoPath(clip.sample.relPath, bpm) : clip.sample.relPath
 }
 
@@ -145,14 +169,15 @@ function withFade(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
 
 function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
               gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number,
-              relPath = clip.sample.relPath, declick = false): void {
-  const extra = declick ? { declick: true } : {}
+              relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number } = {}): void {
+  const rate = opts.rate ?? 1
+  const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}) }
   if (start >= from - EPS && start < to - EPS) {
     out.push(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
     out.push(withFade(withFilter({
-      laneId: clip.laneId, clipId: clip.id, relPath, start: from, offset: offset + late,
+      laneId: clip.laneId, clipId: clip.id, relPath, start: from, offset: offset + late * rate,
       duration: duration == null ? null : duration - late, gain, ...extra,
     }, clip, bpm), clip, bpm))
   }
@@ -185,15 +210,19 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
     const e = Math.min(end, k === 0 ? firstEnd : s + L)
     const off = k === 0 ? trim : 0  // beats into the loop at s
     if (mode === 'sliced') {
-      // One 16th slice at a time, each starting on the project's grid with its own piece of the loop.
-      const sliceSrc = (SLICE * 60) / sb!
+      // One 16th slice at a time, each starting on the project's grid with its own piece of the
+      // loop; a pitched slice plays faster (it ends early) or slower (it's cut at the next one).
+      const srcBpm = sb ?? bpm
+      const rate = pitchRate(clip.pitch)
+      const sliceOut = (SLICE * 60) / srcBpm / rate
       const first = Math.max(0, Math.floor((fromBeat - s) / SLICE) - 1)
       for (let j = first; s + j * SLICE < e - EPS; j++) {
         const at = s + j * SLICE
         if (at >= toBeat + EPS) break
         const slot = beatToSec(Math.min(SLICE, e - at), bpm)
-        const dur = Math.min(sliceSrc, slot)
-        push(out, clip, bpm, beatToSec(at, bpm), ((off + j * SLICE) * 60) / sb!, dur, gain, from, to, ongoing, dur, rel, true)
+        const dur = Math.min(sliceOut, slot)
+        push(out, clip, bpm, beatToSec(at, bpm), ((off + j * SLICE) * 60) / srcBpm, dur, gain, from, to, ongoing, dur, rel,
+          { declick: true, rate })
       }
       continue
     }
@@ -204,7 +233,10 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
   }
 }
 
-/** A pattern clip fires its one-shot on every active 16th step; the pattern repeats across the clip. */
+/**
+ * A pattern clip fires its one-shot on every active 16th step; the pattern repeats across the
+ * clip. With a groove, each step lands that step's offset late (or early) at its accent.
+ */
 function patternEvents(clip: PatternClip, bpm: number, from: number, to: number, out: ScheduledEvent[]): void {
   const n = clip.steps.length
   if (!n) return
@@ -214,14 +246,31 @@ function patternEvents(clip: PatternClip, bpm: number, from: number, to: number,
   const clipStartSec = beatToSec(clip.start, bpm)
   const first = Math.max(0, Math.floor((from - clipStartSec) / stepSec) - 1)
   const last = Math.min(stepsInClip - 1, Math.ceil((to - clipStartSec) / stepSec) + 1)
+  const g = clip.groove
+  const startStep = Math.round(clip.start * STEPS_PER_BEAT)
+  const rate = pitchRate(clip.pitch)
   for (let i = first; i <= last; i++) {
     const v = clip.steps[i % n]
     if (!v) continue
     // Step i of the clip: computed from integers (beats, 16ths), not accumulated.
-    const start = beatToSec(clip.start + i / STEPS_PER_BEAT, bpm)
-    push(out, clip, bpm, start, 0, null, gain * VELOCITY_GAIN[v], from, to, false, 0)
+    const inBar = (((startStep + i) % STEPS_PER_BAR) + STEPS_PER_BAR) % STEPS_PER_BAR
+    const start = beatToSec(clip.start + (i + (g?.offsets[inBar] ?? 0)) / STEPS_PER_BEAT, bpm)
+    const accent = g ? dbToGain(g.gains[inBar] ?? 0) : 1
+    push(out, clip, bpm, start, 0, null, gain * VELOCITY_GAIN[v] * accent, from, to, false, 0, clip.sample.relPath, { rate })
   }
 }
+
+/** Kick hits in [from, to) seconds (pattern clips with a kick one-shot): the sidechain's trigger. */
+export function kickHits(project: Project, from: number, to: number): number[] {
+  const out: ScheduledEvent[] = []
+  for (const clip of project.clips) {
+    if (clip.type === 'pattern' && clip.sample.category === 'kick') patternEvents(clip, project.bpm, from, to, out)
+  }
+  return [...new Set(out.map((e) => e.start))].sort((a, b) => a - b)
+}
+
+/** Release of the sidechain duck: most of a beat. */
+export const duckRelease = (bpm: number) => (0.6 * 60) / bpm
 
 /** Metronome clicks in [from, to): one per beat, `downbeat` on bar starts. */
 export function metronomeTicks(bpm: number, from: number, to: number): { start: number; downbeat: boolean }[] {

@@ -4,8 +4,8 @@
 import { beatToSec, dbToGain } from '../lib/project'
 import type { Project } from '../types/project'
 import { buffers } from './context'
-import { createLaneNodes, playEvent } from './graph'
-import { eventsInRange } from './schedule'
+import { createLaneNodes, duckAt, playEvent } from './graph'
+import { duckRelease, eventsInRange, kickHits } from './schedule'
 import { ensureTempo } from './tempo'
 
 export interface RenderRange {
@@ -45,6 +45,12 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
     const buf = buffers.get(ev.relPath)
     const lane = nodes.get(ev.laneId)
     if (buf && lane) playEvent(ctx, ev, buf, lane.gain, ev.start - from)
+  }
+  // Sidechain, from all kicks (also when the kick lane isn't part of this render).
+  const hits = kickHits(project, from, to)
+  for (const lane of project.lanes) {
+    const n = nodes.get(lane.id)
+    if (n && lane.duck) for (const t of hits) duckAt(n, t - from, lane.duck, duckRelease(project.bpm))
   }
   return ctx.startRendering()
 }

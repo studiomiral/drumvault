@@ -53,7 +53,7 @@ export function GridView() {
   const [foldRange, setFoldRange] = useState<FoldRange>('50')
 
   useEffect(() => {
-    void api.listZips().then(setZips)
+    void api.listZips().then((zs) => setZips(zs.filter((z) => z.kind !== 'pack')))  // packs have no shared grid
   }, [libraryVersion])
 
   // No zip chosen yet: the first one that needs review, else the newest.
@@ -163,7 +163,7 @@ export function GridView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+      <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
         <PageTitle className="mr-3">Grid</PageTitle>
         <select className={cx(inputClass, 'w-[360px]')} value={zipId ?? ''} onChange={(e) => openGrid(Number(e.target.value))}>
           {zips.map((z) => (

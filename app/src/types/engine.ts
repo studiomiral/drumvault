@@ -117,14 +117,18 @@ export interface EngineSettings {
   rubberband_options?: string[];
   rubberband_r3_flag?: string;
   workers?: number;
+  serum_plugin?: string;
+  serum_plugin_name?: string;
   thresholds?: Record<string, unknown>;
 }
 
 export type RpcRequest =
   | { id: string; method: "process_zip"; params: { path: string; settings: EngineSettings; reprocess?: boolean } }
+  | { id: string; method: "import_samples"; params: { paths: string[]; settings: EngineSettings } }
   | { id: string; method: "reprocess_zip"; params: { zip_id: number; overrides?: Overrides; settings: EngineSettings } }
   | { id: string; method: "delete_zip"; params: { zip_id: number; delete_files?: boolean; settings: EngineSettings } }
   | { id: string; method: "rebuild_loops"; params: { settings: EngineSettings } }
+  | { id: string; method: "analyze_library"; params: { settings: EngineSettings } }
   | { id: string; method: "analyze_zip"; params: { path: string; settings?: EngineSettings } }
   | { id: string; method: "cancel"; params: { job_id: string } }
   | { id: string; method: "set_sample_meta"; params: { sample_id: number; favorite?: boolean; rating?: number; tags?: string; settings: EngineSettings } }
@@ -133,6 +137,12 @@ export type RpcRequest =
   | { id: string; method: "restore_samples"; params: { removed_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "shift_sample"; params: { sample_id: number; beats: number; settings: EngineSettings } }
   | { id: string; method: "stretch_samples"; params: { rel_paths: string[]; bpm: number; settings: EngineSettings } }
+  | { id: string; method: "import_midi"; params: { paths: string[]; settings: EngineSettings } }
+  | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; settings: EngineSettings } }
+  | { id: string; method: "set_midi_meta"; params: { midi_id: number; role?: string | null; key_label?: string | null; clear_key?: boolean; settings: EngineSettings } }
+  | { id: string; method: "delete_midi"; params: { midi_ids: number[]; settings: EngineSettings } }
+  | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; role?: string; settings: EngineSettings } }
+  | { id: string; method: "serum_presets"; params: { root: string; folders: string[] | null; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
   | { id: string; method: "shutdown"; params: Record<string, never> };
@@ -186,7 +196,7 @@ export interface ProgressEvent {
   event: "progress";
   job_id: string;
   zip: string;
-  stage: "extract" | "classify" | "tempo" | "key" | "stems" | "write" | "done" | "rebuild";
+  stage: "extract" | "classify" | "tempo" | "key" | "stems" | "write" | "done" | "rebuild" | "groove" | "arrangement";
   pct: number;   // 0..1
   message: string;
 }
@@ -229,6 +239,7 @@ export interface ZipRow {
   warnings: string | null;      // JSON string[]
   processed_at: string | null;
   settings_hash: string | null;
+  kind?: 'stems' | 'pack';      // 'pack': loose samples (Splice and other folders), schema v8
 }
 
 export interface StemRow {

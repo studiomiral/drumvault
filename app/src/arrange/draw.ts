@@ -241,7 +241,9 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
     g.font = `${selected ? 600 : 500} 11px ${UI_FONT}`
     g.textBaseline = 'top'
     const filt = c.filter ? ` · ${c.filter.type === 'lowpass' ? 'LP' : 'HP'}${c.filter.to != null ? ' sweep' : ''}` : ''
-    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name) + filt
+    const pitch = c.pitch ? ` · ${c.pitch > 0 ? '+' : '−'}${Math.abs(c.pitch)} st` : ''
+    const part = c.type === 'audio' && c.loopBars ? ` · ${c.loopBars === 1 ? 'bar 1' : `bars 1–${c.loopBars}`}` : ''
+    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name) + filt + pitch + part
     g.fillText(label, Math.max(x0 + 6, 4), y + 3)
   }
   if (d.editing === c.id) {
@@ -283,7 +285,7 @@ function drawFades(g: CanvasRenderingContext2D, c: Clip, x0: number, x1: number,
 
 function shortName(name: string): string {
   // OS_Kick_Am_S0001-deep-groove_01 -> Kick · S0001 01
-  const m = name.match(/^(?:OS|LP|FX|FL)_([A-Za-z]+)_(?:[\d.]+_)?[^_]+_(S\d{4})[^_]*_(?:(\d+bar)_)?(\d+)$/)
+  const m = name.match(/^(?:OS|LP|FX|FL)_([A-Za-z]+)_(?:[\d.]+_)?[^_]+_([SP]\d{4})[^_]*_(?:(\d+bar)_)?(\d+)$/)
   return m ? `${m[1]} · ${m[2]}${m[3] ? ` · ${m[3]}` : ''} · ${m[4]}` : name
 }
 
@@ -302,6 +304,7 @@ function drawLoopBody(g: CanvasRenderingContext2D, c: Clip & { type: 'audio' }, 
   }
   const peaks = clipPeaks(c.sample)
   if (!peaks?.length || h < 6) return
+  const full = Math.max(1, (c.sample.bars ?? 1) * BEATS_PER_BAR)  // the peaks cover the whole file
   let max = 0
   for (const [lo, hi] of peaks) max = Math.max(max, -lo, hi)
   const scale = max > 0 ? (h / 2) / max : 0
@@ -312,7 +315,7 @@ function drawLoopBody(g: CanvasRenderingContext2D, c: Clip & { type: 'audio' }, 
   for (let x = from; x < to; x += 1) {  // one column per pixel
     const beat = (x - x0) / px
     const content = (((trim + beat) % L) + L) % L
-    const i = Math.max(0, Math.min(peaks.length - 1, Math.floor((content / L) * peaks.length)))
+    const i = Math.max(0, Math.min(peaks.length - 1, Math.floor((content / full) * peaks.length)))
     const [lo, hi] = peaks[i]
     g.fillRect(x, mid - hi * scale, 1, Math.max(1, (hi - lo) * scale))
   }

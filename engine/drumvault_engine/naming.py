@@ -30,8 +30,8 @@ CATEGORY_LABELS = {
 SLUG_MAX = 20
 
 
-def source_code(number: int) -> str:
-    return f"S{number:04d}"
+def source_code(number: int, prefix: str = "S") -> str:
+    return f"{prefix}{number:04d}"
 
 
 def slugify(name: str, max_len: int = SLUG_MAX) -> str:

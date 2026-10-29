@@ -187,6 +187,11 @@ def test_events_start_on_their_bar_and_dedupe(library, db, fixtures):
             assert src_bar == pytest.approx(start_bar, abs=1e-3), (name, r["rel_path"], src_bar)
             assert lo <= r["bars"] <= hi, (r["rel_path"], r["bars"])
             assert 1 <= r["body_bars"] <= r["bars"], (r["rel_path"], r["body_bars"])
+            # Its shape, and the bar of the source track its body leads into.
+            shape = json.loads(r["shape"])
+            assert shape["boundary"] == start_bar + r["body_bars"], (r["rel_path"], shape)
+            if r["category"] == "fx_riser":
+                assert shape["dir"] == "rise" and shape["gap"] <= 1, shape
             assert sf.info(str(library.path / r["rel_path"])).frames == r["bars"] * bar
             assert r["bpm"] == 124.0 and "_124_" in r["rel_path"]
             assert r["peak_db"] < 0 and r["gain_applied_db"] == pytest.approx(-1.0 - r["peak_db"], abs=1e-6)

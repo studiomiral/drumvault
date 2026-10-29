@@ -1,7 +1,7 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → lane pan → master → destination
+// source → [clip filter] → clip gain → lane gain → lane duck (sidechain) → lane pan → master
 
 import { dbToGain } from '../lib/project'
 import type { Lane } from '../types/project'
@@ -9,6 +9,8 @@ import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
 export interface LaneNodes {
   gain: GainNode
+  /** Sidechain ducking under the kick (unity unless the lane has `duck`). */
+  duck: GainNode
   pan: StereoPannerNode
 }
 
@@ -20,9 +22,27 @@ export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNod
   gain.channelCount = 2
   gain.channelCountMode = 'explicit'
   gain.channelInterpretation = 'speakers'
+  const duck = ctx.createGain()
   const pan = ctx.createStereoPanner()
-  gain.connect(pan).connect(dest)
-  return { gain, pan }
+  gain.connect(duck).connect(pan).connect(dest)
+  return { gain, duck, pan }
+}
+
+/**
+ * Sidechain: duck a lane by `depth` (0…1) on a kick at `when`, reaching full depth 4 ms later
+ * and recovering linearly over `release` seconds.
+ */
+export function duckAt(nodes: LaneNodes, when: number, depth: number, release: number): void {
+  const g = nodes.duck.gain
+  g.setValueAtTime(1, Math.max(0, when - 0.004))
+  g.linearRampToValueAtTime(1 - Math.max(0, Math.min(1, depth)), when)
+  g.linearRampToValueAtTime(1, when + release)
+}
+
+/** Drop any ducking still scheduled (stop / restart). */
+export function resetDuck(nodes: LaneNodes, at: number): void {
+  nodes.duck.gain.cancelScheduledValues(at)
+  nodes.duck.gain.setValueAtTime(1, at)
 }
 
 /** Lane volume/pan/mute (solo is applied by the caller via `audible`). */
@@ -51,11 +71,14 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   when = Math.round(when * sr) / sr
   const offset = Math.round(Math.max(0, ev.offset) * buffer.sampleRate) / buffer.sampleRate
   if (offset >= buffer.duration) return null
-  let duration = ev.duration ?? buffer.duration - offset
+  // `duration` is project time; a pitched event plays `rate` seconds of the buffer per second.
+  const rate = ev.rate ?? 1
+  let duration = ev.duration ?? (buffer.duration - offset) / rate
   if (cutAt != null) duration = Math.min(duration, cutAt - when)
   if (duration <= 0) return null
   const src = ctx.createBufferSource()
   src.buffer = buffer
+  if (rate !== 1) src.playbackRate.value = rate
   const g = ctx.createGain()
   g.gain.value = ev.gain
   let head: AudioNode = g
@@ -89,6 +112,6 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
     src.connect(head)
   }
   g.connect(dest)
-  src.start(when, offset, duration)
+  src.start(when, offset, duration * rate)  // Web Audio's duration is buffer time
   return src
 }

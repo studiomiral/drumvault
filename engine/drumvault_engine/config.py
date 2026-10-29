@@ -97,6 +97,14 @@ class Thresholds:
     # Grid view preview (SCOPE.md §6.2a): the drum stems summed to mono at this rate.
     grid_preview_sr: int = 22050
     grid_preview_peak_dbfs: float = -1.0
+    # ---- MIDI import and bass rendering (SCOPE.md §6.7) ----------------------
+    # A MIDI file's length is rounded up to one of these bar counts.
+    midi_bar_lengths: tuple[int, ...] = (1, 2, 4, 8, 16)
+    # Below this median pitch (G3) a part counts as bass when its name doesn't say.
+    midi_bass_max_median_pitch: int = 55
+    # Rendered basslines are loudness-matched so patches compare fairly.
+    bass_lufs_target: float = -14.0
+    bass_peak_dbfs: float = -1.0
     tempo_confidence_window_ms: float = 10.0
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak
@@ -175,6 +183,37 @@ class Thresholds:
     # within this of its loudest beat; the rest is tail. body_bars lets the generator end
     # risers and rolls exactly on a downbeat.
     event_body_rel_db: float = -12.0
+    # An event's shape (events.shape): where its sound ends before the body's last bar line
+    # (the producer's silence before the drop), where it peaks and which way it goes. A 16th
+    # still sounds within this of the event's loudest 16th...
+    shape_sound_rel_db: float = -24.0
+    # ...and it rises (falls) when it gets this much louder (quieter) from its first to its last
+    # 16ths of sound, or this many octaves brighter (darker) in spectral centroid.
+    shape_slope_db: float = 6.0
+    shape_bright_oct: float = 0.7
+    shape_peak_late: float = 0.75           # a rise peaks after this share of its sound...
+    shape_peak_early: float = 0.25          # ...a fall before this share
+    shape_hit_attack: float = 0.15          # a hit: loudest within this share, then dies away
+
+    # ---- groove (groove.py): each loop's timing and accents per 16th ------------
+    groove_hop: int = 128                   # onset detection hop
+    groove_envelope_ms: float = 2.0         # trailing max window for the attack
+    groove_attack_rel: float = 0.15         # attack = first rise through rel x the hit's peak
+    groove_attack_search_ms: float = 30.0   # look this far past the onset for the hit's peak
+    groove_min_level_db: float = -30.0      # ignore hits this far below the loop's loudest
+    groove_max_dev: float = 0.45            # hits further than this (in 16ths) from a step are ignored
+    groove_min_hits: int = 4                # fewer hits in the whole loop: no groove
+
+    # ---- arrangement (arrangement.py): where each part plays in the source track ----
+    arrangement_silence_db: float = -60.0   # a bar quieter than this is silent (absolute)
+    arrangement_reference_pct: float = 90.0  # a part's "full" level: this percentile of its bars
+    arrangement_quiet_rel_db: float = -20.0  # playing (quietly/filtered) within this of full...
+    arrangement_full_rel_db: float = -6.0    # ...and full within this
+
+    # ---- loose samples (samples.py): Splice and other packs ----------------------
+    sample_loop_fit_s: float = 0.03         # a loop's length within this of whole bars (else a tail is cut)
+    sample_loop_max_bars: int = 16          # longer files are not loops (stems belong in a zip)
+    sample_oneshot_max_s: float = 4.0       # a file this short without loop hints is a one-shot
 
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200
@@ -209,6 +248,9 @@ class Settings:
     rubberband_options: list[str] = field(default_factory=lambda: ["--fine"])
     rubberband_r3_flag: str = "--fine"
     workers: int = 4                        # per-stem threads within one zip
+    # Serum 2, hosted by the engine to render basslines (SCOPE.md §6.7).
+    serum_plugin: str = "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
+    serum_plugin_name: str = "Serum 2"
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     # ---------------------------------------------------------------------

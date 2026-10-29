@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { eventsInRange, fadeAt, fadeBreakpoints, metronomeTicks, sampleBpm, soundPath, tempoPath } from '../src/audio/schedule'
+import { bassPath, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath } from '../src/audio/schedule'
+import { bassNotes, notesMidi } from '../src/lib/midi'
 import { newProject } from '../src/lib/project'
 import type { AudioClip, PatternClip, Project, SampleRef, Velocity } from '../src/types/project'
 
@@ -214,5 +215,100 @@ describe('projects at another tempo than the library', () => {
   it('knows a sample\'s tempo from its length when older projects did not store it', () => {
     expect(sampleBpm(loopRef(2))).toBe(124)
     expect(sampleBpm(shotRef)).toBeNull()
+  })
+})
+
+describe('bass clips and the sidechain', () => {
+  const render = { preset: '/p/Wub.SerumPreset', presetName: 'Wub', midiId: 4, midiName: 'Roll', transpose: -3 }
+  const bassClip = (start: number, length: number, trim = 0): AudioClip => ({
+    id: 'b', laneId: 'B', type: 'audio', start, length, trimBeats: trim, gainDb: 0, bass: render,
+    sample: { relPath: bassPath(render, BPM), id: -4, name: 'Wub · Roll', kind: 'loop', category: 'melodic', bars: 2, durationS: 8 * BEAT, bpm: BPM },
+  })
+
+  it('plays the render made for the project tempo, never sliced', () => {
+    const c = bassClip(0, 16)
+    expect(tempoMode(c, 128)).toBe('rendered')
+    expect(soundPath(c, 128)).toBe(bassPath(render, 128))
+    expect(bassPath(render, 128)).toMatch(/^\.drumvault\/bass\/[0-9a-f]{8}-4--3-128\.wav$/)
+    const ev = eventsInRange({ ...newProject('t', 128), clips: [c] }, 0, 1000)
+    expect(ev.length).toBe(2)                                   // two 8-beat repetitions
+    expect(ev.every((e) => e.relPath === bassPath(render, 128) && !e.declick)).toBe(true)
+  })
+
+  it("names an edited bassline's render after its notes, and exports the edited notes", () => {
+    const edited = { ...render, notes: [[0, 2, 40, 90]] as [number, number, number, number][], bars: 1 }
+    expect(bassPath(edited, BPM)).not.toBe(bassPath(render, BPM))
+    expect(bassPath(edited, BPM)).toBe(bassPath({ ...edited, notes: [[0, 2, 40, 90]] }, BPM))
+    expect(bassPath({ ...edited, notes: [[0, 2, 41, 90]] }, BPM)).not.toBe(bassPath(edited, BPM))
+    const c = { ...bassClip(0, 8), bass: edited }
+    const notes = bassNotes({ ...newProject('t', BPM), clips: [c] }, [])
+    expect(notes.map((n) => [n.start, n.pitch])).toEqual([[0, 37], [4, 37]])   // 1-bar loop, transposed -3
+  })
+
+  it('finds the kick hits the bass ducks under', () => {
+    const p = project([pattern(0, 8, four()), audio(0, 8)])
+    expect(kickHits(p, 0, 1000).map((t) => t / BEAT)).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map((b) => expect.closeTo(b, 9)))
+    expect(kickHits(project([audio(0, 8)]), 0, 1000)).toEqual([])
+  })
+
+  it('exports the bass parts as notes: looped from the trim, transposed, cut at the clip end', () => {
+    const midis = [{ id: 4, file_name: 'Roll.mid', name: 'Roll', rel_path: 'MIDI/Bass/Roll.mid', role: 'bass' as const, bars: 2,
+      key_label: 'Am', key_camelot: '8A', notes: [[0, 1, 45, 100], [6, 4, 48, 90]] as [number, number, number, number][], favorite: 0, source: null, source_code: null }]
+    const notes = bassNotes({ ...newProject('t', BPM), clips: [bassClip(4, 18, 2)] }, midis)
+    // Trim 2: the loop starts 2 beats in (the note at 6 sounds at 8), repeats every 8 beats, ends at 22.
+    expect(notes.map((n) => [n.start, n.length, n.pitch])).toEqual([[8, 4, 45], [10, 1, 42], [16, 4, 45], [18, 1, 42]])
+    const file = notesMidi(notes, BPM, 0, 32, 'Bass')
+    expect(String.fromCharCode(...file.slice(0, 4))).toBe('MThd')
+    expect([...file].filter((b, i) => b === 0x90 && file[i + 1] === 42).length).toBe(2)
+  })
+})
+
+describe('feel and loop variations', () => {
+  it("plays a pattern with a loop's groove: each step late or early by its offset, at its accent", () => {
+    const steps = Array.from({ length: 16 }, () => 3) as Velocity[]
+    const offsets = Array.from({ length: 16 }, (_, k) => (k % 2 ? 0.25 : 0))
+    const gains = Array.from({ length: 16 }, (_, k) => (k % 2 ? -6 : 0))
+    const clip: PatternClip = { ...pattern(4, 4, steps), groove: { offsets, gains } }
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev).toHaveLength(16)
+    expect(ev[0].start).toBeCloseTo(4 * BEAT, 12)
+    expect(ev[1].start).toBeCloseTo((4 + 1.25 / 4) * BEAT, 12)
+    expect(ev[1].gain).toBeCloseTo(0.501, 3)
+    expect(ev[2].gain).toBe(1)
+    // The groove follows the bar, not the clip: a clip starting on beat 2 plays step 4 on its first hit.
+    const late: PatternClip = { ...pattern(1, 1, steps), groove: { offsets: offsets.map((_, k) => (k === 4 ? 0.2 : 0)), gains } }
+    expect(eventsInRange(project([late]), 0, 1000)[0].start).toBeCloseTo((1 + 0.2 / 4) * BEAT, 12)
+  })
+
+  it('plays a pitched loop as slices on the grid at the faster rate, and a pitched one-shot at its rate', () => {
+    const clip: AudioClip = { ...audio(0, 8, 2), pitch: 12 }
+    expect(tempoMode(clip, BPM)).toBe('sliced')
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev).toHaveLength(32)
+    ev.forEach((e, j) => {
+      expect(e.start).toBeCloseTo(j * BEAT / 4, 12)
+      expect(e.offset).toBeCloseTo(j * BEAT / 4, 12)
+      expect(e.rate).toBeCloseTo(2, 12)
+      expect(e.duration).toBeCloseTo(BEAT / 8, 12)  // an octave up: half a slice of output per 16th
+    })
+    const down: AudioClip = { ...audio(0, 4, 2), pitch: -2 }
+    for (const e of eventsInRange(project([down]), 0, 1000)) expect(e.duration).toBeCloseTo(BEAT / 4, 12)  // cut at the next
+    const shot: PatternClip = { ...pattern(0, 4, four()), pitch: -12 }
+    expect(eventsInRange(project([shot]), 0, 1000).every((e) => e.rate === 0.5)).toBe(true)
+    expect(eventsInRange(project([audio(0, 8, 2)]), 0, 1000).every((e) => e.rate == null)).toBe(true)
+  })
+
+  it('repeats only the first bars of a loop when asked', () => {
+    const clip: AudioClip = { ...audio(0, 12, 4), loopBars: 1 }
+    const ev = eventsInRange(project([clip]), 0, 1000)
+    expect(ev.map((e) => [e.start / BEAT, e.offset, e.duration! / BEAT])).toEqual([[0, 0, 4], [4, 0, 4], [8, 0, 4]])
+  })
+
+  it('names a bass render after its groove, so a new feel renders again', () => {
+    const b = { preset: '/p/A.SerumPreset', presetName: 'A', midiId: 3, midiName: 'm', transpose: 0 }
+    expect(bassPath({ ...b, groove: new Array(16).fill(0) }, BPM)).toBe(bassPath(b, BPM))
+    const g = bassPath({ ...b, groove: [0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2] }, BPM)
+    expect(g).not.toBe(bassPath(b, BPM))
+    expect(g).toMatch(/-g[0-9a-f]{8}-0-124\.wav$/)
   })
 })

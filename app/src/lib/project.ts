@@ -110,8 +110,15 @@ export function clipEnd(c: Clip): number {
 }
 
 /** Loop length of an audio clip's sample in beats. */
+/** Length of what an audio clip repeats: its loop, or only the loop's first `loopBars`. */
 export function loopBeats(c: AudioClip): number {
-  return Math.max(1, (c.sample.bars ?? 1) * BEATS_PER_BAR)
+  const bars = c.sample.bars ?? 1
+  return Math.max(1, (c.loopBars ? Math.min(c.loopBars, bars) : bars) * BEATS_PER_BAR)
+}
+
+/** Playback rate for a pitch in semitones (sampler style: higher is faster). */
+export function pitchRate(semitones: number | undefined): number {
+  return semitones ? 2 ** (semitones / 12) : 1
 }
 
 /**
@@ -159,6 +166,56 @@ export function duplicateClips(clips: Clip[], span?: number): Clip[] {
   const end = Math.max(...clips.map(clipEnd))
   const offset = span ?? end - start
   return clips.map((c) => ({ ...structuredClone(c), id: uid('c'), start: c.start + offset }))
+}
+
+/**
+ * Copies of `clips` placed so the earliest starts at `at`, on the same lanes (lanes that no
+ * longer exist fall back to `fallbackLane`).
+ */
+export function pasteClips(clips: Clip[], at: number, laneIds: string[], fallbackLane: string): Clip[] {
+  if (!clips.length) return []
+  const first = Math.min(...clips.map((c) => c.start))
+  return clips.map((c) => ({
+    ...structuredClone(c), id: uid('c'), start: Math.max(0, at + c.start - first),
+    laneId: laneIds.includes(c.laneId) ? c.laneId : fallbackLane,
+  }))
+}
+
+/**
+ * Split a clip at `beat` (strictly inside it) into two that play exactly as before: the right
+ * part continues the loop (trim) or pattern (rotated steps); fades stay at their edges.
+ */
+export function splitClip(c: Clip, beat: number): [Clip, Clip] | null {
+  const d = beat - c.start
+  if (d <= 0 || d >= c.length) return null
+  const left = { ...structuredClone(c), length: d, fadeOut: undefined }
+  const right = { ...structuredClone(c), id: uid('c'), start: beat, length: c.length - d, fadeIn: undefined }
+  if (left.fadeIn) left.fadeIn = Math.min(left.fadeIn, d) || undefined
+  if (right.fadeOut) right.fadeOut = Math.min(right.fadeOut, right.length) || undefined
+  if (right.type === 'audio' && c.type === 'audio') {
+    const L = loopBeats(c)
+    right.trimBeats = (((c.trimBeats + d) % L) + L) % L
+  } else if (right.type === 'pattern' && c.type === 'pattern') {
+    const n = c.steps.length
+    const k = Math.round(d * STEPS_PER_BEAT) % n
+    right.steps = c.steps.map((_, i) => c.steps[(i + k) % n])
+  }
+  return [left, right]
+}
+
+/** Can `sample` stand in for the clip's sample? One-shots in patterns, loops/events in audio clips. */
+export function canReplace(c: Clip, sample: SampleRef): boolean {
+  return c.type === 'pattern' ? sample.kind === 'oneshot' : sample.kind !== 'oneshot'
+}
+
+/** The clip with another sample, same place and length (a loop's trim wraps to the new length). */
+export function replaceSample(c: Clip, sample: SampleRef): Clip {
+  const next = { ...c, sample: { ...sample } }
+  if (next.type === 'audio') {
+    const L = loopBeats(next)
+    next.trimBeats = ((next.trimBeats % L) + L) % L
+  }
+  return next
 }
 
 /** Clips overlapping [start, end) on any lane (marker selection). */

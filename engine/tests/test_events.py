@@ -134,3 +134,48 @@ def test_old_library_gets_the_body_bars_column(tmp_path):
         cols = {r["name"] for r in db.conn.execute("PRAGMA table_info(samples)")}
         assert "body_bars" in cols
         assert db.conn.execute("SELECT bars, body_bars FROM samples").fetchone()[:] == (5, None)
+
+
+def _shape(sound: np.ndarray, bars: int, body: int) -> dict:
+    data = np.zeros((bars * BAR, 1), np.float32)
+    data[:len(sound)] = sound[:len(data)]
+    return events.shape(data, SR, BPM, bars, body, Settings().thresholds)
+
+
+def _rising(n: int, seed: int) -> np.ndarray:
+    """Noise getting louder and brighter (a riser)."""
+    from scipy.signal import lfilter
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal(n)
+    lo = lfilter([0.05], [1, -0.95], x)                    # dark at the start...
+    t = np.linspace(0, 1, n)
+    return ((lo * (1 - t) + x * t) * np.linspace(0.02, 0.6, n)).astype(np.float32)[:, None]
+
+
+def test_shape_finds_the_producers_silence_before_the_drop():
+    # A two-bar riser that stops on the last beat: one beat (4 16ths) of silence left.
+    s = _shape(_rising(int(7 * BEAT), seed=21), bars=2, body=2)
+    assert s["dir"] == "rise" and s["gap"] == 4 and s["end"] == 28 and s["peak"] in (26, 27)
+    # Right up to the drop, with a tail ringing on into the third bar: no silence.
+    full = np.concatenate([_rising(int(8 * BEAT), seed=22), _burst(int(2 * BEAT), seed=23, amp=0.3)])
+    s = _shape(full, bars=3, body=2)
+    assert s["dir"] == "rise" and s["gap"] == 0 and s["end"] == 32
+
+
+def test_shape_tells_falls_and_hits_apart():
+    n = int(8 * BEAT)
+    fall = _rising(n, seed=24)[::-1].copy()                  # a downlifter: the riser backwards
+    assert _shape(fall, bars=2, body=2)["dir"] == "fall"
+    hit = _burst(int(3 * BEAT), seed=25)                     # an impact: loud at once, then gone
+    s = _shape(hit, bars=1, body=1)
+    assert s["dir"] == "hit" and s["onset"] == 0 and s["peak"] == 0
+    noise = _shape(_rising(n, seed=26), bars=2, body=2)["noise"]
+    tone = np.sin(2 * np.pi * 440 * np.arange(n) / SR).astype(np.float32)[:, None] * np.linspace(0.05, 0.6, n)[:, None]
+    assert _shape(tone, bars=2, body=2)["noise"] < 0.05 < noise
+
+
+def test_events_know_the_bar_they_start_on():
+    stem = _stem()
+    _put(stem, 12 * 4, _burst(2 * BAR, seed=27))
+    (e,) = events.extract_events(stem, SR, 1000, BPM, Settings())
+    assert e.bar == 12  # 1000 samples early: within the preroll, so on bar 12

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 import re
@@ -15,7 +16,8 @@ from typing import Callable
 import numpy as np
 import soundfile as sf
 
-from . import classify, events as eventmod, key as keymod, loops as loopmod, naming, normalize
+from . import arrangement as arrmod, classify, events as eventmod, groove as groovemod, key as keymod, loops as loopmod
+from . import naming, normalize, samples as samplemod
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
 from .audioutil import Audio, info as audio_info, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
@@ -121,6 +123,12 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
     ctx.progress("tempo", 0.2, f"{src_cat.title()}: {tres.bpm:.2f} BPM")
     ctx.check()
 
+    # ---- arrangement: where each part plays (before the melodic stems are let go) ----
+    arrangement = arrmod.measure(
+        [(n, s.category, ex.audio(n).mono(), ex.audio(n).sr) for n, s in stems.items()
+         if arrmod.part_of(n, s.category)],
+        tres.bpm, tres.phase_samples / tres.sample_rate, th)
+
     warnings = list(ex.warnings)
     lw = zipio.stem_length_warning({n: s.duration_s for n, s in stems.items() if s.category != "ignore"},
                                    tres.bpm, th.stem_length_mismatch_bars)
@@ -157,6 +165,7 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
                     confidence=kres.confidence, uncertain=kres.uncertain, backend=kres.backend,
                     source=kres.source),
         warnings=warnings + tres.warnings,
+        arrangement=arrangement,
     )
 
 
@@ -191,6 +200,7 @@ class StemOutput:
     loop_factor: float = 1.0               # duration factor applied before slicing
     loop_sr: int = 44100
     warnings: list[str] = field(default_factory=list)
+    key: tuple[str, str] | None = None     # (label, camelot) of a loose sample, else the zip's key
 
 
 def _process_stem(ex: Extracted, stem: StemInfo, analysis: ZipAnalysis, settings: Settings,
@@ -259,6 +269,9 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
             existing = db.get_zip(zip_id)
             if existing is None:
                 raise PipelineError("not_found", f"No zip with id {zip_id}")
+            if existing["kind"] == "pack":
+                return _process_pack(db, lib, existing, [r["file_name"] for r in db.stems_for_zip(zip_id)],
+                                     settings, overrides, loops_only, ctx)
             zip_path = existing["original_path"]
             reprocess = True
         zip_path = Path(zip_path)  # type: ignore[arg-type]
@@ -281,7 +294,9 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
             ov = _merge_overrides(db, existing, overrides)
             db.update_zip(zid, status="processing", original_path=str(zip_path.resolve()))
         else:
-            code = naming.source_code(db.next_source_number())
+            if zipio.is_midi_zip(zip_path):
+                raise PipelineError("midi_zip", f"{zip_path.name} holds MIDI files, not stems: add it on the MIDI page")
+            code = naming.source_code(db.next_source_number("S"))
             zid = db.insert_zip(source_code=code, file_name=zip_path.name, file_sha1=sha1,
                                 original_path=str(zip_path.resolve()), status="processing")
             ov = overrides or Overrides()
@@ -353,6 +368,7 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
         # ---- write ---------------------------------------------------------
         ctx.progress("write", 0.86, "Writing samples")
         counts = _write_outputs(db, lib, zid, tag, analysis, outputs, settings, loops_only, ctx)
+        db.set_arrangement(zid, analysis.arrangement)
 
         db.update_zip(
             zid, file_name=zip_path.name, detected_bpm=t.detected_bpm, bpm_override=ov.bpm,
@@ -370,7 +386,9 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
 
 def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAnalysis,
                    outputs: list[StemOutput], settings: Settings, loops_only: bool,
-                   ctx: JobContext) -> SampleCounts:
+                   ctx: JobContext, track: bool = True) -> SampleCounts:
+    """`track`: the outputs are the stems of one track (a pack's files are not: their events
+    share no timeline, so no source bar is stored)."""
     th = settings.thresholds
     k = analysis.key
     key_label = k.label or "NoKey"
@@ -414,22 +432,25 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
 
             index: dict[tuple, int] = {}
             created = now_iso()
+            key_of = {o.name: o.key for o in outputs if o.key}
 
             def add(stem_name: str, kind: str, category: str, data: np.ndarray, bars: int | None,
                     offset_s: float, fp: np.ndarray, peak_db: float, gain_db: float,
-                    body_bars: int | None = None) -> bool:
-                ik = (kind, category, bars)
+                    body_bars: int | None = None, bar: int | None = None) -> bool:
+                label, camelot = key_of.get(stem_name, (k.label, k.camelot))
+                file_key = label or key_label
+                ik = (kind, category, bars, file_key)
                 n = index.get(ik, 0) + 1
                 if kind == "oneshot":
-                    rel = naming.oneshot_rel_path(category, key_label, tag, n)
+                    rel = naming.oneshot_rel_path(category, file_key, tag, n)
                 elif kind == "event":
-                    rel = naming.event_rel_path(category, settings.library_bpm, key_label, tag, bars or 0, n)
+                    rel = naming.event_rel_path(category, settings.library_bpm, file_key, tag, bars or 0, n)
                 else:
-                    rel = naming.loop_rel_path(category, settings.library_bpm, key_label, tag, bars or 0, n)
+                    rel = naming.loop_rel_path(category, settings.library_bpm, file_key, tag, bars or 0, n)
                 fields = dict(
                     kind=kind, category=category, rel_path=rel,
                     bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars, body_bars=body_bars,
-                    key_label=k.label, key_camelot=k.camelot, duration_s=len(data) / out_sr,
+                    key_label=label, key_camelot=camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
                     gain_applied_db=gain_db, source_offset_s=offset_s, created_at=created)
                 fingerprint = fp.astype(np.float32).tobytes()
@@ -441,6 +462,11 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 if shift:
                     data = rotate_beats(data, out_sr, settings.library_bpm, shift)
                 fields["shift_beats"] = shift
+                if kind == "loop":
+                    fields["groove"] = json.dumps(groovemod.loop_groove(data, out_sr, settings.library_bpm, th) or {})
+                if kind == "event":
+                    fields["shape"] = json.dumps(_event_shape(data, out_sr, settings.library_bpm, bars or 1, body_bars,
+                                                              bar if track else None, th))
                 pk = peakmod.peaks_for(data, out_sr, kind, bars, th)
                 if rid is not None:
                     # Deleted by the user: re-cut into the trash, so a restore gets this cut.
@@ -482,12 +508,32 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     data, pk_db, gain = normalize.peak_normalize(ev.data, settings.event_peak_dbfs)
                     offset_s = ev.start / ev.sr / o.loop_factor
                     counts.events += add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint,
-                                         pk_db, gain, ev.body_bars)
+                                         pk_db, gain, ev.body_bars, ev.bar)
     except BaseException:
         for p in written:  # roll back files written by the aborted transaction
             p.unlink(missing_ok=True)
         raise
     return counts
+
+
+def _event_shape(data: np.ndarray, sr: int, bpm: float, bars: int, body_bars: int | None, bar: int | None,
+                 th) -> dict:
+    """events.shape, plus `boundary`: the bar of the source track its body ends on (the drop it
+    leads into), so the generator knows which events a producer layered at the same moment."""
+    body = body_bars or bars
+    out = eventmod.shape(data, sr, bpm, bars, body, th)
+    out["boundary"] = bar + body if bar is not None else None
+    return out
+
+
+def _bar_one_s(db: LibraryDB, z) -> float:
+    """Where bar one of a zip's track is, in seconds of the original stems."""
+    if z["grid_offset_override_ms"] is not None:
+        return float(z["grid_offset_override_ms"]) / 1000
+    stems = db.stems_for_zip(z["id"])
+    sources = (z["bpm_source_stem"] or "").split(" + ")
+    phase_sr = next((r["sample_rate"] for r in stems if r["file_name"] in sources and r["sample_rate"]), 44100)
+    return (z["phase_samples"] or 0) / phase_sr
 
 
 def _write_log(lib: Path, code: str, zip_path: Path, analysis: ZipAnalysis, counts: SampleCounts,
@@ -498,6 +544,115 @@ def _write_log(lib: Path, code: str, zip_path: Path, analysis: ZipAnalysis, coun
                "counts": counts.model_dump(), "warnings": warnings,
                "analysis": analysis.model_dump(), "settings": settings.to_dict()}
     (logs / f"{code}.json").write_text(json.dumps(payload, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# Loose samples (samples.py): packs
+# ---------------------------------------------------------------------------
+
+def import_samples(settings: Settings, paths: list[str], ctx: JobContext | None = None) -> list[ProcessResult]:
+    """Add loose audio files (and the ones in dropped folders) to the library, one pack per
+    Splice pack or folder. Files already in their pack are skipped; new files join it."""
+    ctx = ctx or JobContext()
+    if not settings.library_path:
+        raise PipelineError("no_library", "No library folder configured")
+    lib = Path(settings.library_path)
+    lib.mkdir(parents=True, exist_ok=True)
+    packs, warnings = samplemod.find_samples(paths)
+    if not packs:
+        raise PipelineError("no_audio", "No audio files (.wav, .aif, .flac) in what was added")
+    results = []
+    with LibraryDB(lib) as db:
+        for i, (root, names) in enumerate(sorted(packs.items())):
+            ctx.check()
+            ctx.progress("samples", i / len(packs), f"{root.name}: {len(names)} samples")
+            row = db.find_zip_by_sha1(samplemod.pack_id(root))
+            if row is None:
+                code = naming.source_code(db.next_source_number("P"), "P")
+                zid = db.insert_zip(source_code=code, file_name=root.name, file_sha1=samplemod.pack_id(root),
+                                    original_path=str(root), status="processing", kind="pack")
+                row = db.get_zip(zid)
+                known: list[str] = []
+            else:
+                known = [r["file_name"] for r in db.stems_for_zip(row["id"])]
+            new = [n for n in names if n not in known]
+            if not new and row["status"] in ("done", "needs_review"):
+                results.append(ProcessResult(zip_id=row["id"], source_code=row["source_code"], file_name=root.name,
+                                             status="skipped", warnings=["Already in the library"]))
+                continue
+            sub = JobContext(progress=lambda st, pct, msg, i=i: ctx.progress(st, (i + pct) / len(packs), msg),
+                             is_cancelled=ctx.is_cancelled)
+            r = _process_pack(db, lib, row, known + new, settings, None, False, sub, extra_warnings=warnings)
+            results.append(r)
+    return results
+
+
+def _process_pack(db: LibraryDB, lib: Path, row, names: list[str], settings: Settings, overrides: Overrides | None,
+                  loops_only: bool, ctx: JobContext, extra_warnings: list[str] | None = None) -> ProcessResult:
+    """(Re)write all samples of a pack from its files."""
+    zid, code = row["id"], row["source_code"]
+    root = Path(row["original_path"])
+    ov = _merge_overrides(db, row, overrides)
+    db.update_zip(zid, status="processing")
+    try:
+        tag = naming.source_tag(code, naming.slugify(root.name))
+        warnings = list(extra_warnings or [])
+        stems: list[StemInfo] = []
+        outputs: list[StemOutput] = []
+        skipped: list[str] = []
+        fixable = False
+        present = [n for n in names if (root / n).exists()]
+        for n in names:
+            if n not in present:
+                warnings.append(f"File missing: {n}")
+        with tempfile.TemporaryDirectory(prefix="drumvault-") as d, \
+                ThreadPoolExecutor(max_workers=max(1, settings.workers)) as pool:
+            futs = [pool.submit(samplemod.process_file, root / n, n, ov.stems.get(n), settings, not loops_only, Path(d))
+                    for n in present]
+            try:
+                for j, (n, f) in enumerate(zip(present, futs)):
+                    ctx.check()
+                    fr = f.result()
+                    ctx.progress("samples", 0.05 + 0.8 * (j + 1) / max(1, len(present)), n)
+                    stems.append(StemInfo(file_name=n, category=fr.category, category_override=ov.stems.get(n),
+                                          auto_classified=fr.auto, classify_reason=fr.reason,
+                                          duration_s=fr.duration_s, sample_rate=fr.sample_rate, channels=fr.channels))
+                    outputs.append(StemOutput(n, fr.category, fr.oneshots, fr.loops, fr.events, fr.loop_factor,
+                                              fr.loop_sr, fr.warnings, fr.key))
+                    warnings += fr.warnings
+                    if fr.skipped:
+                        skipped.append(f"{n}: {fr.skipped}")
+                        fixable |= fr.fixable
+            except BaseException:
+                for f in futs:
+                    f.cancel()
+                raise
+        warnings = list(dict.fromkeys(warnings + [f"Skipped {s}" for s in skipped]))
+        analysis = ZipAnalysis(file_name=root.name, file_sha1=row["file_sha1"], stems=stems,
+                               tempo=TempoInfo(bpm=settings.library_bpm, raw_bpm=settings.library_bpm, phase_samples=0,
+                                               sample_rate=settings.output_sample_rate, confidence=1.0,
+                                               source_stem="", source_category="pack"),
+                               key=KeyInfo(), warnings=warnings)
+        ctx.progress("write", 0.9, "Writing samples")
+        counts = _write_outputs(db, lib, zid, tag, analysis, outputs, settings, loops_only, ctx, track=False)
+        # Drum files skipped for a reason a category override or a rename can fix want a look;
+        # a 174 BPM loop or a melodic file is only noted.
+        status = "needs_review" if fixable and not row["reviewed"] else "done"
+        db.update_zip(zid, file_name=root.name, status=status, warnings=warnings, processed_at=now_iso(),
+                      settings_hash=settings.processing_hash())
+        _write_log(lib, code, root, analysis, counts, status, warnings, settings)
+        ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops, {counts.events} FX/fills")
+        return ProcessResult(zip_id=zid, source_code=code, file_name=root.name, status=status, counts=counts,
+                             warnings=warnings)
+    except Cancelled:
+        if not db.stems_for_zip(zid) and not db.samples_for_zip(zid):
+            db.delete_zip_rows(zid)  # a new pack: nothing was written
+        else:
+            db.update_zip(zid, status=row["status"] if row["status"] != "processing" else "done")
+        raise
+    except Exception as e:
+        db.update_zip(zid, status="error", warnings=[f"{type(e).__name__}: {e}"])
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +705,11 @@ def shift_sample(settings: Settings, sample_id: int, beats: int) -> dict:
         peakmod.write_peaks(library_dir(lib) / "peaks" / f"{sample_id}.json",
                             peakmod.peaks_for(moved, sr, row["kind"], row["bars"], settings.thresholds))
         db.set_shift(sample_id, new)
+        if row["kind"] == "event":
+            old_shape = json.loads(row["shape"] or "{}") if "shape" in row.keys() else {}
+            shape = eventmod.shape(moved, sr, float(row["bpm"]), int(row["bars"]), int(row["body_bars"] or row["bars"]),
+                                   settings.thresholds)
+            db.set_shape(sample_id, {**shape, "boundary": old_shape.get("boundary")})
     return {"sample_id": sample_id, "shift_beats": new}
 
 
@@ -589,6 +749,252 @@ def stretch_samples(settings: Settings, rel_paths: list[str], bpm: float) -> dic
     with ThreadPoolExecutor(max_workers=max(1, settings.workers)) as pool:
         list(pool.map(one, todo))
     return {"paths": out}
+
+
+_MIDI_SUFFIX = re.compile(r"[\s_-]*(midi|mid|midis)$", re.I)
+_STEMS_SUFFIX = re.compile(r"[\s_-]*(stems?|multitracks?|parts?)$", re.I)
+
+
+def _track_key(db: LibraryDB, label: str) -> tuple[str | None, str | None]:
+    """The processed stem zip a MIDI pack belongs to ("83686_midi" ↔ "83686_stems"): (code, key)."""
+    for z in db.list_zips():
+        if _STEMS_SUFFIX.sub("", Path(z["file_name"] or "").stem).lower() == label.lower():
+            return z["source_code"], z["key_override"] or z["key_label"]
+    return None, None
+
+
+def import_midi(settings: Settings, paths: list[str]) -> dict:
+    """Add bass MIDI to the library (SCOPE.md §6.7) from loose .mid files, MIDI zips (a track's
+    parts) and folders of either. Only basslines are kept (copied to MIDI/Bass/, indexed with
+    bars and key); other parts are counted as ignored. Files already imported are skipped.
+
+    A zip's bassline is named after the zip ("83686 Bass") and gets the key of the processed
+    stem zip with the same name if there is one, else the key all the zip's parts together
+    point to (chords and lead say more about the key than a bassline alone)."""
+    import tempfile
+    import zipfile
+    from . import midi as midimod
+    lib = Path(settings.library_path)
+    th = settings.thresholds
+    # Sources: (label for names, [(display name, bytes, original path)])
+    groups: list[tuple[str | None, list[tuple[str, bytes, str]]]] = []
+
+    def add_zip(z: Path) -> None:
+        with zipfile.ZipFile(z) as zf:
+            members = [(Path(n).stem, zf.read(n), f"{z.resolve()}!{n}") for n in zipio.midi_members(z)]
+        if members:
+            groups.append((_MIDI_SUFFIX.sub("", z.stem) or z.stem, members))
+
+    for p in map(Path, paths):
+        if p.is_dir():
+            for f in sorted(p.rglob("*")):
+                if not f.is_file() or zipio.is_junk(str(f.relative_to(p))):
+                    continue
+                if f.suffix.lower() in midimod.MIDI_EXTENSIONS:
+                    groups.append((None, [(f.stem, f.read_bytes(), str(f.resolve()))]))
+                elif f.suffix.lower() == ".zip" and zipio.is_midi_zip(f):
+                    add_zip(f)
+        elif p.suffix.lower() == ".zip":
+            add_zip(p)
+        elif p.suffix.lower() in midimod.MIDI_EXTENSIONS:
+            groups.append((None, [(p.stem, p.read_bytes(), str(p.resolve()))]))
+
+    imported, skipped, ignored, failed = [], 0, 0, []
+    with LibraryDB(lib) as db, tempfile.TemporaryDirectory(prefix="drumvault-midi-") as tmp:
+        for label, members in groups:
+            infos = []
+            for i, (name, data, origin) in enumerate(members):
+                f = Path(tmp) / f"{i}-{naming.slugify(name, 40) or 'midi'}.mid"
+                f.write_bytes(data)
+                try:
+                    info = midimod.analyze(f, th)
+                    # Key words in the part's own name count; the temp name doesn't carry them.
+                    named = midimod.detect_key(f"{name}.mid", []) if midimod.has_key_in_name(name) else None
+                    infos.append((name, data, origin, f, info, named))
+                except Exception as e:  # noqa: BLE001 - one bad file doesn't stop the rest
+                    failed.append(f"{name}: {e}")
+            code, track_key = _track_key(db, label) if label else (None, None)
+            if not track_key and label and len(infos) > 1:
+                together = [n for *_, info, _ in infos for n in info.notes]
+                k = midimod.detect_key("", together)
+                track_key = midimod.make_label(*k) if k else None
+            for name, data, origin, f, info, named in infos:
+                if not info.notes:
+                    failed.append(f"{name}: no notes")
+                    continue
+                if midimod.guess_role(f"{name}.mid", info.notes, th) != "bass":
+                    ignored += 1   # only basslines are used (Serum bass)
+                    continue
+                role = "bass"
+                sha1 = hashlib.sha1(data).hexdigest()
+                if db.midi_by_sha1(sha1):
+                    skipped += 1
+                    continue
+                key_label = midimod.make_label(*named) if named else track_key or info.key_label
+                title = f"{label} {name}" if label else name
+                folder = "Bass" if role == "bass" else "Other"
+                base = naming.slugify(title, 60) or "midi"
+                rel, k = f"MIDI/{folder}/{base}.mid", 1
+                while db.midi_path_taken(rel) or (lib / rel).exists():
+                    k += 1
+                    rel = f"MIDI/{folder}/{base}-{k}.mid"
+                (lib / rel).parent.mkdir(parents=True, exist_ok=True)
+                (lib / rel).write_bytes(data)
+                notes = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
+                mid = db.insert_midi(file_name=f"{title}.mid", rel_path=rel, original_path=origin, file_sha1=sha1,
+                                     role=role, bars=info.bars, key_label=key_label,
+                                     key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else None,
+                                     notes=json.dumps(notes), source=label, source_code=code, created_at=now_iso())
+                imported.append({"id": mid, "file_name": f"{title}.mid", "role": role, "bars": info.bars,
+                                 "key_label": key_label})
+    return {"imported": imported, "skipped": skipped, "ignored": ignored, "failed": failed}
+
+
+def set_midi_meta(settings: Settings, midi_id: int, role: str | None, key_label: str | None, clear_key: bool) -> dict:
+    """Correct a MIDI file's role (bass / other) or key."""
+    from . import midi as midimod
+    with LibraryDB(settings.library_path) as db:
+        if db.get_midi(midi_id) is None:
+            raise PipelineError("not_found", f"No MIDI file with id {midi_id}")
+        fields: dict = {}
+        if role in ("bass", "other"):
+            fields["role"] = role
+        if clear_key:
+            fields.update(key_label=None, key_camelot=None)
+        elif key_label:
+            fields.update(key_label=key_label, key_camelot=midimod.camelot(*midimod.parse_label(key_label)))
+        db.update_midi(midi_id, **fields)
+    return {"id": midi_id}
+
+
+def delete_midi(settings: Settings, midi_ids: list[int]) -> dict:
+    """Remove MIDI files from the library (file and row). Projects keep their bass clips' renders."""
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        rows = [r for r in (db.get_midi(i) for i in midi_ids) if r is not None]
+        for r in rows:
+            (lib / r["rel_path"]).unlink(missing_ok=True)
+            db.delete_midi(r["id"])
+    return {"deleted": len(rows)}
+
+
+# 2: Serum goes back to its init patch before each preset (before, settings a preset doesn't
+# list carried over from the preset rendered before it).
+BASS_RENDER_VERSION = 2
+
+
+def _drop_stale_bass_renders(folder: Path) -> None:
+    """Bass renders are a cache: the ones from an older render version are deleted, once."""
+    stamp = folder / f".render-v{BASS_RENDER_VERSION}"
+    if stamp.exists():
+        return
+    if folder.exists():
+        for f in folder.glob("*.wav"):
+            f.unlink(missing_ok=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp.touch()
+
+
+def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, bpm: float, out_rel: str,
+                notes: list[list[float]] | None = None, bars: int | None = None,
+                groove: list[float] | None = None) -> dict:
+    """Render a MIDI part through a Serum 2 preset as a seamless loop at `bpm`, loudness-matched,
+    to `out_rel` (under .drumvault/bass/). Cached: redone only when the preset or MIDI changed.
+    `notes`/`bars` (edited in the piano roll) replace the imported file's; the app names such
+    renders after the notes, so the file stays a cache. A line the app generated has no file
+    (`midi_id` < 1): its `notes` and `bars` are all there is. `groove` (16ths per step) moves
+    notes that start on a 16th the way the track's loops are played."""
+    from . import midi as midimod, serum
+    from .midi import Note
+    lib = Path(settings.library_path)
+    if not out_rel.startswith(".drumvault/bass/") or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+        raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
+    out = lib / out_rel
+    _drop_stale_bass_renders(out.parent)
+    row = None
+    if midi_id >= 1:
+        with LibraryDB(lib) as db:
+            row = db.get_midi(midi_id)
+        if row is None:
+            raise PipelineError("not_found", f"No MIDI file with id {midi_id}")
+    elif notes is None or not bars:
+        raise PipelineError("bad_request", "A generated bassline needs its notes and bars")
+    src = Path(preset)
+    if not src.exists():
+        raise PipelineError("not_found", f"Serum preset not found: {preset}")
+    midi_file = lib / row["rel_path"] if row is not None else None
+    newest = max(src.stat().st_mtime, midi_file.stat().st_mtime if midi_file is not None and midi_file.exists() else 0)
+    if out.exists() and out.stat().st_mtime >= newest:
+        return {"path": out_rel, "cached": True}
+    source = notes if notes is not None else json.loads(row["notes"])
+    loop_bars = int(bars or row["bars"])
+    parts = [Note(s, l, max(0, min(127, int(p) + transpose)), int(v)) for s, l, p, v in source if s < loop_bars * 4]
+    if groove:
+        parts = midimod.apply_groove(parts, groove)
+    sr = settings.output_sample_rate
+    try:
+        data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(src, parts, bpm, loop_bars, sr)
+    except serum.SerumError as e:
+        raise PipelineError("serum", str(e)) from e
+    if float(np.abs(data).max(initial=0.0)) > 1e-5:
+        data, _, _ = normalize.loudness_normalize(data, sr, settings.thresholds.bass_lufs_target,
+                                                  settings.thresholds.bass_peak_dbfs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.part")
+    sf.write(str(tmp), data, sr, subtype="PCM_24", format="WAV")
+    tmp.replace(out)
+    return {"path": out_rel, "cached": False}
+
+
+def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int, key_label: str | None,
+              role: str = "bass") -> dict:
+    """Save an edited loop (piano roll) as a new MIDI file in the library, like an import."""
+    import mido
+    from . import midi as midimod
+    lib = Path(settings.library_path)
+    tpb = 480
+    mf = mido.MidiFile(ticks_per_beat=tpb)
+    tr = mido.MidiTrack()
+    mf.tracks.append(tr)
+    tr.append(mido.MetaMessage("track_name", name=name, time=0))
+    ev = []
+    for s, l, p, v in notes:
+        if s >= bars * 4:
+            continue
+        on, off = round(s * tpb), round(min(s + l, bars * 4) * tpb)
+        ev.append((on, 1, mido.Message("note_on", note=int(p), velocity=max(1, min(127, int(v))))))
+        ev.append((max(on + 1, off), 0, mido.Message("note_off", note=int(p), velocity=0)))
+    t = 0
+    for tick, _, msg in sorted(ev, key=lambda e: (e[0], e[1])):
+        tr.append(msg.copy(time=tick - t))
+        t = tick
+    tr.append(mido.MetaMessage("end_of_track", time=max(0, bars * 4 * tpb - t)))
+    folder = "Bass" if role == "bass" else "Other"
+    base = naming.slugify(name, 60) or "bassline"
+    with LibraryDB(lib) as db:
+        rel, k = f"MIDI/{folder}/{base}.mid", 1
+        while db.midi_path_taken(rel) or (lib / rel).exists():
+            k += 1
+            rel = f"MIDI/{folder}/{base}-{k}.mid"
+        (lib / rel).parent.mkdir(parents=True, exist_ok=True)
+        mf.save(str(lib / rel))
+        same = db.midi_by_sha1(zipio.sha1_file(lib / rel))
+        if same is not None:  # the very same loop was saved before
+            (lib / rel).unlink()
+            return {"id": same["id"], "rel_path": same["rel_path"]}
+        info = midimod.analyze(lib / rel, settings.thresholds)
+        stored = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
+        mid = db.insert_midi(file_name=f"{name}.mid", rel_path=rel, original_path=None,
+                             file_sha1=zipio.sha1_file(lib / rel), role=role, bars=bars,
+                             key_label=key_label or info.key_label,
+                             key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else info.key_camelot,
+                             notes=json.dumps(stored), created_at=now_iso())
+    return {"id": mid, "rel_path": rel}
+
+
+def serum_presets(settings: Settings, root: str, folders: list[str] | None) -> dict:
+    from . import serum
+    return {"folders": serum.preset_folders(root), "presets": serum.list_presets(root, folders) if folders else []}
 
 
 def trash_files(lib: Path, removed_id: int) -> tuple[Path, Path]:
@@ -665,6 +1071,8 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
         row = db.get_zip(zip_id)
         if row is None:
             raise PipelineError("not_found", f"No zip with id {zip_id}")
+        if row["kind"] == "pack":
+            raise PipelineError("pack", "Loose samples have no shared grid to align")
         stems = db.stems_for_zip(zip_id)
     zip_path = Path(row["original_path"] or "")
     if not zip_path.exists():
@@ -699,6 +1107,68 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
     return GridPreview(zip_id=zip_id, path=str(out), sample_rate=sr, duration_s=len(mix) / sr,
                        bpm=float(row["bpm_override"] or row["detected_bpm"] or settings.library_bpm),
                        bar_one_ms=bar_one_ms, manual=manual, stems=sorted(names))
+
+
+def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
+    """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
+    the event files) and each zip's arrangement (from the original zip, on its stored grid).
+    Nothing else changes."""
+    ctx = ctx or JobContext()
+    th = settings.thresholds
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        loops = db.loops_without_groove()
+        events = db.events_without_shape()
+        zips = db.zips_without_arrangement()
+        total = max(1, len(loops) + len(events) + 10 * len(zips))
+        for i, r in enumerate(loops):
+            ctx.check()
+            if i % 10 == 0:
+                ctx.progress("groove", i / total, f"Loop grooves ({i + 1}/{len(loops)})")
+            path = lib / r["rel_path"]
+            g = None
+            if path.exists():
+                a = load(path)
+                g = groovemod.loop_groove(a.data, a.sr, float(r["bpm"] or settings.library_bpm), th)
+            db.set_groove(r["id"], g)
+        zip_rows = {}
+        for i, r in enumerate(events):
+            ctx.check()
+            if i % 10 == 0:
+                ctx.progress("shape", (len(loops) + i) / total, f"Event shapes ({i + 1}/{len(events)})")
+            path = lib / r["rel_path"]
+            if not path.exists():
+                continue
+            bar = None
+            if r["zip_kind"] == "stems" and r["source_offset_s"] is not None:
+                z = zip_rows.get(r["zip_id"]) or zip_rows.setdefault(r["zip_id"], db.get_zip(r["zip_id"]))
+                bpm = float(z["bpm_override"] or z["detected_bpm"] or settings.library_bpm)
+                bar = int(round((float(r["source_offset_s"]) - _bar_one_s(db, z)) * bpm / 240.0))
+            a = load(path)
+            db.set_shape(r["id"], _event_shape(a.data, a.sr, float(r["bpm"] or settings.library_bpm), int(r["bars"] or 1),
+                                               r["body_bars"], bar, th))
+        missing = []
+        for j, z in enumerate(zips):
+            ctx.check()
+            ctx.progress("arrangement", (len(loops) + len(events) + 10 * j) / total,
+                         f"Arrangement of {z['file_name']} ({j + 1}/{len(zips)})")
+            zip_path = Path(z["original_path"] or "")
+            if not zip_path.exists():
+                missing.append(z["file_name"])
+                continue
+            stems = db.stems_for_zip(z["id"])
+            category = {r["file_name"]: r["category_override"] or r["category"] for r in stems}
+            bar_one_s = _bar_one_s(db, z)
+            bpm = float(z["bpm_override"] or z["detected_bpm"] or settings.library_bpm)
+            with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
+                ex = extract(zip_path, Path(d))
+                names = [n for n, c in category.items() if n in ex.files and arrmod.part_of(n, c)]
+                arr = arrmod.measure([(n, category[n], ex.audio(n).mono(), ex.audio(n).sr) for n in names],
+                                     bpm, bar_one_s, th)
+            db.set_arrangement(z["id"], arr)
+    ctx.progress("done", 1.0, f"{len(loops)} loop grooves, {len(events)} event shapes, "
+                              f"{len(zips) - len(missing)} arrangements")
+    return {"grooves": len(loops), "shapes": len(events), "arrangements": len(zips) - len(missing), "missing": missing}
 
 
 def rebuild_loops(settings: Settings, ctx: JobContext | None = None) -> list[ProcessResult]:

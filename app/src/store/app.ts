@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo } from '../types/api'
 
-export type View = 'process' | 'library' | 'grid' | 'generate' | 'arrange' | 'settings'
+export type View = 'process' | 'library' | 'grid' | 'midi' | 'generate' | 'arrange' | 'settings'
 
 export interface Toast {
   id: number

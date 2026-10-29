@@ -11,7 +11,7 @@ import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/ty
 import { LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
-  augmentedPath, deleteProjectFile, expandZipPaths, findEngineDir, libraryFile, listProjects, loadSettings,
+  augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings,
   readProjectFile, saveSettings, which, writeProjectFile,
 } from './fs'
 import { JobTracker } from './jobs'
@@ -101,6 +101,7 @@ function startEngine(): void {
   sidecar.on('status', (s: EngineStatus) => {
     lastStatus = s
     send('engine-status', s)
+    if (s.state === 'ready') void analyzeLibraryIfNeeded()
   })
   sidecar.on('event', (e: EngineEvent) => {
     jobs.handleEvent(e)
@@ -127,6 +128,19 @@ async function submit(method: JobMethod, params: Record<string, unknown>, label:
   if (!sidecar) throw new Error(lastStatus.message || 'Engine is not running')
   const r = await sidecar.request<JobAccepted>(method, { ...params, settings: engineSettings() })
   jobs.add(r.job_id, method, label, path, zipId)
+}
+
+/**
+ * Libraries from before schema v7 lack loop grooves and track arrangements (Generate needs
+ * them): measure them once, in the background, when the engine is up.
+ */
+async function analyzeLibraryIfNeeded(): Promise<void> {
+  try {
+    if (!reader.needsAnalysis() || jobs.list().some((j) => j.method === 'analyze_library' && !j.finished)) return
+    await submit('analyze_library', {}, 'Measure loop grooves and track structures')
+  } catch (e) {
+    engineLog(`analyze_library not started: ${e}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,14 +199,15 @@ function registerIpc(): void {
   })
   ipcMain.handle('dialog:zips', async () => {
     const r = await dialog.showOpenDialog(win!, {
-      title: 'Add stem zips',
+      title: 'Add stem zips or samples',
       buttonLabel: 'Add',
       properties: ['openFile', 'openDirectory', 'multiSelections'],
-      filters: [{ name: 'Zip archives', extensions: ['zip'] }],
+      filters: [{ name: 'Stem zips and samples', extensions: ['zip', ...SAMPLE_EXTENSIONS] }],
     })
-    return r.canceled ? [] : expandZipPaths(r.filePaths)
+    return r.canceled ? [] : r.filePaths
   })
   ipcMain.handle('fs:expand', (_e, paths: string[]) => expandZipPaths(paths))
+  ipcMain.handle('fs:samples', (_e, paths: string[]) => expandSamplePaths(paths))
 
   ipcMain.handle('engine:deps', () => checkDeps(engineDir(), settings.uvPath))
   ipcMain.handle('engine:status', () => lastStatus)
@@ -201,6 +216,11 @@ function registerIpc(): void {
   ipcMain.handle('jobs:list', () => jobs.list())
   ipcMain.handle('jobs:process', async (_e, paths: string[], reprocess = false) => {
     for (const p of paths) await submit('process_zip', { path: p, reprocess }, basename(p), p)
+  })
+  // Loose samples: the engine groups them into packs (a Splice pack or the dropped folder).
+  ipcMain.handle('jobs:samples', async (_e, paths: string[]) => {
+    const label = paths.length === 1 ? `Samples from ${basename(paths[0])}` : `Samples from ${paths.length} places`
+    await submit('import_samples', { paths }, label, paths.length === 1 ? paths[0] : null)
   })
   ipcMain.handle('jobs:reprocess', async (_e, zipId: number, overrides: Overrides) => {
     const z = reader.zipDetail(zipId)?.zip
@@ -254,6 +274,53 @@ function registerIpc(): void {
   ipcMain.handle('samples:stretch', async (_e, relPaths: string[], bpm: number) => {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('stretch_samples', { rel_paths: relPaths, bpm, settings: engineSettings() }, 600_000)
+  })
+  ipcMain.handle('midi:import', async (_e, paths: string[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    // The engine searches folders and opens MIDI zips itself.
+    const r = await sidecar.request('import_midi', { paths, settings: engineSettings() }, 600_000)
+    send('library-changed')
+    return r
+  })
+  ipcMain.handle('dialog:midi', async () => {
+    const r = await dialog.showOpenDialog(win!, {
+      title: 'Add bass MIDI', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
+      filters: [{ name: 'MIDI zips and files', extensions: ['zip', 'mid', 'midi'] }],
+    })
+    return r.canceled ? [] : r.filePaths
+  })
+  ipcMain.handle('midi:key', async (_e, midiId: number, key: string | null) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('set_midi_meta', { midi_id: midiId, key_label: key, clear_key: key == null, settings: engineSettings() })
+    send('library-changed')
+  })
+  ipcMain.handle('midi:delete', async (_e, midiIds: number[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('delete_midi', { midi_ids: midiIds, settings: engineSettings() })
+    send('library-changed')
+  })
+  ipcMain.handle('lib:midi', () => reader.listMidi())
+  ipcMain.handle('lib:arrangements', () => reader.arrangements())
+  ipcMain.handle('serum:presets', async (_e, root: string, folders: string[] | null) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    return sidecar.request('serum_presets', { root, folders, settings: engineSettings() }, 120_000)
+  })
+  ipcMain.handle('bass:render', async (_e, p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
+    notes?: number[][]; bars?: number; groove?: number[] }) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    // The first render loads Serum 2 into the engine (several seconds).
+    await sidecar.request('render_bass', {
+      preset: p.preset, midi_id: p.midiId, transpose: p.transpose, bpm: p.bpm, out_rel: p.outRel,
+      notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, settings: engineSettings(),
+    }, 300_000)
+  })
+  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request<{ id: number }>('save_midi', {
+      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, settings: engineSettings(),
+    }, 60_000)
+    send('library-changed')
+    return r.id
   })
   ipcMain.handle('lib:removed', () => reader.removedSamples())
   ipcMain.handle('zip:gridPreview', async (_e, zipId: number) => {
@@ -400,6 +467,7 @@ function buildMenu(): void {
         { label: 'Generate', accelerator: 'CmdOrCtrl+3', click: () => send('menu', 'view:generate') },
         { label: 'Arrange', accelerator: 'CmdOrCtrl+4', click: () => send('menu', 'view:arrange') },
         { label: 'Grid', accelerator: 'CmdOrCtrl+5', click: () => send('menu', 'view:grid') },
+        { label: 'MIDI', accelerator: 'CmdOrCtrl+6', click: () => send('menu', 'view:midi') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

@@ -10,12 +10,13 @@ const starts: Start[] = []
 const clock = { t: 100 }
 
 function param() {
-  return { value: 1, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {} }
+  return { value: 1, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {} }
 }
 function node<T extends object>(extra: T = {} as T) {
   return { connect(n: unknown) { return n }, disconnect() {}, ...extra }
 }
 const SR = 44100
+const stops: string[] = []
 const fakeCtx = {
   sampleRate: SR,
   get currentTime() { return clock.t },
@@ -30,20 +31,33 @@ const fakeCtx = {
       buffer: null as null | { duration: number; tag: string },
       onended: null,
       start(when: number, offset: number, duration?: number) { starts.push({ when, offset, duration, tag: src.buffer!.tag }) },
-      stop() {},
+      stop() { stops.push(src.buffer?.tag ?? '') },
     })
     return src
   },
 }
 
+/** Sounds not decoded yet; loadAll / renderBass wait for `release()` when set. */
+const unloaded = new Set<string>()
+let gate: Promise<void> = Promise.resolve()
+let release = () => {}
+function hold() {
+  gate = new Promise((r) => { release = r })
+}
+
 // The app bridge (window.drumvault) doesn't exist here; nothing in these projects needs stretching.
-vi.mock('../src/api', () => ({ api: {} }))
+vi.mock('../src/api', () => ({ api: { renderBass: async () => { await gate } } }))
 
 vi.mock('../src/audio/context', () => ({
   audioContext: () => fakeCtx,
   buffers: {
-    get: (p: string) => ({ duration: p.includes('Kick') ? 0.5 : 100, sampleRate: SR, tag: p }),
-    loadAll: async () => [],
+    get: (p: string) => (unloaded.has(p) ? undefined : { duration: p.includes('Kick') ? 0.5 : 100, sampleRate: SR, tag: p }),
+    loadAll: async (paths: Iterable<string>) => {
+      const list = [...paths]
+      if (list.some((p) => unloaded.has(p))) await gate
+      for (const p of list) if (!p.includes('missing')) unloaded.delete(p)
+      return []
+    },
     load: async (p: string) => ({ duration: 1, tag: p }),
   },
 }))
@@ -85,7 +99,10 @@ function run(seconds: number) {
 beforeEach(() => {
   vi.useFakeTimers()
   starts.length = 0
+  stops.length = 0
   clock.t = 100
+  unloaded.clear()
+  gate = Promise.resolve()
 })
 afterEach(() => {
   playback.stop()
@@ -156,5 +173,80 @@ describe('live transport', () => {
     const at = playback.position()
     run(1)
     expect(playback.position()).toBe(at)
+  })
+
+  it('swaps a clip\'s new sound in right away while playing, from the playhead', async () => {
+    project = build(16)
+    playback.connect(() => project)
+    await playback.play(0)
+    run(3 * BEAT)                                     // into the first 4-bar repetition of the loop
+    const loop = project.clips.find((c) => c.id === 'l')!
+    loop.sample = { ...loop.sample, relPath: 'Loops/Tops/Top-new.wav' }
+    const before = starts.length
+    await playback.reloadClips(project, ['l'])
+    expect(stops).toContain('Loops/Tops/Top.wav')     // the old sound stops
+    const swapped = starts.slice(before).filter((s) => s.tag === 'Loops/Tops/Top-new.wav')
+    expect(swapped).toHaveLength(1)                   // the new one starts now, mid-loop
+    expect(swapped[0].offset).toBeGreaterThan(2.5 * BEAT)
+    expect(swapped[0].when).toBeLessThan(clock.t + 0.1)
+  })
+
+  it('a stop while loading cancels the play', async () => {
+    project = build(8)
+    playback.connect(() => project)
+    unloaded.add('Loops/Tops/Top.wav')
+    hold()
+    const p = playback.play(0)
+    await Promise.resolve()
+    expect(playback.loading).toBe(true)
+    playback.toggle()                                 // pressing stop while it loads
+    expect(playback.loading).toBe(false)
+    release()
+    await p
+    run(1)
+    expect(playback.playing).toBe(false)
+    expect(starts).toHaveLength(0)
+  })
+
+  it('pressing play twice while loading starts one transport, not two', async () => {
+    project = build(8)
+    playback.connect(() => project)
+    unloaded.add('Loops/Tops/Top.wav')
+    hold()
+    const a = playback.play(0)
+    const b = playback.play(0)
+    release()
+    await Promise.all([a, b])
+    run(3 * BEAT)                                     // beats 0–3 (beat 4 is past the lookahead)
+    expect(starts.filter((s) => s.tag.includes('Kick'))).toHaveLength(4)
+    playback.stop()
+    run(1)
+    expect(playback.playing).toBe(false)
+    const n = starts.length
+    run(1)
+    expect(starts).toHaveLength(n)                    // nothing keeps scheduling after stop
+  })
+
+  it("doesn't wait for a bass render to start; the bass comes in when it's ready", async () => {
+    project = build(16)
+    const bass: AudioClip = {
+      id: 'b', laneId: project.lanes[6].id, type: 'audio', start: 0, length: 64, trimBeats: 0, gainDb: 0,
+      sample: { relPath: 'MIDI/bass.mid', id: 0, name: 'b', kind: 'loop', category: 'melodic', bars: 4, durationS: 16 * BEAT },
+      bass: { preset: '/p/Bass.SerumPreset', presetName: 'Bass', midiId: 1, midiName: 'b', transpose: 0 },
+    }
+    project.clips.push(bass)
+    playback.connect(() => project)
+    const { bassPath } = await import('../src/audio/schedule')
+    const path = bassPath(bass.bass!, BPM)
+    unloaded.add(path)
+    hold()
+    await playback.play(0)
+    expect(playback.playing).toBe(true)              // drums play at once
+    run(2 * BEAT)
+    expect(starts.some((s) => s.tag === path)).toBe(false)
+    release()
+    await vi.waitFor(() => expect(starts.some((s) => s.tag === path)).toBe(true))
+    const b = starts.find((s) => s.tag === path)!
+    expect(b.offset).toBeGreaterThan(1.5 * BEAT)     // from the playhead, not the clip start
   })
 })

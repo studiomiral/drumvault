@@ -33,10 +33,7 @@ export function ProcessView() {
   }, [activeCount])
 
   const submit = useCallback(async (paths: string[]) => {
-    if (!paths.length) {
-      toast('info', 'No zip files found in what was dropped.')
-      return
-    }
+    if (!paths.length) return
     // Warn about zips whose file name is already in the library, queued, or twice in this batch.
     const [inLibrary, queued] = [await api.listZips(), useApp.getState().jobs]
     const known = new Map<string, string>()
@@ -59,10 +56,21 @@ export function ProcessView() {
     await attempt(() => api.processZips(paths))
   }, [toast])
 
+  /** Zips are processed as tracks; loose samples (Splice and other folders) are added as packs. */
+  const add = useCallback(async (dropped: string[]) => {
+    if (!dropped.length) return
+    const [zipPaths, samples] = await Promise.all([api.expandPaths(dropped), api.findSamples(dropped)])
+    if (!zipPaths.length && !samples.length) {
+      toast('info', 'No zips or audio files found in what was added.')
+      return
+    }
+    if (samples.length) await attempt(() => api.importSamples(dropped))
+    await submit(zipPaths)
+  }, [submit, toast])
+
   const addViaDialog = useCallback(async () => {
-    const paths = await api.chooseZips()
-    if (paths.length) await submit(paths)
-  }, [submit])
+    await add(await api.chooseZips())
+  }, [add])
 
   useEffect(() => api.onMenu((cmd) => {
     if (cmd === 'add-zips') void addViaDialog()
@@ -71,8 +79,7 @@ export function ProcessView() {
   const onDrop = async (e: DragEvent) => {
     e.preventDefault()
     setDragging(false)
-    const paths = api.pathsForFiles([...e.dataTransfer.files])
-    await submit(await api.expandPaths(paths))
+    await add(api.pathsForFiles([...e.dataTransfer.files]))
   }
 
   const shown = zips.filter((z) => filter === 'all' || z.status === filter)
@@ -95,7 +102,7 @@ export function ProcessView() {
       onDrop={(e) => void onDrop(e)}
     >
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="app-drag h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
+        <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
           <PageTitle>Process</PageTitle>
           <div className="flex-1" />
         </header>
@@ -114,10 +121,10 @@ export function ProcessView() {
                 { value: 'needs_review', label: `Needs review ${counts.review}` },
                 { value: 'error', label: `Errors ${counts.error}` },
               ]} />
-            }>Library zips</SectionTitle>
+            }>Library sources</SectionTitle>
             {shown.length === 0 ? (
               <Empty title={zips.length ? 'Nothing here' : 'No zips processed yet'}>
-                {zips.length ? 'No zips match this filter.' : 'Drop zips of stems above to build your library.'}
+                {zips.length ? 'Nothing matches this filter.' : 'Drop zips of stems or folders of samples above to build your library.'}
               </Empty>
             ) : (
               <ZipTable zips={shown} selected={selected} onSelect={setSelected} />
@@ -161,7 +168,7 @@ export function ProcessView() {
       )}
       {dragging && (
         <div className="absolute inset-2 rounded-2xl border-2 border-dashed border-accent/70 bg-accent/10 backdrop-blur-sm flex items-center justify-center pointer-events-none z-20">
-          <div className="text-accent text-[15px] font-medium">Drop zips or folders to process them</div>
+          <div className="text-accent text-[15px] font-medium">Drop zips, samples or folders to process them</div>
         </div>
       )}
     </div>
@@ -192,9 +199,9 @@ function Hero({ bpm, canProcess, onAdd }: { bpm: number; canProcess: boolean; on
         <h2 className="font-display text-[26px] leading-[1.15] font-medium">Stems in, drums out</h2>
         <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
           Drop zips of dance-track stems. Drumvault keeps the drums, FX and fills, matches them to {formatBpm(bpm)} BPM
-          and labels them with the track&apos;s key.
+          and labels them with the track&apos;s key. Loose samples from Splice and other packs are matched too.
         </p>
-        <Button variant="primary" className="mt-4 h-8 px-3.5 self-start" onClick={onAdd} disabled={!canProcess}>Add zips…</Button>
+        <Button variant="primary" className="mt-4 h-8 px-3.5 self-start" onClick={onAdd} disabled={!canProcess}>Add zips or samples…</Button>
       </div>
     </section>
   )
@@ -211,8 +218,8 @@ function DropZone({ onClick }: { onClick: () => void }) {
         <IconDrop className="w-6 h-6" />
       </span>
       <span>
-        <span className="block text-text font-medium">Drop stem zips or folders</span>
-        <span className="block mt-1 text-[12px]">or click to browse. Folders are searched for zips; processed zips are skipped.</span>
+        <span className="block text-text font-medium">Drop stem zips, samples or folders</span>
+        <span className="block mt-1 text-[12px]">or click to browse. Zips are tracks; loose WAV/AIFF/FLAC samples join a pack per Splice pack or folder. MIDI goes on the MIDI page.</span>
       </span>
     </button>
   )
@@ -278,7 +285,7 @@ function ZipTable({ zips, selected, onSelect }: {
         <thead className="bg-panel text-faint text-[11px] uppercase tracking-wider">
           <tr className="text-left">
             <th className="font-medium px-3 py-2 w-16">Source</th>
-            <th className="font-medium px-3 py-2">Zip</th>
+            <th className="font-medium px-3 py-2">Zip or pack</th>
             <th className="font-medium px-3 py-2 w-28">Status</th>
             <th className="font-medium px-3 py-2 w-28">BPM</th>
             <th className="font-medium px-3 py-2 w-20">Key</th>
@@ -294,10 +301,13 @@ function ZipTable({ zips, selected, onSelect }: {
               <tr key={z.id} onClick={() => onSelect(z.id)}
                   className={cx('cursor-pointer', selected === z.id ? 'bg-brand-soft' : 'bg-panel hover:bg-panel-2')}>
                 <td className="px-3 py-2 font-mono text-muted">{z.source_code}</td>
-                <td className="px-3 py-2 truncate max-w-0" title={z.file_name}>{z.file_name}</td>
+                <td className="px-3 py-2 truncate max-w-0" title={z.file_name}>
+                  {z.file_name}
+                  {z.kind === 'pack' && <span className="ml-2 text-faint text-[11px]">samples</span>}
+                </td>
                 <td className="px-3 py-2"><StatusChip status={z.status} /></td>
                 <td className="px-3 py-2">
-                  {formatBpm(bpm)}
+                  {z.kind === 'pack' ? <span className="text-faint">each its own</span> : formatBpm(bpm)}
                   {z.bpm_override != null && <span className="text-accent ml-1" title="Set manually">●</span>}
                 </td>
                 <td className="px-3 py-2">

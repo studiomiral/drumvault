@@ -1,10 +1,12 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
+import { LibraryReader } from '../electron/db'
 import { augmentedPath } from '../electron/fs'
 import { JobTracker } from '../electron/jobs'
 import { RpcCallError, Sidecar } from '../electron/sidecar'
+import { encodeWav } from '../src/audio/wav'
 import type { EngineEvent, HealthResult, JobAccepted } from '../src/types/engine'
 
 const uv = inject('uv')
@@ -69,6 +71,25 @@ describe.skipIf(!uv || !fixturesDir)('Sidecar with the real engine', () => {
     expect(done).toMatchObject({ status: 'done', zip_id: 1 })
     expect(tracker.get(acc.job_id)).toMatchObject({ status: 'done', zip_id: 1 })
     expect(tracker.get(acc.job_id)?.result?.analysis?.tempo.bpm).toBe(124)
+  }, 240_000)
+
+  it('imports loose samples as a pack, which needs no structure analysis', async () => {
+    const lib = mkdtempSync(join(tmpdir(), 'dv-sidecar-lib-'))
+    const pack = join(mkdtempSync(join(tmpdir(), 'dv-pack-')), 'Garage Kit')
+    mkdirSync(pack)
+    // A decaying 60 Hz thump: a kick one-shot.
+    const kick = new Float32Array(22050).map((_, i) => 0.8 * Math.sin((2 * Math.PI * 60 * i) / 44100) * Math.exp(-i / 4000))
+    writeFileSync(join(pack, 'GK_Kick_01.wav'), Buffer.from(encodeWav([kick], 44100, 'pcm24')))
+    const acc = await s.request<JobAccepted>('import_samples', { paths: [pack], settings: { library_path: lib } })
+    const done = await waitFor<EngineEvent>(s, 'event', (e) => e.event === 'job_done' && e.job_id === acc.job_id)
+    expect(done).toMatchObject({ status: 'done', counts: { oneshots: 1, loops: 0, events: 0 } })
+    const reader = new LibraryReader(lib)
+    try {
+      expect(reader.listZips()).toMatchObject([{ source_code: 'P0001', file_name: 'Garage Kit', kind: 'pack', oneshots: 1 }])
+      expect(reader.needsAnalysis()).toBe(false)  // no arrangement, and none expected
+    } finally {
+      reader.close()
+    }
   }, 240_000)
 
   it('rejects RPC errors with their code', async () => {
