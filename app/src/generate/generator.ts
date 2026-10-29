@@ -14,13 +14,14 @@ import { bassPath } from '../audio/schedule'
 import type { MidiItem, SampleListItem, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generatedMidi, generateBassline, isGenerated } from './bassline'
+import { keysModel, generateKeys, generatedKeysMidi } from './keys'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
 import { templateFrom } from './template'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
-  | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
+  | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'keys' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
 
 /** Volume per lane (dB on top of the starting mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -45,6 +46,7 @@ export const LANES: { role: Role; name: string; volumeDb: number; color: string 
   { role: 'top4', name: 'Tops 4', volumeDb: -10, color: '#a5b4fc' },
   { role: 'groove', name: 'Groove', volumeDb: -8, color: '#a3e635' },
   { role: 'bass', name: 'Bass', volumeDb: -4, color: '#fda4af' },
+  { role: 'keys', name: 'Keys', volumeDb: -7, color: '#c4b5fd' },
   { role: 'fills', name: 'Fills', volumeDb: -5, color: '#fb923c' },
   { role: 'fx', name: 'FX', volumeDb: -9, color: '#a78bfa' },
   { role: 'fx2', name: 'FX 2', volumeDb: -11, color: '#c4b5fd' },
@@ -84,6 +86,7 @@ export interface GenerateOptions {
   mix?: Mix
   /** Bass (SCOPE.md §6.7): imported basslines and the Serum patch pool; null or empty = no bass. */
   bass?: BassOptions | null
+  keys?: BassOptions | null
   /**
    * Project tempo: a whole BPM from this range per track (min = max for a fixed one); null or
    * left out = the library BPM (`bpm`). Loops are sliced and FX stretched to it in playback.
@@ -115,6 +118,9 @@ export interface Keep {
   structure?: Section[]
   key?: string | null
   picks?: Partial<Record<Role, SampleListItem>>
+  keysMidi?: MidiItem
+  keysPreset?: SerumPreset
+  keysEdit?: { notes: [number, number, number, number][]; bars: number }
   bassMidi?: MidiItem
   bassPreset?: SerumPreset
   /** The kept bassline's piano-roll edits. */
@@ -145,6 +151,7 @@ export interface GenerationBass {
 /** What the bass clips render for a generation's bass. */
 export function bassRenderOf(b: GenerationBass): BassRender {
   return {
+    role: b.midi.role === 'keys' ? 'keys' : 'bass', keyLabel: b.midi.key_label,
     preset: b.preset.path, presetName: b.preset.name, midiId: b.midi.id, midiName: b.midi.name, transpose: b.transpose,
     // A generated line has no file: its notes always go along.
     ...(b.notes || isGenerated(b.midi) ? { notes: b.notes ?? b.midi.notes, bars: b.bars ?? b.midi.bars } : {}),
@@ -167,6 +174,7 @@ export interface Generation {
   /** The main sample per lane (for "keep"). */
   picks: Partial<Record<Role, SampleListItem>>
   bass: GenerationBass | null
+  keys: GenerationBass | null
   rules: Rules
   /** Source code of the real track whose structure this one follows, if any. */
   template?: string | null
@@ -627,6 +635,16 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
 
+  // An independent RNG keeps existing drum/bass choices stable when Keys is enabled.
+  const ko = opts.keys
+  const krng = new Rng(seed ^ 0x4b455953)
+  const km = ko?.midis.length && ko.presets.length ? keysModel(ko.midis) : null
+  const keysMidi = km ? keep.keysMidi ?? generatedKeysMidi(generateKeys(km, krng, { key, bars: ko!.bars }), key) : null
+  const keysPreset = keysMidi && ko
+    ? keep.keysPreset ?? krng.pickBy(ko.presets, (p) => 1 + (ko.favorites.includes(p.path) ? 3 : 0)) : null
+  const keys: GenerationBass | null = keysMidi && keysPreset
+    ? { midi: keysMidi, preset: keysPreset, transpose: transposeTo(keysMidi.key_label, key), ...(keep.keysMidi ? keep.keysEdit : undefined) } : null
+
   const fills = pool(of('event', 'fill'))
   const rolls = pool(of('event', 'roll'))
   const risers = pool(of('event', 'fx_riser'))
@@ -650,9 +668,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const k = `${s.zip_id}:${onTheLine ? s.shape.boundary - bodyBars(s) : s.shape.boundary}`
     sets.set(k, [...(sets.get(k) ?? []), s])
   }
-  const keys = key ? new Set(expandCompatible([key])) : null
+  const tonalKeys = key ? new Set(expandCompatible([key])) : null
   const setCands = [...sets.entries()].filter(([, xs]) => xs.some(rising) && xs.length >= 2
-    && xs.filter(rising).every((r) => !r.key_label || !keys || keys.has(r.key_label)))
+    && xs.filter(rising).every((r) => !r.key_label || !tonalKeys || tonalKeys.has(r.key_label)))
     .sort(([a], [b]) => a.localeCompare(b))
   const drawnSet = setCands.length && rng.chance(0.5)
     ? rng.pickBy(setCands, ([, xs]) => (tpl && xs[0].source_code === tpl.source ? 4 : 1))[0] : null
@@ -727,6 +745,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     bassBuild: rng.weighted([['sweep', 3], ['filtered', 1], ['none', 2]] as const),
     bassIO: rng.weighted([['none', 3], ['filtered', 1]] as const),
     bassCutoff: rng.int(220, 420),
+    keysBreaks: krng.weighted([['full', 2], ['filtered', 2], ['none', 1]] as const),
+    keysBuild: krng.weighted([['sweep', 3], ['filtered', 1], ['none', 2]] as const),
+    keysCutoff: krng.int(600, 1600),
     // The feel: how much of the main loop's groove the one-shots and the bass take on.
     feel: rng.int(70, 100) / 100,
     // Loop variations: a top layer (or the second perc / hat loop) a little higher or lower, and
@@ -746,6 +767,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const feel = feelSrc?.groove ? stepGroove(feelSrc.groove, rules.feel) : null
   lanes.feel = feel && audible(feel) ? feel : null
   if (bass && lanes.feel) bass.groove = lanes.feel.offsets
+  if (keys && lanes.feel) keys.groove = lanes.feel.offsets
   const pitchOf = (role: Role) => role === 'perc2' ? rules.pitchPerc2 : role === 'hats2' ? rules.pitchHats2
     : rules.pitchTop && TOP_ROLES[rules.pitchTop[0]] === role ? rules.pitchTop[1] : null
   const loop = (role: Role, s: SampleListItem | null, fromBar: number, toBar: number, filter?: ClipFilter, gapBeats = 0) => {
@@ -781,7 +803,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const endOn = (job: string, role: Role, cands: SampleListItem[], endBeat: number, room: number, want: number, tonal = false,
                  gap?: number, weight?: (s: SampleListItem) => number) => {
     // Tonal FX in the key when the library has any there, even if that leaves none that fit.
-    const inKey = tonal && keys ? cands.filter((s) => s.key_label && keys.has(s.key_label)) : []
+    const inKey = tonal && tonalKeys ? cands.filter((s) => s.key_label && tonalKeys.has(s.key_label)) : []
     const fit = (inKey.length ? inKey : cands)
       .filter((s) => bodyBars(s) * 4 <= room && leads(s) && (gap == null || gapsAgree(gapOf(s), gap)))
     let s = chosen.get(job) ?? null
@@ -826,6 +848,19 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const bassPart = (from: number, to: number, filter?: ClipFilter, gapBeats = 0) => {
     if (bassSample && bassRender && to > from) {
       lanes.add('bass', { sample: bassSample, start: from * 4, length: (to - from) * 4 - gapBeats, filter, bass: bassRender })
+    }
+  }
+
+  const keysRender: BassRender | null = keys ? bassRenderOf(keys) : null
+  const keysSample: SampleListItem | null = keys && keysRender ? {
+    id: keys.midi.id > 0 ? -keys.midi.id : keys.midi.id - 2_000_000_000, rel_path: bassPath(keysRender, bpm), name: `${keys.preset.name} · ${keys.midi.name}`, kind: 'loop',
+    category: 'melodic', bpm, bars: bassBars(keys), body_bars: null, key_label: key, key_camelot: null,
+    duration_s: (bassBars(keys) * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0, rating: null, tags: null,
+    zip_id: -1, source_code: 'Serum',
+  } : null
+  const keysPart = (from: number, to: number, filter?: ClipFilter, gapBeats = 0) => {
+    if (keysSample && keysRender && to > from) {
+      lanes.add('keys', { sample: keysSample, start: from * 4, length: (to - from) * 4 - gapBeats, filter, bass: keysRender })
     }
   }
 
@@ -987,6 +1022,13 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       if (rules.ioTopSecond != null) topLayer(1, a, phraseAt(1 - rules.ioTopSecond))
     }
 
+    if (keysSample) {
+      const lp = (to: number | null = null): ClipFilter => ({ type: 'lowpass', from: rules.keysCutoff, to, q: 0.8 })
+      if (sec.kind === 'drop') keysPart(a, z, undefined, gap)
+      else if (sec.kind === 'break' && rules.keysBreaks !== 'none') keysPart(a, z, rules.keysBreaks === 'filtered' ? lp() : undefined)
+      else if (sec.kind === 'build' && rules.keysBuild !== 'none') keysPart(a, z, lp(rules.keysBuild === 'sweep' ? 8000 : null), gap)
+    }
+
     // ---- bass: the bassline repeats in drops; elsewhere low-passed or out, by the track's rules ----
     if (bassSample) {
       const lp = (to: number | null = null): ClipFilter => ({ type: 'lowpass', from: rules.bassCutoff, to, q: 0.8 })
@@ -1094,6 +1136,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   applyMix(project, opts.mix ?? {})
   const bassLane = project.lanes.find((l) => l.name === 'Bass')
   if (bassLane && bo) bassLane.duck = bo.sidechain
+  const keysLane = project.lanes.find((l) => l.name === 'Keys')
+  if (keysLane && ko) keysLane.duck = ko.sidechain
   const laneIds = new Map(LANES.map((l, i) => [l.role, project.lanes[i].id]))
   project.clips = lanes.clips(laneIds)
   const used = new Set(project.clips.map((c) => c.laneId))
@@ -1108,6 +1152,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (s.kind === 'break') choices.push(`${s.label}: ${KICK_MODE_LABEL[s.kick ?? 'out']}${s.long ? ' (long)' : ''}`)
   }
   if (bpm !== opts.bpm) choices.push(`${bpm} BPM (library ${opts.bpm})`)
+  if (keys) choices.push(`keys in drops, ${rules.keysBreaks} in breakdowns`)
   if (bass) choices.push(`bass in drops, ${rules.bassBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`)
   if (rules.phraseCrash) choices.push(rules.crash8 ? 'crash every 8 bars' : 'crash every 16 bars')
   else if (rules.crash8) choices.push('crash every 8 bars in drops')
@@ -1143,7 +1188,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
-  return { seed, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null }
+  return { seed, project, sections, key, choices, zips, picks, bass, keys, rules, template: tpl?.source ?? null }
 }
 
 /** Places an event whose main sound ends on `endBeat` (generate's endOn). */
@@ -1262,6 +1307,7 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   fills: ['phraseFill', 'dropFill', 'breakFill', 'outroFill'],
   fx: ['fx', 'dropRiser', 'breakSweep', 'fxLayers', 'dropSet'],
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
+  keys: ['keysBreaks', 'keysBuild', 'keysCutoff'],
   bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassCutoff'],
 }
 const LAYER_OF: Partial<Record<Role, Role>> = {
@@ -1288,13 +1334,13 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
   const before = g.project.clips.filter((c) => c.laneId === laneId)
   const bpm = g.project.bpm
   for (let i = 0; i < 12; i++) {
-    const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: role === 'bass' ? opts.bass : null }, seed + i * 7919, {
+    const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: role === 'bass' ? opts.bass : null, keys: role === 'keys' ? opts.keys : null }, seed + i * 7919, {
       structure: g.sections, key: g.key, picks, rules, avoid: g.project.clips.map((c) => c.sample.relPath),
     })
     const rl = r.project.lanes.find((l) => l.name === lane.name)
     const clips = rl ? r.project.clips.filter((c) => c.laneId === rl.id) : []
     if (!clips.length || sig(clips) === sig(before)) continue
-    if (role !== 'bass' && clips.every((c) => before.some((b) => b.sample.relPath === c.sample.relPath))) continue
+    if (role !== 'bass' && role !== 'keys' && clips.every((c) => before.some((b) => b.sample.relPath === c.sample.relPath))) continue
     if (role === 'bass' && r.bass && g.bass && r.bass.midi.id === g.bass.midi.id && r.bass.preset.path === g.bass.preset.path) continue
     const project = structuredClone(g.project)
     project.clips = [...project.clips.filter((c) => c.laneId !== laneId), ...clips.map((c) => ({ ...c, laneId }))]
@@ -1303,7 +1349,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     const nextRules = { ...g.rules, ...Object.fromEntries(Object.entries(r.rules).filter(([k]) => own.has(k))) }
     const byPath = new Map(all.map((s) => [s.rel_path, s]))
     const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
-    return { ...g, project, picks: nextPicks, rules: nextRules, zips, bass: role === 'bass' ? r.bass : g.bass }
+    return { ...g, project, picks: nextPicks, rules: nextRules, zips, bass: role === 'bass' ? r.bass : g.bass, keys: role === 'keys' ? r.keys : g.keys }
   }
   return null
 }

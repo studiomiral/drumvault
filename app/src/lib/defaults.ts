@@ -41,6 +41,8 @@ export const BASS_DEFAULTS = {
   favorites: [] as string[],
 }
 
+export const KEYS_DEFAULTS = { ...BASS_DEFAULTS, folders: [] as string[], favorites: [] as string[] }
+
 export type ResolvedEngineOptions = typeof ENGINE_DEFAULTS & EngineOptions
 
 export function resolveEngine(opts: EngineOptions): ResolvedEngineOptions {

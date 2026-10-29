@@ -11,6 +11,8 @@ import {
 } from '../generate/generator'
 import { bassPath } from '../audio/schedule'
 import { bassSettings, loadBass, useBass } from './bass'
+import { keysSettings, loadKeys, useKeys } from './keys'
+import { keysModel, generateKeys, generatedKeysMidi } from '../generate/keys'
 import { bassModel, generatedMidi, generateBassline, isGenerated } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
 import { newProject } from '../lib/project'
@@ -30,6 +32,7 @@ export interface GenerateSettings {
   tempo: { min: number; max: number } | null
   /** Bass on/off, its sidechain depth under the kick (0…1) and new basslines' length (null: any). */
   bass: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null }
+  keys: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null }
 }
 
 const BASS_KEY = 'drumvault.generate.bass'
@@ -40,6 +43,11 @@ function savedBass(): GenerateSettings['bass'] {
   } catch {
     return { enabled: true, sidechain: 0.6, bars: null }
   }
+}
+
+function savedKeys(): GenerateSettings['keys'] {
+  try { return { enabled: true, sidechain: 0.4, bars: null, ...JSON.parse(localStorage.getItem('drumvault.generate.keys') ?? '{}') } }
+  catch { return { enabled: true, sidechain: 0.4, bars: null } }
 }
 
 const TEMPO_KEY = 'drumvault.generate.tempo'
@@ -83,6 +91,8 @@ export interface KeepToggles {
   lanes: Role[]
   bassline: boolean
   patch: boolean
+  keysPart: boolean
+  keysPatch: boolean
 }
 
 interface GenerateState {
@@ -104,8 +114,8 @@ export const useGenerate = create<GenerateState>((set) => ({
   templates: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass() },
-  keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), keys: savedKeys() },
+  keep: { structure: false, key: false, lanes: [], bassline: false, patch: false, keysPart: false, keysPatch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
   set: (patch) => set(patch),
@@ -128,6 +138,8 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
   for (const role of k.lanes) if (g.picks[role]) picks[role] = g.picks[role]
   return {
     structure: k.structure ? g.sections : undefined, key: k.key ? g.key : undefined, picks,
+    keysMidi: k.keysPart ? g.keys?.midi : undefined, keysPreset: k.keysPatch ? g.keys?.preset : undefined,
+    keysEdit: k.keysPart && g.keys?.notes ? { notes: g.keys.notes, bars: bassBars(g.keys) } : undefined,
     bassMidi: k.bassline ? g.bass?.midi : undefined, bassPreset: k.patch ? g.bass?.preset : undefined,
     bassEdit: k.bassline && g.bass?.notes ? { notes: g.bass.notes, bars: bassBars(g.bass) } : undefined,
   }
@@ -138,7 +150,10 @@ function options(): GenerateOptions {
   const { basslines, presets } = useBass.getState()
   const bass = settings.bass.enabled && basslines.length && presets.length
     ? { midis: basslines, presets, favorites: bassSettings().favorites, sidechain: settings.bass.sidechain, bars: settings.bass.bars } : null
-  return { ...settings, bpm: bpm(), bass, templates }
+  const ks = useKeys.getState()
+  const keys = settings.keys.enabled && ks.parts.length && ks.presets.length
+    ? { midis: ks.parts, presets: ks.presets, favorites: keysSettings().favorites, sidechain: settings.keys.sidechain, bars: settings.keys.bars } : null
+  return { ...settings, bpm: bpm(), bass, keys, templates }
 }
 
 function make(seed = randomSeed()): Generation | null {
@@ -195,7 +210,7 @@ function writeBassClips(g: Generation): void {
   if (!b) return
   const bars = bassBars(b)
   for (const c of g.project.clips) {
-    if (c.type !== 'audio' || !c.bass) continue
+    if (c.type !== 'audio' || !c.bass || c.bass.role === 'keys') continue
     c.bass = bassRenderOf(b)
     c.sample = { ...c.sample, relPath: bassPath(c.bass, g.project.bpm), name: `${b.preset.name} · ${b.midi.name}`, bars,
       durationS: (bars * 4 * 60) / g.project.bpm }
@@ -240,7 +255,7 @@ export function setGenerationBass(change: Partial<GenerationBass>, g: Generation
   g.bass = { ...g.bass, ...change }
   writeBassClips(g)
   useGenerate.getState().set({ history: [...useGenerate.getState().history] })
-  void playback.reloadClips(g.project, g.project.clips.filter((c) => c.type === 'audio' && c.bass).map((c) => c.id))
+  void playback.reloadClips(g.project, g.project.clips.filter((c) => c.type === 'audio' && c.bass && c.bass.role !== 'keys').map((c) => c.id))
   invalidate()
 }
 
@@ -275,13 +290,68 @@ export function newBassline(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   return true
 }
 
+function writeKeysClips(g: Generation): void {
+  const b = g.keys
+  if (!b) return
+  const bars = bassBars(b)
+  for (const c of g.project.clips) {
+    if (c.type !== 'audio' || !c.bass || c.bass.role !== 'keys') continue
+    c.bass = bassRenderOf(b)
+    c.sample = { ...c.sample, relPath: bassPath(c.bass, g.project.bpm), name: `${b.preset.name} · ${b.midi.name}`, bars,
+      durationS: (bars * 4 * 60) / g.project.bpm }
+    c.trimBeats %= bars * 4
+  }
+}
+
+export function setGenerationKeys(change: Partial<GenerationBass>, g: Generation | null = current()): void {
+  if (!g?.keys) return
+  // Another Keys part drops the piano-roll edits of the previous one.
+  if (change.midi && change.midi.id !== g.keys.midi.id && !('notes' in change)) change = { ...change, notes: undefined, bars: undefined }
+  g.keys = { ...g.keys, ...change }
+  writeKeysClips(g)
+  useGenerate.getState().set({ history: [...useGenerate.getState().history] })
+  void playback.reloadClips(g.project, g.project.clips.filter((c) => c.type === 'audio' && c.bass && c.bass.role === 'keys').map((c) => c.id))
+  invalidate()
+}
+
+/** Keys on/off and sidechain depth: remembered; the sidechain applies to the current generation at once. */
+export function setKeysOptions(patch: Partial<GenerateSettings['keys']>): void {
+  const { settings, history, pending, set } = useGenerate.getState()
+  const keys = { ...settings.keys, ...patch }
+  set({ settings: { ...settings, keys } })
+  for (const g of [...history, pending]) {
+    const lane = g?.project.lanes.find((l) => l.name === 'Keys')
+    if (lane) lane.duck = keys.sidechain
+  }
+  try {
+    localStorage.setItem('drumvault.generate.keys', JSON.stringify(keys))
+  } catch {
+    // not remembered
+  }
+  if (patch.enabled !== undefined || patch.bars !== undefined) invalidate()
+}
+
+/**
+ * A new Keys part for the current generation: written from what the
+ * MIDI library's parts have in common, in the track key, `bars` long (else the setting's).
+ * A transpose of a line written before (an octave up, say) carries over.
+ */
+export function newKeysPart(bars: 1 | 2 | 4 | null = useGenerate.getState().settings.keys.bars): boolean {
+  const g = current()
+  const model = keysModel(useKeys.getState().parts)
+  if (!g?.keys || !model) return false
+  const line = generateKeys(model, new Rng(randomSeed()), { key: g.key, bars })
+  setGenerationKeys({ midi: generatedKeysMidi(line, g.key), transpose: isGenerated(g.keys.midi) ? g.keys.transpose : 0 })
+  return true
+}
+
 /** Options or keep toggles changed: the prefetched generation no longer fits. */
 export function invalidate(): void {
   prefetch()
 }
 
 export async function loadSamples(): Promise<void> {
-  const [samples, templates] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), loadBass()])
+  const [samples, templates] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), loadBass(), loadKeys()])
   useGenerate.getState().set({ samples, templates })
   prefetch()
 }

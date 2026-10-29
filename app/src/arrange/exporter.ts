@@ -64,6 +64,13 @@ export function midiFileName(prefix: string): string {
   return `${safeName(prefix)}_markers.mid`
 }
 
+/** Every MIDI file the export will write, also used by the overwrite check. */
+export function midiFileNames(project: Project, prefix: string): string[] {
+  return [midiFileName(prefix), ...(['bass', 'keys'] as const).filter((role) =>
+    project.clips.some((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === role))
+    .map((role) => `${safeName(prefix)}_${role === 'keys' ? 'Keys' : 'Bass'}.mid`)]
+}
+
 export async function exportStems(project: Project, o: ExportOptions,
                                   onProgress: (message: string, pct: number) => void,
                                   isCancelled: () => boolean = () => false): Promise<ExportResult> {
@@ -91,13 +98,18 @@ export async function exportStems(project: Project, o: ExportOptions,
     const data = markersMidi(project.markers, project.bpm, o.range.startBeat, o.range.endBeat, project.name)
     await api.writeExportFile(o.dir, file, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
     result.written.push(file)
-    // The bass as notes, to play through the real Serum patch in Logic.
-    if (project.clips.some((c) => c.type === 'audio' && c.bass)) {
-      const notes = bassNotes(project, await api.listMidi())
-      const bassFile = `${safeName(o.prefix)}_Bass.mid`
-      const bass = notesMidi(notes, project.bpm, o.range.startBeat, o.range.endBeat, `${project.name} Bass`)
-      await api.writeExportFile(o.dir, bassFile, bass.buffer.slice(bass.byteOffset, bass.byteOffset + bass.byteLength) as ArrayBuffer)
-      result.written.push(bassFile)
+    const roles = (['bass', 'keys'] as const).filter((role) =>
+      project.clips.some((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === role))
+    if (roles.length) {
+      const midis = await api.listMidi()
+      for (const role of roles) {
+        const label = role === 'keys' ? 'Keys' : 'Bass'
+        const notes = bassNotes(project, midis, role)
+        const partFile = `${safeName(o.prefix)}_${label}.mid`
+        const part = notesMidi(notes, project.bpm, o.range.startBeat, o.range.endBeat, `${project.name} ${label}`)
+        await api.writeExportFile(o.dir, partFile, part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength) as ArrayBuffer)
+        result.written.push(partFile)
+      }
     }
   }
   onProgress('Done', 1)

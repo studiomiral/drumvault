@@ -759,3 +759,39 @@ describe('generator: structures from real tracks', () => {
     expect(templateFrom(track('S0002', { kick: [[2, 24]] }), new Rng(1), 64, 200)).toBeNull()
   })
 })
+
+describe('Keys generation beside Bass', () => {
+  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
+    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90], [2.5, 0.5, 57, 100], [2.5, 0.5, 60, 90], [2.5, 0.5, 64, 90]], favorite: 0, source: null, source_code: null }
+  const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4, bars: 2 as const }
+  it('puts polyphonic Keys in drops, keeps DJ intro/outro clean and leaves drum choices unchanged', () => {
+    const plain = generate(LIB, OPTS, 42); const g = generate(LIB, { ...OPTS, keys }, 42)
+    expect(g.keys?.midi.role).toBe('keys'); expect(g.keys?.midi.bars).toBe(2)
+    const lane = g.project.lanes.find((l) => l.name === 'Keys')!
+    expect(lane.duck).toBe(0.4)
+    const clips = g.project.clips.filter((c) => c.laneId === lane.id)
+    expect(clips.length).toBeGreaterThan(0)
+    for (const c of clips) {
+      expect(c.type === 'audio' && c.bass?.role).toBe('keys')
+      expect(g.sections.some((s) => (s.kind === 'intro' || s.kind === 'outro') && c.start < (s.start + s.bars) * 4 && c.start + c.length > s.start * 4)).toBe(false)
+    }
+    const signature = (g: Generation) => g.project.clips.filter((c) => c.type !== 'audio' || c.bass?.role !== 'keys').map(({ id: _i, laneId: _l, ...c }) => c)
+    expect(signature(g)).toEqual(signature(plain)); expect(g.sections).toEqual(plain.sections)
+  })
+  it('keeps the Keys part and patch independently, including note edits', () => {
+    const a = generate(LIB, { ...OPTS, keys }, 41)
+    const notes: MidiItem['notes'] = [[0, 3, 69, 90], [0, 3, 72, 85], [0, 3, 76, 80]]
+    const b = generate(LIB, { ...OPTS, keys }, 42, { keysMidi: a.keys!.midi, keysPreset: a.keys!.preset, keysEdit: { notes, bars: 1 } })
+    expect(b.keys?.notes).toEqual(notes); expect(b.keys?.preset).toEqual(a.keys?.preset); expect(b.keys?.midi.id).toBe(a.keys?.midi.id)
+    const clip = b.project.clips.find((c) => c.type === 'audio' && c.bass?.role === 'keys') as AudioClip
+    expect(clip.bass?.notes).toEqual(notes); expect(clip.sample.bars).toBe(1)
+  })
+  it('rerolls Keys without changing other lanes', () => {
+    const options = { ...OPTS, keys: { ...keys, midis: [piano, { ...piano, id: 766, notes: piano.notes.map(([s, l, p, v]) => [s + 0.25, l, p, v]) as MidiItem['notes'] }] } }
+    const g = generate(LIB, options, 41); const lane = g.project.lanes.find((l) => l.name === 'Keys')!
+    const r = rerollLane(LIB, options, g, lane.id, 95)!
+    expect(r).not.toBeNull()
+    expect(r.project.clips.filter((c) => c.laneId !== lane.id)).toEqual(g.project.clips.filter((c) => c.laneId !== lane.id))
+    expect(r.keys).not.toEqual(g.keys)
+  })
+})

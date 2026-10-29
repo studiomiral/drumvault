@@ -11,6 +11,8 @@ import { useLibrary } from '../store/library'
 import { useProject } from '../store/project'
 import type { BassRender, Clip, SampleRef } from '../types/project'
 import { bassPath } from '../audio/schedule'
+import { loadKeys, useKeys } from '../store/keys'
+import { keysModel, generateKeys, generatedKeysMidi } from '../generate/keys'
 import { loadBass, useBass } from '../store/bass'
 import { bassModel, generatedMidi, generateBassline, isGenerated, keyOfLine } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
@@ -210,14 +212,14 @@ export async function swapForSimilar(): Promise<void> {
 
 // ---- bass clips (Serum 2 renders, SCOPE.md §6.7) -------------------------------------------
 
-export function hasBass(clips: Clip[]): boolean {
-  return clips.some((c) => c.type === 'audio' && !!c.bass)
+export function hasBass(clips: Clip[], role: 'bass' | 'keys' = 'bass'): boolean {
+  return clips.some((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === role)
 }
 
 /** Change the selected bass clips' render (patch, bassline, transpose); they re-render and play on. */
-export async function changeBass(label: string, change: (b: BassRender) => BassRender): Promise<void> {
+export async function changeBass(label: string, change: (b: BassRender) => BassRender, role?: 'bass' | 'keys'): Promise<void> {
   const st = useProject.getState()
-  const ids = new Set(selectedClips().filter((c) => c.type === 'audio' && c.bass).map((c) => c.id))
+  const ids = new Set(selectedClips().filter((c) => c.type === 'audio' && c.bass && (!role || (c.bass.role ?? 'bass') === role)).map((c) => c.id))
   if (!ids.size) return
   const bpm = st.project.bpm
   st.edit(label, (d) => {
@@ -228,7 +230,7 @@ export async function changeBass(label: string, change: (b: BassRender) => BassR
         delete b.notes
         delete b.bars
       }
-      const midi = useBass.getState().basslines.find((m) => m.id === b.midiId)
+      const midi = (b.role === 'keys' ? useKeys.getState().parts : useBass.getState().basslines).find((m) => m.id === b.midiId)
       c.bass = b
       c.sample.relPath = bassPath(b, bpm)
       c.sample.name = `${b.presetName} · ${b.midiName}`
@@ -247,14 +249,14 @@ export async function changeBass(label: string, change: (b: BassRender) => BassR
  * Piano roll (SCOPE.md §6.7): new notes / loop length for a bassline, applied to every bass clip
  * in the project that plays it (`notes` null: back to the imported file).
  */
-export function editBassNotes(midiId: number, notes: [number, number, number, number][] | null, bars: number | null): void {
+export function editBassNotes(midiId: number, notes: [number, number, number, number][] | null, bars: number | null, role: 'bass' | 'keys' = 'bass'): void {
   if (!notes && isGenerated(midiId)) return  // a generated line is its notes: nothing to go back to
   const st = useProject.getState()
   const bpm = st.project.bpm
-  const midi = useBass.getState().basslines.find((m) => m.id === midiId)
-  st.edit('Edit bass notes', (d) => {
+  const midi = (role === 'keys' ? useKeys.getState().parts : useBass.getState().basslines).find((m) => m.id === midiId)
+  st.edit(role === 'keys' ? 'Edit keys notes' : 'Edit bass notes', (d) => {
     for (const c of d.clips) {
-      if (c.type !== 'audio' || c.bass?.midiId !== midiId) continue
+      if (c.type !== 'audio' || c.bass?.midiId !== midiId || (c.bass.role ?? 'bass') !== role) continue
       if (notes) {
         c.bass.notes = notes
         c.bass.bars = bars ?? c.bass.bars ?? midi?.bars
@@ -268,17 +270,17 @@ export function editBassNotes(midiId: number, notes: [number, number, number, nu
       c.sample.durationS = (loop * BEATS_PER_BAR * 60) / bpm
       c.trimBeats %= loop * BEATS_PER_BAR
     }
-  }, { coalesce: `bass-notes-${midiId}` })
-  reload(useProject.getState().project.clips.filter((c) => c.type === 'audio' && c.bass?.midiId === midiId).map((c) => c.id))
+  }, { coalesce: `${role}-notes-${midiId}` })
+  reload(useProject.getState().project.clips.filter((c) => c.type === 'audio' && c.bass?.midiId === midiId && (c.bass.role ?? 'bass') === role).map((c) => c.id))
 }
 
 /** Point every clip of one bassline at another (a just-saved edit), without the edits. */
-export function switchBassline(fromMidiId: number, to: { id: number; name: string }): void {
+export function switchBassline(fromMidiId: number, to: { id: number; name: string }, role: 'bass' | 'keys' = 'bass'): void {
   const st = useProject.getState()
   const bpm = st.project.bpm
-  st.edit('Use saved bassline', (d) => {
+  st.edit(role === 'keys' ? 'Use saved keys part' : 'Use saved bassline', (d) => {
     for (const c of d.clips) {
-      if (c.type !== 'audio' || c.bass?.midiId !== fromMidiId) continue
+      if (c.type !== 'audio' || c.bass?.midiId !== fromMidiId || (c.bass.role ?? 'bass') !== role) continue
       c.bass = { ...c.bass, midiId: to.id, midiName: to.name }
       delete c.bass.notes
       delete c.bass.bars
@@ -286,7 +288,7 @@ export function switchBassline(fromMidiId: number, to: { id: number; name: strin
       c.sample.name = `${c.bass.presetName} · ${to.name}`
     }
   })
-  reload(useProject.getState().project.clips.filter((c) => c.type === 'audio' && c.bass?.midiId === to.id).map((c) => c.id))
+  reload(useProject.getState().project.clips.filter((c) => c.type === 'audio' && c.bass?.midiId === to.id && (c.bass.role ?? 'bass') === role).map((c) => c.id))
 }
 
 /**
@@ -301,7 +303,7 @@ export async function newClipBassline(): Promise<void> {
     useApp.getState().toast('info', 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.')
     return
   }
-  const first = selectedClips().find((c) => c.type === 'audio' && c.bass)
+  const first = selectedClips().find((c) => c.type === 'audio' && c.bass && c.bass.role !== 'keys')
   if (first?.type !== 'audio' || !first.bass) return
   const old = first.bass
   // A generated line's transpose (an octave up, say) carries over; an imported one's moved it into the key.
@@ -310,14 +312,45 @@ export async function newClipBassline(): Promise<void> {
   const key = keyOfLine(notes.map(([s, l, p, v]) => [s, l, p + (keepTranspose ? 0 : old.transpose), v]))
   const m = generatedMidi(generateBassline(model, new Rng(randomSeed()), { key, bars: null }), key)
   await changeBass('New bassline', (b) => ({
-    ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, transpose: keepTranspose ? b.transpose : 0,
-  }))
+    ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, keyLabel: key, transpose: keepTranspose ? b.transpose : 0,
+  }), 'bass')
+}
+
+function transposeKey(key: string, semitones: number): string {
+  const names = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+  const enharmonic: Record<string, number> = { Db: 1, 'D#': 3, Gb: 6, 'G#': 8, 'A#': 10 }
+  const base = key.replace(/m$/, '')
+  const root = enharmonic[base] ?? names.indexOf(base)
+  return `${names[((root + semitones) % 12 + 12) % 12]}${key.endsWith('m') ? 'm' : ''}`
+}
+
+export async function newClipKeysPart(): Promise<void> {
+  if (!useKeys.getState().loaded) await loadKeys()
+  const { parts } = useKeys.getState()
+  const model = keysModel(parts)
+  if (!model) {
+    useApp.getState().toast('info', 'No keys, piano or organ MIDI to learn from yet: add your MIDI zips on the MIDI page.')
+    return
+  }
+  const first = selectedClips().find((c) => c.type === 'audio' && c.bass && c.bass.role === 'keys')
+  if (first?.type !== 'audio' || !first.bass) return
+  const old = first.bass
+  // A generated line's transpose (an octave up, say) carries over; an imported one's moved it into the key.
+  const keepTranspose = isGenerated(old.midiId)
+  const notes = old.notes ?? parts.find((m) => m.id === old.midiId)?.notes ?? []
+  const key = old.keyLabel ? (keepTranspose ? old.keyLabel : transposeKey(old.keyLabel, old.transpose)) : keyOfLine(notes.map(([s, l, p, v]) => [s, l, p + (keepTranspose ? 0 : old.transpose), v]))
+  const m = generatedKeysMidi(generateKeys(model, new Rng(randomSeed()), { key, bars: null }), key)
+  await changeBass('New keys part', (b) => ({
+    ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, keyLabel: key, transpose: keepTranspose ? b.transpose : 0,
+  }), 'keys')
 }
 
 /** Next / previous / a random patch or bassline from the pool, for the selected bass clips. */
-export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random'): Promise<void> {
+export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random', role: 'bass' | 'keys' = 'bass'): Promise<void> {
   if (!useBass.getState().loaded) await loadBass()
-  const { presets, basslines } = useBass.getState()
+  if (role === 'keys' && !useKeys.getState().loaded) await loadKeys()
+  const presets = role === 'keys' ? useKeys.getState().presets : useBass.getState().presets
+  const basslines = role === 'keys' ? useKeys.getState().parts : useBass.getState().basslines
   const pickFrom = <T,>(list: T[], i: number) => {
     if (!list.length) return null
     if (dir === 'random') return list[Math.floor(Math.random() * list.length)]
@@ -325,19 +358,19 @@ export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random
   }
   if (what === 'patch') {
     if (!presets.length) {
-      useApp.getState().toast('info', 'No Serum 2 patches: choose preset folders under Settings → Bass.')
+      useApp.getState().toast('info', 'No Serum 2 patches: choose the matching preset folders in Settings.')
       return
     }
     await changeBass('Change bass patch', (b) => {
       const p = pickFrom(presets, presets.findIndex((x) => x.path === b.preset))!
       return { ...b, preset: p.path, presetName: p.name }
-    })
+    }, role)
   } else {
     if (!basslines.length) return
     await changeBass('Change bassline', (b) => {
       const m = pickFrom(basslines, basslines.findIndex((x) => x.id === b.midiId))!
       return { ...b, midiId: m.id, midiName: m.name }
-    })
+    }, role)
   }
 }
 

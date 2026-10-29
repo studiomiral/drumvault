@@ -4,7 +4,7 @@ import { BEATS_PER_BAR, canReplace, clipEnd, clipsInRange, loopBeats, makeClip, 
 import { ContextMenu, type MenuEntry } from '../components/ContextMenu'
 import {
   clipboardSample, copySelection, cutSelection, deleteSelection, duplicateSelection, hasClipboard, pasteAt, removeFades,
-  changeBass, hasBass, newClipBassline, pitchSelection, replaceWith, revealInFinder, shiftSelection, showInLibrary, splitSelectionAt, stepBass, swapForSimilar,
+  changeBass, hasBass, newClipBassline, newClipKeysPart, pitchSelection, replaceWith, revealInFinder, shiftSelection, showInLibrary, splitSelectionAt, stepBass, swapForSimilar,
 } from './commands'
 import { CATEGORY_LABELS } from '../lib/format'
 import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
@@ -521,12 +521,23 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
           ...(selClips.some((k) => k.fadeIn || k.fadeOut) ? [{ label: 'Remove fades', onClick: removeFades }] : []),
           ...(c.type === 'pattern' ? [{ label: 'Edit pattern…', onClick: () => st.openEditor(c.id) }] : []),
           'separator',
+          ...(hasBass(selClips, 'keys') ? [
+            { label: 'Edit keys notes…', onClick: () => st.openEditor(selClips.find((k) => k.type === 'audio' && k.bass?.role === 'keys')!.id) },
+            { label: 'Transpose keys up a semitone', onClick: () => void changeBass('Transpose keys', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 1) }), 'keys') },
+            { label: 'Transpose keys down a semitone', onClick: () => void changeBass('Transpose keys', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 1) }), 'keys') },
+            { label: 'Keys octave up', onClick: () => void changeBass('Transpose keys', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 12) }), 'keys') },
+            { label: 'Keys octave down', onClick: () => void changeBass('Transpose keys', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 12) }), 'keys') },
+            { label: 'Next keys patch', onClick: () => void stepBass('patch', 1, 'keys') },
+            { label: 'Previous keys patch', onClick: () => void stepBass('patch', -1, 'keys') },
+            { label: 'Random keys patch', onClick: () => void stepBass('patch', 'random', 'keys') },
+            { label: 'New keys part', onClick: () => void newClipKeysPart() },
+          ] : []),
           ...(hasBass(selClips) ? [
-            { label: 'Edit notes…', title: 'Piano roll: changes every clip of this bassline', onClick: () => st.openEditor(c.id) },
-            { label: 'Transpose up a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 1) })) },
-            { label: 'Transpose down a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 1) })) },
-            { label: 'Octave up', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 12) })) },
-            { label: 'Octave down', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 12) })) },
+            { label: 'Edit notes…', title: 'Piano roll: changes every clip of this bassline', onClick: () => st.openEditor(selClips.find((k) => k.type === 'audio' && k.bass && k.bass.role !== 'keys')!.id) },
+            { label: 'Transpose up a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 1) }), 'bass') },
+            { label: 'Transpose down a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 1) }), 'bass') },
+            { label: 'Octave up', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 12) }), 'bass') },
+            { label: 'Octave down', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 12) }), 'bass') },
             { label: 'Next bass patch', title: 'From the Serum patch pool', onClick: () => void stepBass('patch', 1) },
             { label: 'Previous bass patch', onClick: () => void stepBass('patch', -1) },
             { label: 'Random bass patch', onClick: () => void stepBass('patch', 'random') },

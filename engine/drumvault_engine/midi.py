@@ -1,8 +1,8 @@
-"""MIDI import (SCOPE.md §6.7): basslines (and later other parts) added from folders like zips.
+"""MIDI import (SCOPE.md §6.7): bass and keys parts added from folders like zips.
 
 Each file is read with mido into notes in beats from the bar of its first note, its length
-rounded up to whole bars, its key taken from the file name (or found from the notes) and its
-role (bass or other) guessed from the name and register.
+rounded up to whole bars and its key taken from the file name (or found from the notes). Its
+role (bass or keys) is the MIDI page section it was added to.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from .key import PITCH_NAMES, PROFILES, camelot, make_label, normalize_pitch, pa
 
 MIDI_EXTENSIONS = (".mid", ".midi")
 _BASS_WORDS = re.compile(r"(bass|sub|808|reese|low)", re.I)
+_KEYS_WORDS = re.compile(r"(?<![a-z])(keys?|keyboards?|piano|e[ ._-]?piano|pian|organ|rhodes|wurli|clav|chords?)(?![a-z])", re.I)
 _OTHER_WORDS = re.compile(r"(chord|pad|lead|melod|arp|keys|pian|stab|vocal|top|hook|pluck|organ|guitar|string|solo|"
                           r"synth|brass|horn|bell|flute|choir|vox)", re.I)
 # "Fm", "F#min", "Bb minor", "A_maj": a key with its scale in the name.
@@ -58,7 +59,7 @@ class MidiInfo:
     bars: int
     key_label: str | None
     key_camelot: str | None
-    role: str                      # "bass" | "other"
+    role: str                      # "bass" | "keys" | "other"
     warnings: list[str] = field(default_factory=list)
 
 
@@ -142,6 +143,8 @@ def detect_key(name: str, notes: list[Note]) -> tuple[int, str] | None:
 def guess_role(name: str, notes: list[Note], th: Thresholds) -> str:
     if _BASS_WORDS.search(name):
         return "bass"
+    if _KEYS_WORDS.search(Path(name).stem):
+        return "keys"
     if _OTHER_WORDS.search(name):
         return "other"
     median = float(np.median([n.pitch for n in notes])) if notes else 60.0

@@ -52,8 +52,8 @@ def test_analyze_reads_bars_key_and_role(tmp_path):
     c = midimod.analyze(write_midi(tmp_path / "Line_F_124.mid", f_minor_bass(1)), th)
     assert c.key_label == "Fm"
     hi = [(i * 1.0, 0.9, 72 + (i % 3) * 4) for i in range(8)]
-    assert midimod.analyze(write_midi(tmp_path / "Chords Am.mid", hi), th).role == "other"
-    assert midimod.guess_role("Organ.mid", [], th) == "other" and midimod.guess_role("Synth Bass.mid", [], th) == "bass"
+    assert midimod.analyze(write_midi(tmp_path / "Chords Am.mid", hi), th).role == "keys"
+    assert midimod.guess_role("Organ.mid", [], th) == "keys" and midimod.guess_role("Synth Bass.mid", [], th) == "bass"
 
 
 def test_a_region_exported_from_later_in_the_project_starts_on_bar_one(tmp_path):
@@ -247,14 +247,14 @@ def test_import_midi_zip_names_parts_and_shares_the_key(tmp_path):
     from drumvault_engine import zipio
     assert zipio.is_midi_zip(z)
     r = pipeline.import_midi(s, [str(z)])
-    # Only the bassline is kept; organ and piano just helped find the key.
-    assert [(m["file_name"], m["role"], m["key_label"]) for m in r["imported"]] == [("777 Bass.mid", "bass", "Fm")]
-    assert r["ignored"] == 2
+    # Bass and organ are kept in their independent training pools.
+    assert [(m["file_name"], m["role"], m["key_label"]) for m in r["imported"]] == [("777 Bass.mid", "bass", "Fm"), ("777 Organ.mid", "keys", "Fm")]
+    assert r["ignored"] == 1
     row = sqlite3.connect(lib / ".drumvault" / "library.sqlite").execute(
         "SELECT source, rel_path, original_path FROM midi_files WHERE role = 'bass'").fetchone()
     assert row[0] == "777" and row[1] == "MIDI/Bass/777-bass.mid" and row[2].endswith("777_midi.zip!Midi/Bass.mid")
     again = pipeline.import_midi(s, [str(z)])
-    assert (again["skipped"], again["imported"]) == (1, [])
+    assert (again["skipped"], again["imported"]) == (2, [])
 
 
 def test_midi_zip_takes_the_key_of_its_stem_zip(tmp_path):
@@ -287,3 +287,49 @@ def test_process_refuses_a_midi_zip_and_midi_can_be_corrected_or_deleted(tmp_pat
     rel = db.execute("SELECT rel_path FROM midi_files").fetchone()[0]
     assert pipeline.delete_midi(s, [m["id"]]) == {"deleted": 1}
     assert not (lib / rel).exists() and not db.execute("SELECT COUNT(*) FROM midi_files").fetchone()[0]
+
+@pytest.mark.parametrize("name", ["Key Cm.mid", "Keys.mid", "Piano_Am.mid", "Organ.mid", "Rhodes.mid", "Keyboard.mid", "Chords.mid", "E-Piano.mid"])
+def test_keys_roles_are_separate_from_bass(name):
+    assert midimod.guess_role(name, [], Thresholds()) == "keys"
+    assert midimod.guess_role("Bass Piano.mid", [], Thresholds()) == "bass"
+    assert midimod.guess_role("Lead.mid", [], Thresholds()) == "other"
+
+
+def test_keys_import_save_reimport_and_role_correction(tmp_path):
+    s = Settings(library_path=str(tmp_path / "lib"))
+    z = make_midi_zip(tmp_path, "keys_midi.zip", {"Piano Cm": [(0, 1, 60), (0, 1, 63), (0, 1, 67)],
+                                               "Bass Cm": [(0, 1, 36)], "Strings": [(0, 1, 84)]})
+    r = pipeline.import_midi(s, [str(z)])
+    assert sorted(m["role"] for m in r["imported"]) == ["bass", "keys"]
+    assert r["ignored"] == 1
+    with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:
+        row = db.execute("SELECT rel_path, notes FROM midi_files WHERE role = 'keys'").fetchone()
+        assert row[0].startswith("MIDI/Keys/") and len(json.loads(row[1])) == 3
+    notes = [[0, 2, 60, 110], [0, 1.5, 63, 95], [0, 1.75, 67, 90]]
+    saved = pipeline.save_midi(s, "My piano edit", notes, 1, "Cm", "keys")
+    assert saved["rel_path"].startswith("MIDI/Keys/")
+    assert pipeline.save_midi(s, "My piano edit", notes, 1, "Cm", "keys")["id"] == saved["id"]
+    restored = midimod.read_notes(Path(s.library_path) / saved["rel_path"])
+    assert [n.pitch for n in restored] == [60, 63, 67]
+    assert pipeline.import_midi(s, [str(z)])["skipped"] == 2
+    pipeline.set_midi_meta(s, saved["id"], "bass", None, False)
+    pipeline.set_midi_meta(s, saved["id"], "keys", None, False)
+    with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:
+        assert db.execute("SELECT role FROM midi_files WHERE id = ?", (saved["id"],)).fetchone()[0] == "keys"
+
+
+@pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
+def test_render_polyphonic_keys_through_serum(tmp_path):
+    s = Settings(library_path=str(tmp_path / "lib"))
+    preset_root = FACTORY_BASS.parent
+    keys_presets = sorted((preset_root / "Piano").rglob("*.SerumPreset"))
+    if not keys_presets:
+        keys_presets = sorted(preset_root.rglob("*.SerumPreset"))
+    notes = [[0, 1.5, 60, 100], [0, 1.5, 63, 90], [0, 1.5, 67, 95], [2.5, 1, 70, 90]]
+    out = ".drumvault/keys/poly.wav"
+    result = pipeline.render_bass(s, str(keys_presets[0]), -1, 0, 124, out, notes=notes, bars=1)
+    audio, sr = sf.read(Path(s.library_path) / out, always_2d=True)
+    assert audio.shape == (round(4 * 60 / 124 * sr), 2)
+    assert np.isfinite(audio).all() and np.abs(audio).max() > 0.01
+    assert result["cached"] is False
+    assert pipeline.render_bass(s, str(keys_presets[0]), -1, 0, 124, out, notes=notes, bars=1)["cached"] is True
