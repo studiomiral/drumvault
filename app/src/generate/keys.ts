@@ -2,7 +2,7 @@
 // entire voicings stay together, including inversions, extensions and per-voice articulation.
 import type { MidiItem } from '../types/api'
 import { generatedMidi, keyOfLine, type BassNote, type GeneratedLine } from './bassline'
-import { bassRoots, fitScore, harmonyOf } from './harmony'
+import { bestOf, harmonyOf, pairScore, type Line } from './harmony'
 import type { Rng } from './rng'
 
 /** The lowest note a keys part plays (C3): below it the chords muddy the bassline. */
@@ -77,22 +77,15 @@ export function learnKeys(midis: MidiItem[]): KeysModel | null {
 }
 
 /**
- * A new loop combining a learned rhythm with a learned harmonic phrase in the track key. With
- * `bass` (a bassline that stays) the part is the one of a few whose chords fit its roots best.
+ * A new loop combining a learned rhythm with a learned harmonic phrase in the track key, its own
+ * rhythm. With `bass` (the track's riff) the loop is the one of a few that goes with it best: the
+ * riff on its chords' roots, no semitone rubs. Neither part is rewritten.
  */
 export function generateKeys(model: KeysModel, rng: Rng,
-                             opts: { key: string | null; bars?: 1 | 2 | 4 | null; bass?: { notes: BassNote[]; bars: number } | null }): GeneratedLine {
-  if (!opts.bass?.notes.length) return writeKeys(model, rng, opts)
-  const tonic = harmonyOf([], 1, opts.key).tonic
-  const roots = bassRoots(opts.bass.notes, opts.bass.bars, tonic)
-  let best: GeneratedLine | null = null
-  let score = -Infinity
-  for (let i = 0; i < 12; i++) {
-    const line = writeKeys(model, rng, opts)
-    const s = fitScore(harmonyOf(line.notes, line.bars, opts.key), roots)
-    if (s > score) [best, score] = [line, s]
-  }
-  return best!
+                             opts: { key: string | null; bars?: 1 | 2 | 4 | null; bass?: Line | null }): GeneratedLine {
+  const bass = opts.bass
+  if (!bass?.notes.length) return writeKeys(model, rng, opts)
+  return bestOf(() => writeKeys(model, rng, opts), (l) => pairScore(harmonyOf(l.notes, l.bars, opts.key), bass))
 }
 
 function writeKeys(model: KeysModel, rng: Rng, opts: { key: string | null; bars?: 1 | 2 | 4 | null }): GeneratedLine {

@@ -14,8 +14,8 @@ import { bassPath } from '../audio/schedule'
 import { loadKeys, useKeys } from '../store/keys'
 import { keysModel, generateKeys, generatedKeysMidi } from '../generate/keys'
 import { loadBass, useBass } from '../store/bass'
-import { bassModel, generatedMidi, generateBassline, isGenerated, keyOfLine, type BassNote } from '../generate/bassline'
-import { harmonyOf } from '../generate/harmony'
+import { bassModel, generatedMidi, isGenerated, keyOfLine, type BassNote } from '../generate/bassline'
+import { bassFor, harmonyOf } from '../generate/harmony'
 import { Rng, randomSeed } from '../generate/rng'
 
 const plural = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`
@@ -321,9 +321,8 @@ export async function newClipBassline(): Promise<void> {
   const keepTranspose = isGenerated(old.midiId)
   const notes = old.notes ?? basslines.find((m) => m.id === old.midiId)?.notes ?? []
   const key = keyOfLine(notes.map(([s, l, p, v]) => [s, l, p + (keepTranspose ? 0 : old.transpose), v]))
-  const keys = projectPart('keys')
-  const harmony = keys ? harmonyOf(keys.notes, keys.bars, key) : null   // on the keys' chords
-  const m = generatedMidi(generateBassline(model, new Rng(randomSeed()), { key, bars: null, harmony }), key)
+  const keys = projectPart('keys')   // a riff that goes with the project's keys
+  const m = generatedMidi(bassFor(model, new Rng(randomSeed()), { key, bars: null }, keys ? harmonyOf(keys.notes, keys.bars, key) : null), key)
   await changeBass('New bassline', (b) => ({
     ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, keyLabel: key, transpose: keepTranspose ? b.transpose : 0,
   }), 'bass')
@@ -352,7 +351,7 @@ export async function newClipKeysPart(): Promise<void> {
   const keepTranspose = isGenerated(old.midiId)
   const notes = old.notes ?? parts.find((m) => m.id === old.midiId)?.notes ?? []
   const key = old.keyLabel ? (keepTranspose ? old.keyLabel : transposeKey(old.keyLabel, old.transpose)) : keyOfLine(notes.map(([s, l, p, v]) => [s, l, p + (keepTranspose ? 0 : old.transpose), v]))
-  // Chords that fit the project's bassline.
+  // A keys loop that goes with the project's bass riff.
   const m = generatedKeysMidi(generateKeys(model, new Rng(randomSeed()), { key, bars: null, bass: projectPart('bass') }), key)
   await changeBass('New keys part', (b) => ({
     ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, keyLabel: key, transpose: keepTranspose ? b.transpose : 0,

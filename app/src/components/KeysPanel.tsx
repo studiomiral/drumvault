@@ -3,7 +3,7 @@ import { api } from '../api'
 import { playback } from '../audio/engine'
 import { onBassRendering } from '../audio/tempo'
 import { bassBars, harmonyOfKeys, transposeTo, type Generation } from '../generate/generator'
-import { progressionName } from '../generate/harmony'
+import { moves, progressionName } from '../generate/harmony'
 import { Module } from './Module'
 import { isGenerated } from '../generate/bassline'
 import { attempt, useApp } from '../store/app'
@@ -60,8 +60,8 @@ export function KeysPanel({ g }: { g: Generation }) {
             </>}>
       {harmony && b && (
         <p className="text-[12px] text-muted mb-2">
-          Chords <span className="text-text">{progressionName(harmony)}</span>
-          {g.bass ? ': the bassline follows them' : ''}
+          {moves(harmony) ? 'Chords' : 'One chord'} <span className="text-text">{progressionName(harmony)}</span>
+          {g.bass ? ', picked to go with the bass riff' : ''}
         </p>
       )}
       {!loaded ? <p className="text-muted text-[12.5px]">Loading parts and patches…</p>

@@ -13,7 +13,8 @@ import { bassPath } from '../audio/schedule'
 import { bassSettings, loadBass, useBass } from './bass'
 import { keysSettings, loadKeys, useKeys } from './keys'
 import { keysModel, generateKeys, generatedKeysMidi } from '../generate/keys'
-import { bassModel, generatedMidi, generateBassline, isGenerated } from '../generate/bassline'
+import { bassModel, generatedMidi, isGenerated } from '../generate/bassline'
+import { bassFor } from '../generate/harmony'
 import { Rng, randomSeed } from '../generate/rng'
 import { newProject } from '../lib/project'
 import type { SampleListItem, TrackArrangement } from '../types/api'
@@ -285,8 +286,8 @@ export function newBassline(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   const g = current()
   const model = bassModel(useBass.getState().basslines)
   if (!g?.bass || !model) return false
-  // On the keys' chords, when the track has keys.
-  const line = generateBassline(model, new Rng(randomSeed()), { key: g.key, bars, harmony: harmonyOfKeys(g.keys, g.key) })
+  // A riff that goes with the track's keys, when it has them.
+  const line = bassFor(model, new Rng(randomSeed()), { key: g.key, bars }, harmonyOfKeys(g.keys, g.key))
   setGenerationBass({ midi: generatedMidi(line, g.key), transpose: isGenerated(g.bass.midi) ? g.bass.transpose : 0 })
   return true
 }
@@ -341,7 +342,7 @@ export function newKeysPart(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   const g = current()
   const model = keysModel(useKeys.getState().parts)
   if (!g?.keys || !model) return false
-  // Chords that fit the bassline the track has.
+  // A keys loop that goes with the track's bass riff.
   const line = generateKeys(model, new Rng(randomSeed()), { key: g.key, bars, bass: g.bass ? playedLine(g.bass) : null })
   setGenerationKeys({ midi: generatedKeysMidi(line, g.key), transpose: isGenerated(g.keys.midi) ? g.keys.transpose : 0 })
   return true

@@ -1,8 +1,10 @@
-// Harmony shared by Bass and Keys (SCOPE.md §6.7): the chords a keys part plays, half a bar at a
-// time, so the bassline follows them the way it does in a real track, and the other way round
-// (a keys part chosen to fit a bassline that is kept).
+// Bass and Keys that agree (SCOPE.md §6.7), the club house way: each part is its own learned
+// loop (the bass a riff, mostly on one chord; the keys a chord or loop with its own rhythm), and
+// nothing is rewritten to match. What this does is listen to the pair: the keys loop that goes
+// with the bass riff is chosen from a few candidates (or the riff that goes with kept keys).
 
-import { parseKey, type BassNote } from './bassline'
+import { generateBassline, parseKey, type BassModel, type BassNote, type GeneratedLine } from './bassline'
+import type { Rng } from './rng'
 
 export interface Harmony {
   bars: number
@@ -11,11 +13,17 @@ export interface Harmony {
   minor: boolean
   /** Per half bar: the chord's root in semitones from the tonic, the nearest way (−6…5). */
   roots: number[]
-  /** The keys notes (beats in the loop): what sounds when, to keep the bass off a semitone clash. */
+  /** The keys notes (beats in the loop): what sounds when. */
   notes: BassNote[]
-  /** 16th steps of the bar where short chords (stabs) start: the bass plays around them. */
-  stabs: number[]
 }
+
+export interface Line {
+  notes: BassNote[]
+  bars: number
+}
+
+/** How many candidates a part is chosen from. */
+const CANDIDATES = 12
 
 const pc = (n: number) => ((n % 12) + 12) % 12
 const nearest = (iv: number) => (pc(iv) > 5 ? pc(iv) - 12 : pc(iv))
@@ -40,7 +48,7 @@ function chordRoot(w: Map<number, number>, lowest: number, scale: number[]): num
   return best
 }
 
-/** The harmony of a keys part in `key` (its notes in beats from the loop start). */
+/** The chords of a keys part in `key` (its notes in beats from the loop start), half a bar at a time. */
 export function harmonyOf(notes: BassNote[], bars: number, key: string | null): Harmony {
   const k = parseKey(key)
   const tonic = k?.root ?? 0
@@ -61,13 +69,8 @@ export function harmonyOf(notes: BassNote[], bars: number, key: string | null): 
     roots.push(r == null ? null : nearest(r - tonic))
   }
   // A half bar without chords keeps the one before it (the first: the next one, else the tonic).
-  const first = roots.find((r) => r != null) ?? 0
-  let last = first
-  const filled = roots.map((r) => (last = r ?? last))
-  const starts = new Map<number, number>()
-  for (const [s, l] of notes) starts.set(s, Math.max(starts.get(s) ?? 0, l))
-  const stabs = [...new Set([...starts].filter(([, l]) => l < 1).map(([s]) => Math.round(s * 4) % 16))].sort((a, b) => a - b)
-  return { bars, tonic, minor, roots: filled, notes, stabs }
+  let last = roots.find((r) => r != null) ?? 0
+  return { bars, tonic, minor, roots: roots.map((r) => (last = r ?? last)), notes }
 }
 
 /** Does the harmony change at all (a progression, not one chord)? */
@@ -79,37 +82,6 @@ export function moves(h: Harmony): boolean {
 export function soundingAt(h: Harmony, beat: number): Set<number> {
   const t = ((beat % (h.bars * 4)) + h.bars * 4) % (h.bars * 4)
   return new Set(h.notes.filter(([s, l]) => s <= t + 1e-6 && t < s + l - 1e-6).map(([, , p]) => pc(p)))
-}
-
-/**
- * `iv` (semitones above the tonic) moved to the chord on `shift` by scale steps, so a bar's root,
- * 3rd, 5th and 7th stay its root, 3rd, 5th and 7th: in C minor the minor 3rd over C becomes the
- * major 3rd over Ab. A chromatic root moves everything by semitones.
- */
-export function diatonic(iv: number, shift: number, minor: boolean): number {
-  const s = minor ? NAT_MINOR : IONIAN
-  const degree = (p: number) => {
-    const d = s.findLastIndex((x) => x <= p)
-    return { d, c: p - s[d] }
-  }
-  const sh = degree(pc(shift))
-  if (sh.c) return iv + shift
-  const o = Math.floor(iv / 12)
-  const { d, c } = degree(pc(iv))
-  const n = d + sh.d
-  return (o + Math.floor(n / 7) + (shift < 0 ? -1 : 0)) * 12 + s[n % 7] + c
-}
-
-/**
- * A bass pitch kept off a semitone clash with the chord sounding: moved (two semitones at most)
- * to a chord tone, the chord's root first.
- */
-export function fitPitch(h: Harmony, pitch: number, beat: number, root: number): number {
-  const sounding = soundingAt(h, beat)
-  if (!sounding.size || sounding.has(pc(pitch))) return pitch
-  if (!sounding.has(pc(pitch + 1)) && !sounding.has(pc(pitch - 1))) return pitch
-  const options = [0, -1, 1, -2, 2].map((d) => pitch + d).filter((p) => sounding.has(pc(p)))
-  return options.find((p) => pc(p) === pc(root)) ?? options[0] ?? pitch
 }
 
 /** Where a bassline's roots are, per half bar (the note on or nearest after each half bar's start). */
@@ -124,7 +96,7 @@ export function bassRoots(notes: BassNote[], bars: number, tonic: number): numbe
 }
 
 /**
- * How well a keys part's harmony fits a bassline's roots: per half bar, the bass on the chord's
+ * How well a keys part's chords fit a bassline's roots: per half bar, the bass on the chord's
  * root counts most, on another chord tone a little, off the chord against it.
  */
 export function fitScore(h: Harmony, bass: number[]): number {
@@ -140,10 +112,52 @@ export function fitScore(h: Harmony, bass: number[]): number {
   return score / n
 }
 
+/**
+ * The share of bass notes that rub a semitone against a chord tone sounding with them (the bass
+ * note itself not in the chord), over both loops played together.
+ */
+export function clashShare(h: Harmony, bass: Line): number {
+  const span = Math.max(h.bars, bass.bars) * 4
+  let n = 0
+  let rubs = 0
+  for (let at = 0; at < span; at += bass.bars * 4) {
+    for (const [s, , p] of bass.notes) {
+      const sounding = soundingAt(h, at + s)
+      n++
+      if (sounding.size && !sounding.has(pc(p)) && (sounding.has(pc(p + 1)) || sounding.has(pc(p - 1)))) rubs++
+    }
+  }
+  return n ? rubs / n : 0
+}
+
+/** How well a keys loop and a bass loop go together: the bass on the chords' roots, without rubs. */
+export function pairScore(h: Harmony, bass: Line): number {
+  return fitScore(h, bassRoots(bass.notes, bass.bars, h.tonic)) - 4 * clashShare(h, bass)
+}
+
+/** The best of a few candidates by `score` (the first on a tie: the same seed, the same pick). */
+export function bestOf<T>(make: () => T, score: (x: T) => number, n = CANDIDATES): T {
+  let best = make()
+  let top = score(best)
+  for (let i = 1; i < n; i++) {
+    const x = make()
+    const s = score(x)
+    if (s > top) [best, top] = [x, s]
+  }
+  return best
+}
+
+/** A bass riff for keys that stay (kept, or the riff renewed under them): the one that fits them best. */
+export function bassFor(model: BassModel, rng: Rng, opts: { key: string | null; bars?: 1 | 2 | 4 | null },
+                        keys: Harmony | null): GeneratedLine {
+  if (!keys) return generateBassline(model, rng, opts)
+  return bestOf(() => generateBassline(model, rng, opts), (l) => pairScore(keys, l))
+}
+
 const MINOR_NAMES: Record<number, string> = { 0: 'i', 2: 'ii°', 3: 'III', 5: 'iv', 7: 'v', 8: 'VI', 10: 'VII', 11: 'vii°' }
 const MAJOR_NAMES: Record<number, string> = { 0: 'I', 2: 'ii', 4: 'iii', 5: 'IV', 7: 'V', 9: 'vi', 10: 'bVII', 11: 'vii°' }
 
-/** "i – VI – VII – i": the chords bar by bar (a bar that changes halfway shows both, "VI/VII"). */
+/** "i", "i – iv", "i – VI – VII – i": the chords bar by bar (a bar that changes halfway shows both, "VI/VII"). */
 export function progressionName(h: Harmony): string {
   const names = h.minor ? MINOR_NAMES : MAJOR_NAMES
   const name = (r: number) => names[pc(r)] ?? `${pc(r)}`
@@ -152,5 +166,6 @@ export function progressionName(h: Harmony): string {
     const [x, y] = [h.roots[b * 2], h.roots[b * 2 + 1]]
     bars.push(x === y ? name(x) : `${name(x)}/${name(y)}`)
   }
-  return bars.join(' – ')
+  // A loop on one chord is that chord, however many bars it lasts.
+  return bars.every((b) => b === bars[0]) ? bars[0] : bars.join(' – ')
 }

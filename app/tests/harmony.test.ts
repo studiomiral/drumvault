@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { generateBassline, learnBass, type BassNote } from '../src/generate/bassline'
-import { bassRoots, diatonic, fitScore, harmonyOf, moves, progressionName, soundingAt } from '../src/generate/harmony'
+import { bassFor, clashShare, harmonyOf, moves, pairScore, progressionName } from '../src/generate/harmony'
 import { generateKeys, learnKeys } from '../src/generate/keys'
 import { Rng } from '../src/generate/rng'
 import type { MidiItem } from '../src/types/api'
 
-const pc = (n: number) => ((n % 12) + 12) % 12
 const item = (id: number, role: 'bass' | 'keys', bars: number, notes: BassNote[], key = 'Cm'): MidiItem => ({
   id, file_name: `${id}.mid`, name: `Part ${id}`, rel_path: '', role, bars, key_label: key, key_camelot: null, notes,
   favorite: 0, source: null, source_code: null,
@@ -27,17 +26,17 @@ describe('harmony: what a keys part plays', () => {
     expect(h.roots).toEqual([0, 0, -4, -4, -2, -2, 0, 0])
     expect(progressionName(h)).toBe('i – VI – VII – i')
     expect(moves(h)).toBe(true)
-    expect(h.stabs).toEqual([])
-    expect(harmonyOf(STABS, 4, 'Cm').stabs).toEqual([2, 6, 10, 14])
     expect(progressionName(harmonyOf(chord(0, 4, [60, 64, 67]), 1, 'C'))).toBe('I')
-    expect(moves(harmonyOf(chord(0, 4, Cm7), 1, 'Cm'))).toBe(false)
+    // A club loop on one chord, stabbed in its own rhythm, is that chord.
+    const vamp = harmonyOf(STABS.filter(([s]) => s < 4).flatMap(([s, l, p, v]) => [0, 4].map((o): BassNote => [s + o, l, p, v])), 2, 'Cm')
+    expect(moves(vamp)).toBe(false)
+    expect(progressionName(vamp)).toBe('i')
   })
 
-  it('moves a bass interval by scale steps onto another chord', () => {
-    // Over Ab (the VI of C minor): the root, the minor 3rd and the 5th of C become Ab, C and Eb.
-    expect([0, 3, 7, 10, 12].map((iv) => diatonic(iv, -4, true))).toEqual([-4, 0, 3, 7, 8])
-    expect(diatonic(0, -2, true)).toBe(-2)              // Bb, the VII
-    expect(diatonic(4, 5, false)).toBe(9)               // in C major, E over F is A: the IV's 3rd
+  it('hears a bass note rub a semitone against a chord tone', () => {
+    const cm = harmonyOf(chord(0, 4, Cm7), 1, 'Cm')
+    expect(clashShare(cm, { notes: [[0, 1, 36, 100], [2, 1, 43, 100]], bars: 1 })).toBe(0)       // C and G
+    expect(clashShare(cm, { notes: [[0, 1, 36, 100], [2, 1, 47, 100]], bars: 1 })).toBe(0.5)     // B against C
   })
 })
 
@@ -49,72 +48,45 @@ const LINES: MidiItem[] = [36, 41, 43, 38, 40, 45].map((root, i) => item(10 + i,
 ['Cm', 'Fm', 'Gm', 'Dm', 'Em', 'Am'][i]))
 const bassModel = learnBass(LINES)!
 
-describe('bass on the keys\' chords', () => {
-  const h = harmonyOf(PADS, 4, 'Cm')
-  const lines = Array.from({ length: 60 }, (_, i) => generateBassline(bassModel, new Rng(500 + i), { key: 'Cm', bars: 1, harmony: h }))
+// Keys to learn from: a one-chord Cm7 loop in its own offbeat rhythm, and i – VI – VII – i pads.
+const keysModel = learnKeys([item(1, 'keys', 1, STABS.filter(([s]) => s < 4)), item(2, 'keys', 4, PADS)])!
 
-  it('is as long as the progression and plays each chord\'s root on its 1', () => {
-    for (const l of lines) {
-      expect(l.bars).toBe(4)
-      for (let bar = 0; bar < 4; bar++) {
-        const one = l.notes.find(([s]) => s === bar * 4)!
-        expect(pc(one[2])).toBe(pc([0, 8, 10, 0][bar]))   // C, Ab, Bb, C
-      }
-    }
+describe('a bass riff and keys that go together, neither rewritten', () => {
+  it('writes the riff as it would alone, at the length asked, when nothing else is kept', () => {
+    expect(bassFor(bassModel, new Rng(3), { key: 'Cm', bars: 1 }, null)).toEqual(generateBassline(bassModel, new Rng(3), { key: 'Cm', bars: 1 }))
+    const keys = harmonyOf(PADS, 4, 'Cm')
+    for (let i = 0; i < 20; i++) expect(bassFor(bassModel, new Rng(i), { key: 'Cm', bars: 1 }, keys).bars).toBe(1)
   })
 
-  it('never rubs a semitone against a chord tone that sounds', () => {
-    for (const l of lines) {
-      for (const [s, , p] of l.notes) {
-        const sounding = soundingAt(h, s)
-        if (!sounding.has(pc(p))) expect(sounding.has(pc(p + 1)) || sounding.has(pc(p - 1))).toBe(false)
-      }
+  it('picks the keys loop that goes with the riff', () => {
+    let fit = 0
+    let free = 0
+    let oneChord = 0
+    for (let i = 0; i < 40; i++) {
+      const riff = generateBassline(bassModel, new Rng(200 + i), { key: 'Cm', bars: 1 })
+      const picked = generateKeys(keysModel, new Rng(i), { key: 'Cm', bass: riff })
+      const any = generateKeys(keysModel, new Rng(i), { key: 'Cm' })
+      fit += pairScore(harmonyOf(picked.notes, picked.bars, 'Cm'), riff)
+      free += pairScore(harmonyOf(any.notes, any.bars, 'Cm'), riff)
+      if (!moves(harmonyOf(picked.notes, picked.bars, 'Cm'))) oneChord++
     }
+    expect(fit).toBeGreaterThan(free)
+    expect(oneChord).toBeGreaterThan(30)        // a riff on one chord gets keys on that chord
   })
 
-  it('plays around offbeat chord stabs', () => {
-    const stabs = harmonyOf(STABS, 4, 'Cm')
-    const onStabs = (withHarmony: boolean) => {
-      let hits = 0
-      for (let i = 0; i < 80; i++) {
-        const l = generateBassline(bassModel, new Rng(900 + i), { key: 'Cm', bars: 1, harmony: withHarmony ? stabs : null })
-        hits += l.notes.filter(([s]) => s < 4 && s > 0 && stabs.stabs.includes(Math.round(s * 4))).length
-      }
-      return hits
+  it('under kept keys, picks the riff that rubs least against them', () => {
+    const keys = harmonyOf(PADS, 4, 'Cm')
+    let fit = 0
+    let free = 0
+    for (let i = 0; i < 30; i++) {
+      fit += pairScore(keys, bassFor(bassModel, new Rng(i), { key: 'Cm', bars: 2 }, keys))
+      free += pairScore(keys, generateBassline(bassModel, new Rng(i), { key: 'Cm', bars: 2 }))
     }
-    expect(onStabs(true)).toBeLessThan(onStabs(false))
-  })
-
-  it('writes the same line as before when the track has no keys', () => {
-    expect(generateBassline(bassModel, new Rng(3), { key: 'Cm', harmony: null }))
-      .toEqual(generateBassline(bassModel, new Rng(3), { key: 'Cm' }))
+    expect(fit).toBeGreaterThan(free)
   })
 })
 
-describe('keys fitting a bassline that stays', () => {
-  // Two progressions to learn from: i – VI – VII – i and i – iv – v – i.
-  const iv = [60, 65, 68]
-  const v = [62, 67, 70]
-  const keysModel = learnKeys([
-    item(1, 'keys', 4, PADS),
-    item(2, 'keys', 4, [...chord(0, 4, Cm7), ...chord(4, 4, iv), ...chord(8, 4, v), ...chord(12, 4, Cm7)]),
-  ])!
-  // A bass on C, Ab, Bb, C.
-  const bass = { notes: [0, 8, 10, 0].map((r, b): BassNote => [b * 4, 1, 36 + r - (r > 5 ? 12 : 0), 100]), bars: 4 }
-  const roots = bassRoots(bass.notes, 4, 0)
-
-  it('picks the chords the bass plays roots of', () => {
-    expect(roots).toEqual([0, 0, -4, -4, -2, -2, 0, 0])
-    let fit = 0
-    let free = 0
-    for (let i = 0; i < 40; i++) {
-      fit += fitScore(harmonyOf(generateKeys(keysModel, new Rng(i), { key: 'Cm', bars: 4, bass }).notes, 4, 'Cm'), roots)
-      free += fitScore(harmonyOf(generateKeys(keysModel, new Rng(i), { key: 'Cm', bars: 4 }).notes, 4, 'Cm'), roots)
-    }
-    expect(fit).toBeGreaterThan(free)
-    expect(fit / 40).toBeGreaterThan(1.5)
-  })
-
+describe('keys parts', () => {
   it('stays above the bass and never holds a note into its own next hit', () => {
     const low = learnKeys([item(3, 'keys', 1, [...chord(0, 3, [36, 39, 43]), ...chord(2, 2, [36, 39, 43])])])!
     for (let i = 0; i < 20; i++) {

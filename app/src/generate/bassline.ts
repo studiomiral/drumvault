@@ -6,7 +6,6 @@
 // it. Pure and seeded: the same seed, model and key give the same line.
 
 import type { MidiItem } from '../types/api'
-import { diatonic, fitPitch, moves, type Harmony } from './harmony'
 import type { Rng } from './rng'
 
 export type BassNote = [number, number, number, number]  // start beats, length beats, pitch, velocity
@@ -231,18 +230,9 @@ export interface GeneratedLine {
  * later bars the same or varied the way the library's are (their second half turned around, or
  * the whole bar on another root), note lengths in one of the learned articulations, the root on
  * the 1 in the track key at the learned register.
- *
- * With `harmony` (the keys part's chords, SCOPE.md §6.7) the line follows the chords instead of
- * moving to another root by itself: every half bar is moved by scale steps onto its chord's root,
- * a note a semitone against the chord sounding moves to a chord tone, the main bar's rhythm is
- * the one (of a few) that leaves the keys' stabs the most room, and a moving progression makes
- * the line at least as long as it.
  */
-export function generateBassline(model: BassModel, rng: Rng,
-                                 opts: { key: string | null; bars?: 1 | 2 | 4 | null; harmony?: Harmony | null }): GeneratedLine {
-  const h = opts.harmony ?? null
-  const chosen = opts.bars ?? rng.weighted([[1, model.lengths[1] + 0.5], [2, model.lengths[2] + 1], [4, model.lengths[4] + 1]] as const)
-  const bars = (h && moves(h) ? Math.max(chosen, Math.min(4, h.bars)) : chosen) as 1 | 2 | 4
+export function generateBassline(model: BassModel, rng: Rng, opts: { key: string | null; bars?: 1 | 2 | 4 | null }): GeneratedLine {
+  const bars = opts.bars ?? rng.weighted([[1, model.lengths[1] + 0.5], [2, model.lengths[2] + 1], [4, model.lengths[4] + 1]] as const)
   const k = parseKey(opts.key)
   const minor = k?.minor ?? true
   const scale = minor ? MINOR : MAJOR
@@ -284,19 +274,9 @@ export function generateBassline(model: BassModel, rng: Rng,
 
   // ---- the main bar ----
   let main: number[] = [0]
-  const fitting: number[][] = []
-  const stabs = new Set(h?.stabs ?? [])
   for (let tries = 0; tries < 30; tries++) {
     main = rhythm(0)
-    if (main.length >= model.density[0] && main.length <= Math.max(model.density[1], model.density[0])) {
-      fitting.push(main)
-      if (!stabs.size || fitting.length >= 6) break
-    }
-  }
-  if (stabs.size && fitting.length) {
-    // Bass and chord stabs interlock: the rhythm that lands on the fewest stabs (the 1 is shared).
-    const clash = (r: number[]) => r.filter((s) => s !== 0 && stabs.has(s)).length
-    main = fitting.reduce((a, b) => (clash(b) < clash(a) ? b : a))
+    if (main.length >= model.density[0] && main.length <= Math.max(model.density[1], model.density[0])) break
   }
   // As many different notes as the library's main bars play (one, the root, is rare; two to four common).
   const colours = Math.min(main.length, rng.pick(model.colours.length ? model.colours : [3]))
@@ -317,7 +297,7 @@ export function generateBassline(model: BassModel, rng: Rng,
     if (plan[b]) {
       for (let tries = 0; tries < 12; tries++) {
         const start = Math.min(12, pickW(rng, model.from) ?? 8)
-        if (!h && start === 0 && model.barMove.size && rng.chance(model.moveShare)) {
+        if (start === 0 && model.barMove.size && rng.chance(model.moveShare)) {
           // The same bar on another root (a move to the VI, the IV, …).
           const shift = inScale(pickW(rng, model.barMove) ?? 0, scale)
           bar = bar0.map((h) => ({ step: h.step, iv: h.iv + shift }))
@@ -340,19 +320,12 @@ export function generateBassline(model: BassModel, rng: Rng,
   // ---- lengths, velocity, pitch ----
   const loop = bars * STEPS
   const at = all.map((h) => h.bar * STEPS + h.step)
-  const notes: BassNote[] = all.map((x, i) => {
+  const notes: BassNote[] = all.map((h, i) => {
     const room = (i + 1 < at.length ? at[i + 1] : loop) - at[i]
     const len = Math.max(0.75, Math.min(room, model.longest, Math.round(room * art * 4) / 4))
-    let iv = inScale(inMode(Math.max(LOW, Math.min(HIGH, x.iv)), minor), scale)
-    const vel = Math.max(1, Math.min(127, Math.round(100 * (model.velocity[x.step] ?? 1))))
-    if (!h) return [at[i] / 4, len / 4, root + iv, vel]
-    // On the chord of this half bar, then off any semitone rub with what the keys hold there.
-    const beat = at[i] / 4
-    const shift = h.roots[Math.floor((beat % (h.bars * 4)) / 2)] ?? 0
-    iv = diatonic(iv, shift, minor)
-    while (iv > HIGH) iv -= 12
-    while (iv < LOW) iv += 12
-    return [beat, len / 4, fitPitch(h, root + iv, beat, root + shift), vel]
+    const iv = inScale(inMode(Math.max(LOW, Math.min(HIGH, h.iv)), minor), scale)
+    const vel = Math.max(1, Math.min(127, Math.round(100 * (model.velocity[h.step] ?? 1))))
+    return [at[i] / 4, len / 4, root + iv, vel]
   })
   return { notes, bars }
 }
