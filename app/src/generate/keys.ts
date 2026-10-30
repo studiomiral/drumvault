@@ -2,7 +2,11 @@
 // entire voicings stay together, including inversions, extensions and per-voice articulation.
 import type { MidiItem } from '../types/api'
 import { generatedMidi, keyOfLine, type BassNote, type GeneratedLine } from './bassline'
+import { bassRoots, fitScore, harmonyOf } from './harmony'
 import type { Rng } from './rng'
+
+/** The lowest note a keys part plays (C3): below it the chords muddy the bassline. */
+const KEYS_FLOOR = 48
 
 interface Event {
   start: number
@@ -72,8 +76,26 @@ export function learnKeys(midis: MidiItem[]): KeysModel | null {
   return phrases.length ? { parts: items.length, phrases, register: median(roots), polyphony: median(sizes), onsets, lengths } : null
 }
 
-/** A new loop combining a learned rhythm with a learned harmonic phrase in the track key. */
-export function generateKeys(model: KeysModel, rng: Rng, opts: { key: string | null; bars?: 1 | 2 | 4 | null }): GeneratedLine {
+/**
+ * A new loop combining a learned rhythm with a learned harmonic phrase in the track key. With
+ * `bass` (a bassline that stays) the part is the one of a few whose chords fit its roots best.
+ */
+export function generateKeys(model: KeysModel, rng: Rng,
+                             opts: { key: string | null; bars?: 1 | 2 | 4 | null; bass?: { notes: BassNote[]; bars: number } | null }): GeneratedLine {
+  if (!opts.bass?.notes.length) return writeKeys(model, rng, opts)
+  const tonic = harmonyOf([], 1, opts.key).tonic
+  const roots = bassRoots(opts.bass.notes, opts.bass.bars, tonic)
+  let best: GeneratedLine | null = null
+  let score = -Infinity
+  for (let i = 0; i < 12; i++) {
+    const line = writeKeys(model, rng, opts)
+    const s = fitScore(harmonyOf(line.notes, line.bars, opts.key), roots)
+    if (s > score) [best, score] = [line, s]
+  }
+  return best!
+}
+
+function writeKeys(model: KeysModel, rng: Rng, opts: { key: string | null; bars?: 1 | 2 | 4 | null }): GeneratedLine {
   const bars = opts.bars ?? rng.pick(model.lengths)
   const matching = model.phrases.filter((p) => p.bars === bars)
   const pool = matching.length ? matching : model.phrases
@@ -98,7 +120,16 @@ export function generateKeys(model: KeysModel, rng: Rng, opts: { key: string | n
       })
     }
   }
-  return { bars, notes: notes.sort((a, b) => a[0] - b[0] || a[2] - b[2]) }
+  // Above the bass: the whole part up an octave while its lowest note would sit in the bass's range.
+  const lowest = Math.min(...notes.map((n) => n[2]))
+  const up = lowest < KEYS_FLOOR ? 12 * Math.ceil((KEYS_FLOOR - lowest) / 12) : 0
+  const sorted = notes.map(([s, l, p, v]): BassNote => [s, l, Math.min(127, p + up), v]).sort((a, b) => a[0] - b[0] || a[2] - b[2])
+  // One rhythm's lengths over another's chords can hold a note into its own next hit: cut it there.
+  for (let i = 0; i < sorted.length; i++) {
+    const next = sorted.slice(i + 1).find((n) => n[2] === sorted[i][2])
+    if (next && sorted[i][0] + sorted[i][1] > next[0]) sorted[i][1] = Math.max(1 / 16, next[0] - sorted[i][0])
+  }
+  return { bars, notes: sorted.filter((n, i) => !sorted.slice(0, i).some((m) => m[0] === n[0] && m[2] === n[2])) }
 }
 
 export function generatedKeysMidi(line: GeneratedLine, key: string | null): MidiItem {

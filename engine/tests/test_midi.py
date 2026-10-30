@@ -246,15 +246,17 @@ def test_import_midi_zip_names_parts_and_shares_the_key(tmp_path):
     z = make_midi_zip(tmp_path, "777_midi.zip", {"Bass": bass, "Organ": chords_fm(), "Pianist": chords_fm(1)})
     from drumvault_engine import zipio
     assert zipio.is_midi_zip(z)
-    r = pipeline.import_midi(s, [str(z)])
-    # Bass and organ are kept in their independent training pools.
-    assert [(m["file_name"], m["role"], m["key_label"]) for m in r["imported"]] == [("777 Bass.mid", "bass", "Fm"), ("777 Organ.mid", "keys", "Fm")]
-    assert r["ignored"] == 1
+    r = pipeline.import_midi(s, [str(z)], "bass")
+    # Dropped on the bass section: only the part named for it; the others helped find the key.
+    assert [(m["file_name"], m["role"], m["key_label"]) for m in r["imported"]] == [("777 Bass.mid", "bass", "Fm")]
+    assert r["ignored"] == 2
     row = sqlite3.connect(lib / ".drumvault" / "library.sqlite").execute(
         "SELECT source, rel_path, original_path FROM midi_files WHERE role = 'bass'").fetchone()
     assert row[0] == "777" and row[1] == "MIDI/Bass/777-bass.mid" and row[2].endswith("777_midi.zip!Midi/Bass.mid")
-    again = pipeline.import_midi(s, [str(z)])
-    assert (again["skipped"], again["imported"]) == (2, [])
+    keys = pipeline.import_midi(s, [str(z)], "keys")   # and on the keys section: the organ
+    assert [(m["file_name"], m["role"], m["key_label"]) for m in keys["imported"]] == [("777 Organ.mid", "keys", "Fm")]
+    again = pipeline.import_midi(s, [str(z)], "bass")
+    assert (again["skipped"], again["imported"]) == (1, [])
 
 
 def test_midi_zip_takes_the_key_of_its_stem_zip(tmp_path):
@@ -295,13 +297,24 @@ def test_keys_roles_are_separate_from_bass(name):
     assert midimod.guess_role("Lead.mid", [], Thresholds()) == "other"
 
 
+def test_a_file_dropped_on_a_section_is_that_part_whatever_its_name(tmp_path):
+    s = Settings(library_path=str(tmp_path / "lib"))
+    write_midi(tmp_path / "mine" / "Lead idea.mid", [(0, 1, 60), (0, 1, 63), (0, 1, 67), (2, 1, 58), (2, 1, 62), (2, 1, 65)])
+    write_midi(tmp_path / "mine" / "Groove 3.mid", f_minor_bass(1))
+    r = pipeline.import_midi(s, [str(tmp_path / "mine")], "keys")
+    assert sorted((m["file_name"], m["role"]) for m in r["imported"]) == [("Groove 3.mid", "keys"), ("Lead idea.mid", "keys")]
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.import_midi(s, [str(tmp_path / "mine")], "other")
+    assert midimod.named_role("Slow Chords.mid") == "keys" and midimod.named_role("Sub 2.mid") == "bass"
+
+
 def test_keys_import_save_reimport_and_role_correction(tmp_path):
     s = Settings(library_path=str(tmp_path / "lib"))
     z = make_midi_zip(tmp_path, "keys_midi.zip", {"Piano Cm": [(0, 1, 60), (0, 1, 63), (0, 1, 67)],
                                                "Bass Cm": [(0, 1, 36)], "Strings": [(0, 1, 84)]})
-    r = pipeline.import_midi(s, [str(z)])
-    assert sorted(m["role"] for m in r["imported"]) == ["bass", "keys"]
-    assert r["ignored"] == 1
+    r = pipeline.import_midi(s, [str(z)], "keys")
+    assert [m["role"] for m in r["imported"]] == ["keys"]
+    assert r["ignored"] == 2
     with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:
         row = db.execute("SELECT rel_path, notes FROM midi_files WHERE role = 'keys'").fetchone()
         assert row[0].startswith("MIDI/Keys/") and len(json.loads(row[1])) == 3
@@ -311,7 +324,7 @@ def test_keys_import_save_reimport_and_role_correction(tmp_path):
     assert pipeline.save_midi(s, "My piano edit", notes, 1, "Cm", "keys")["id"] == saved["id"]
     restored = midimod.read_notes(Path(s.library_path) / saved["rel_path"])
     assert [n.pitch for n in restored] == [60, 63, 67]
-    assert pipeline.import_midi(s, [str(z)])["skipped"] == 2
+    assert pipeline.import_midi(s, [str(z)], "keys")["skipped"] == 1
     pipeline.set_midi_meta(s, saved["id"], "bass", None, False)
     pipeline.set_midi_meta(s, saved["id"], "keys", None, False)
     with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:

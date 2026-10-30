@@ -60,7 +60,7 @@ export interface SerumPreset {
 export interface MidiImportResult {
   imported: { id: number; file_name: string; role: string; bars: number; key_label: string | null }[]
   skipped: number
-  /** Unrelated parts (bass and keys MIDI are kept). */
+  /** A zip's parts not named for the section (they only helped find its key). */
   ignored: number
   failed: string[]
 }
@@ -290,8 +290,11 @@ export interface DrumvaultAPI {
   sampleShift(sampleId: number): Promise<number>
   /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
   stretchSamples(relPaths: string[], bpm: number): Promise<void>
-  /** Add bass and keys MIDI from .mid files, MIDI zips and folders; already imported ones are skipped. */
-  importMidi(paths: string[]): Promise<MidiImportResult>
+  /**
+   * Add learning material to the MIDI page's bass or keys section from .mid files, MIDI zips and
+   * folders: every file becomes that part (from a zip of several parts, the ones named for it).
+   */
+  importMidi(paths: string[], role: 'bass' | 'keys'): Promise<MidiImportResult>
   /** File dialog for MIDI zips, .mid files and folders. */
   chooseMidi(): Promise<string[]>
   /** Correct a bassline's key (null: no key, so it isn't transposed). */

@@ -208,7 +208,7 @@ class RpcServer:
             elif method == "stretch_samples":
                 self._reply(req_id, pipeline.stretch_samples(settings, p.rel_paths, p.bpm))
             elif method == "import_midi":
-                self._reply(req_id, pipeline.import_midi(settings, p.paths))
+                self._reply(req_id, pipeline.import_midi(settings, p.paths, p.role))
             elif method == "render_bass":
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
                                                          p.notes, p.bars, p.groove))

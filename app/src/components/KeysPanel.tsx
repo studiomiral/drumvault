@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import { onBassRendering } from '../audio/tempo'
-import { bassBars, transposeTo, type Generation } from '../generate/generator'
+import { bassBars, harmonyOfKeys, transposeTo, type Generation } from '../generate/generator'
+import { progressionName } from '../generate/harmony'
+import { Module } from './Module'
 import { isGenerated } from '../generate/bassline'
 import { attempt, useApp } from '../store/app'
 import { loadKeys, useKeys, toggleFavoriteKeysPreset } from '../store/keys'
@@ -10,12 +12,13 @@ import { useGenerate, newKeysPart, setKeysOptions, setGenerationKeys } from '../
 import { PianoRoll, type RollNote } from './PianoRoll'
 import { BarSlider } from '../arrange/LaneHeaders'
 import { IconStar } from './icons'
-import { Button, cx, inputClass, SectionTitle } from './ui'
+import { Button, cx, inputClass } from './ui'
 const NO_FAVORITES: string[] = []
 
 export function KeysPanel({ g }: { g: Generation }) {
   const { parts, presets, loaded, error } = useKeys()
   const opts = useGenerate((s) => s.settings.keys)
+  const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a Keys change
   // Default outside the selector: a new [] on every read makes the store re-render forever.
   const favorites = useApp((s) => s.settings?.keys?.favorites) ?? NO_FAVORITES
@@ -38,19 +41,29 @@ export function KeysPanel({ g }: { g: Generation }) {
   const missing = !parts.length ? 'No keys, piano or organ MIDI to learn from yet: add your MIDI zips on the MIDI page.'
     : !presets.length ? 'No Serum 2 patches yet: choose preset folders under Settings → Keys.' : null
 
+  const kept = [keep.keysPart && 'part', keep.keysPatch && 'patch'].filter(Boolean).join(' and ')
+  const harmony = harmonyOfKeys(b, g.key)
+  const summary = !opts.enabled ? 'Off: G generates without keys'
+    : missing ?? (b ? <>
+        <span className="text-text">{b.midi.name}</span>
+        {harmony && <> · {progressionName(harmony)}</>} · {b.preset.name}
+        {kept && <span className="text-accent"> · keeping the {kept}</span>}
+      </> : 'On: the next generation gets keys')
+
   return (
-    <section className="rounded-2xl border border-line bg-panel-2 px-5 py-4">
-      <div className="flex items-center gap-3 mb-3">
-        <SectionTitle>Keys</SectionTitle>
-        <label className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted -mt-2">
-          <input type="checkbox" className="accent-[#e2c35f]" checked={opts.enabled}
-                 onChange={(e) => setKeysOptions({ enabled: e.target.checked })} />
-          In new generations
-        </label>
-        <span className="flex-1" />
-        {rendering && <span className="text-[11.5px] text-accent -mt-2">Rendering with Serum 2…</span>}
-        {error && <span className="text-[11.5px] text-bad -mt-2" title={error}>Engine: {error.slice(0, 80)}</span>}
-      </div>
+    <Module id="keys" title="Keys" enabled={opts.enabled} onEnabled={(on) => setKeysOptions({ enabled: on })}
+            enabledTitle={opts.enabled ? 'On: G writes a keys part for every new generation' : 'Off: new generations have no keys'}
+            summary={summary}
+            status={<>
+              {rendering && <span className="text-[11.5px] text-accent">Rendering with Serum 2…</span>}
+              {error && <span className="text-[11.5px] text-bad" title={error}>Engine: {error.slice(0, 80)}</span>}
+            </>}>
+      {harmony && b && (
+        <p className="text-[12px] text-muted mb-2">
+          Chords <span className="text-text">{progressionName(harmony)}</span>
+          {g.bass ? ': the bassline follows them' : ''}
+        </p>
+      )}
       {!loaded ? <p className="text-muted text-[12.5px]">Loading parts and patches…</p>
         : missing ? (
           <p className="text-muted text-[12.5px]">{missing}{' '}
@@ -131,7 +144,7 @@ export function KeysPanel({ g }: { g: Generation }) {
             </span>
           </div>
         )}
-    </section>
+    </Module>
   )
 }
 

@@ -275,16 +275,16 @@ function registerIpc(): void {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('stretch_samples', { rel_paths: relPaths, bpm, settings: engineSettings() }, 600_000)
   })
-  ipcMain.handle('midi:import', async (_e, paths: string[]) => {
+  ipcMain.handle('midi:import', async (_e, paths: string[], role: 'bass' | 'keys') => {
     if (!sidecar) throw new Error('Engine is not running')
     // The engine searches folders and opens MIDI zips itself.
-    const r = await sidecar.request('import_midi', { paths, settings: engineSettings() }, 600_000)
+    const r = await sidecar.request('import_midi', { paths, role, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
   })
   ipcMain.handle('dialog:midi', async () => {
     const r = await dialog.showOpenDialog(win!, {
-      title: 'Add bass and keys MIDI', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
+      title: 'Add MIDI to learn from', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
       filters: [{ name: 'MIDI zips and files', extensions: ['zip', 'mid', 'midi'] }],
     })
     return r.canceled ? [] : r.filePaths

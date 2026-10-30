@@ -137,7 +137,7 @@ export type RpcRequest =
   | { id: string; method: "restore_samples"; params: { removed_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "shift_sample"; params: { sample_id: number; beats: number; settings: EngineSettings } }
   | { id: string; method: "stretch_samples"; params: { rel_paths: string[]; bpm: number; settings: EngineSettings } }
-  | { id: string; method: "import_midi"; params: { paths: string[]; settings: EngineSettings } }
+  | { id: string; method: "import_midi"; params: { paths: string[]; role: "bass" | "keys"; settings: EngineSettings } }
   | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; settings: EngineSettings } }
   | { id: string; method: "set_midi_meta"; params: { midi_id: number; role?: string | null; key_label?: string | null; clear_key?: boolean; settings: EngineSettings } }
   | { id: string; method: "delete_midi"; params: { midi_ids: number[]; settings: EngineSettings } }

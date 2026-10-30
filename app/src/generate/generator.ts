@@ -13,7 +13,8 @@ import type { Category, SampleKind } from '../types/engine'
 import { bassPath } from '../audio/schedule'
 import type { MidiItem, SampleListItem, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, PatternClip, Project, StepGroove, Velocity } from '../types/project'
-import { bassModel, generatedMidi, generateBassline, isGenerated } from './bassline'
+import { bassModel, generatedMidi, generateBassline, isGenerated, type BassNote } from './bassline'
+import { harmonyOf, moves, progressionName, type Harmony } from './harmony'
 import { keysModel, generateKeys, generatedKeysMidi } from './keys'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
@@ -146,6 +147,18 @@ export interface GenerationBass {
   bars?: number
   /** The track's feel (16 step offsets), so the bass sits with the loops. */
   groove?: number[]
+}
+
+/** What a bass or keys part plays in the track key: its (edited) notes, transposed, and its length. */
+export function playedLine(b: Pick<GenerationBass, 'midi' | 'transpose' | 'notes' | 'bars'>): { notes: BassNote[]; bars: number } {
+  return { notes: (b.notes ?? b.midi.notes).map(([s, l, p, v]): BassNote => [s, l, p + b.transpose, v]), bars: b.bars ?? b.midi.bars }
+}
+
+/** The chords a generation's keys part plays, for the bassline to follow. */
+export function harmonyOfKeys(keys: GenerationBass | null, key: string | null): Harmony | null {
+  if (!keys) return null
+  const line = playedLine(keys)
+  return harmonyOf(line.notes, line.bars, key)
 }
 
 /** What the bass clips render for a generation's bass. */
@@ -625,25 +638,31 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (s) picks[role] = s
   }
 
-  // ---- bass: a new bassline (learned from the MIDI library's) through a Serum patch, in the track key ----
+  // ---- keys and bass (SCOPE.md §6.7): new parts learned from the MIDI page, through Serum patches,
+  // in the track key, on one harmony: the bass follows the keys' chords (or, when the bassline is
+  // kept, the keys are the part that fits it).
   const bo = opts.bass
   const model = bo?.midis.length && bo.presets.length ? bassModel(bo.midis) : null
-  const bassMidi = model ? keep.bassMidi ?? generatedMidi(generateBassline(model, rng, { key, bars: bo!.bars }), key) : null
+  const keptBass = model && keep.bassMidi
+    ? playedLine({ midi: keep.bassMidi, transpose: transposeTo(keep.bassMidi.key_label, key), ...keep.bassEdit }) : null
+  // An independent RNG keeps existing drum/bass choices stable when Keys is enabled.
+  const ko = opts.keys
+  const krng = new Rng(seed ^ 0x4b455953)
+  const km = ko?.midis.length && ko.presets.length ? keysModel(ko.midis) : null
+  const keysMidi = km ? keep.keysMidi ?? generatedKeysMidi(generateKeys(km, krng, { key, bars: ko!.bars, bass: keptBass }), key) : null
+  const keysPreset = keysMidi && ko
+    ? keep.keysPreset ?? krng.pickBy(ko.presets, (p) => 1 + (ko.favorites.includes(p.path) ? 3 : 0)) : null
+  const keys: GenerationBass | null = keysMidi && keysPreset
+    ? { midi: keysMidi, preset: keysPreset, transpose: transposeTo(keysMidi.key_label, key), ...(keep.keysMidi ? keep.keysEdit : undefined) } : null
+  const harmony = harmonyOfKeys(keys, key)
+
+  const bassMidi = model
+    ? keep.bassMidi ?? generatedMidi(generateBassline(model, rng, { key, bars: bo!.bars, harmony }), key) : null
   const bassPreset = bassMidi && bo
     ? keep.bassPreset ?? rng.pickBy(bo.presets, (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
   const bass: GenerationBass | null = bassMidi && bassPreset
     ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
-
-  // An independent RNG keeps existing drum/bass choices stable when Keys is enabled.
-  const ko = opts.keys
-  const krng = new Rng(seed ^ 0x4b455953)
-  const km = ko?.midis.length && ko.presets.length ? keysModel(ko.midis) : null
-  const keysMidi = km ? keep.keysMidi ?? generatedKeysMidi(generateKeys(km, krng, { key, bars: ko!.bars }), key) : null
-  const keysPreset = keysMidi && ko
-    ? keep.keysPreset ?? krng.pickBy(ko.presets, (p) => 1 + (ko.favorites.includes(p.path) ? 3 : 0)) : null
-  const keys: GenerationBass | null = keysMidi && keysPreset
-    ? { midi: keysMidi, preset: keysPreset, transpose: transposeTo(keysMidi.key_label, key), ...(keep.keysMidi ? keep.keysEdit : undefined) } : null
 
   const fills = pool(of('event', 'fill'))
   const rolls = pool(of('event', 'roll'))
@@ -1153,6 +1172,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   if (bpm !== opts.bpm) choices.push(`${bpm} BPM (library ${opts.bpm})`)
   if (keys) choices.push(`keys in drops, ${rules.keysBreaks} in breakdowns`)
+  if (keys && harmony) choices.push(moves(harmony) ? `keys and bass on ${progressionName(harmony)}` : `keys and bass on ${progressionName(harmony)} throughout`)
   if (bass) choices.push(`bass in drops, ${rules.bassBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`)
   if (rules.phraseCrash) choices.push(rules.crash8 ? 'crash every 8 bars' : 'crash every 16 bars')
   else if (rules.crash8) choices.push('crash every 8 bars in drops')

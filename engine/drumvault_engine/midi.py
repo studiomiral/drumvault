@@ -19,7 +19,7 @@ from .config import Thresholds
 from .key import PITCH_NAMES, PROFILES, camelot, make_label, normalize_pitch, parse_label
 
 MIDI_EXTENSIONS = (".mid", ".midi")
-_BASS_WORDS = re.compile(r"(bass|sub|808|reese|low)", re.I)
+_BASS_WORDS = re.compile(r"bass|(?<![a-z])(sub|808|reese|low)(?![a-z])", re.I)   # not "Slow Chords"
 _KEYS_WORDS = re.compile(r"(?<![a-z])(keys?|keyboards?|piano|e[ ._-]?piano|pian|organ|rhodes|wurli|clav|chords?)(?![a-z])", re.I)
 _OTHER_WORDS = re.compile(r"(chord|pad|lead|melod|arp|keys|pian|stab|vocal|top|hook|pluck|organ|guitar|string|solo|"
                           r"synth|brass|horn|bell|flute|choir|vox)", re.I)
@@ -138,6 +138,13 @@ def detect_key(name: str, notes: list[Note]) -> tuple[int, str] | None:
         best = max((s for s in scores if s[1] == pc), default=None)
         return pc, best[2] if best else "minor"
     return (scores[0][1], scores[0][2]) if scores else None
+
+
+def named_role(name: str) -> str | None:
+    """"bass" or "keys" when the part's name says so ("Sub", "Deep Chords", "Rhodes"), else None."""
+    if _BASS_WORDS.search(name):
+        return "bass"
+    return "keys" if _KEYS_WORDS.search(Path(name).stem) else None
 
 
 def guess_role(name: str, notes: list[Note], th: Thresholds) -> str:

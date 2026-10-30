@@ -185,8 +185,9 @@ class StretchSamplesParams(BaseModel):
 
 
 class ImportMidiParams(BaseModel):
-    """Add MIDI files or folders of them to the library (SCOPE.md §6.7)."""
+    """Add MIDI files or folders of them to a section of the MIDI page (SCOPE.md §6.7)."""
     paths: list[str]
+    role: Literal["bass", "keys"] = "bass"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -815,17 +815,22 @@ def _track_key(db: LibraryDB, label: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def import_midi(settings: Settings, paths: list[str]) -> dict:
-    """Add bass MIDI to the library (SCOPE.md §6.7) from loose .mid files, MIDI zips (a track's
-    parts) and folders of either. Bass and keys parts are kept (copied to MIDI/Bass/ or MIDI/Keys/, indexed with
-    bars and key); other parts are counted as ignored. Files already imported are skipped.
+def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dict:
+    """Add learning material to one section of the MIDI page (SCOPE.md §6.7), `role` "bass" or
+    "keys", from loose .mid files, MIDI zips (a track's parts) and folders of either. Every file
+    added becomes that role (copied to MIDI/Bass/ or MIDI/Keys/, indexed with bars and key); from
+    a zip with several parts only the ones named for the section are kept ("Bass", "Sub" or
+    "Chords", "Piano", "Rhodes"), the others are counted as ignored. Files already imported are
+    skipped.
 
-    A zip's bassline is named after the zip ("83686 Bass") and gets the key of the processed
+    A zip's part is named after the zip ("83686 Bass") and gets the key of the processed
     stem zip with the same name if there is one, else the key all the zip's parts together
     point to (chords and lead say more about the key than a bassline alone)."""
     import tempfile
     import zipfile
     from . import midi as midimod
+    if role not in ("bass", "keys"):
+        raise PipelineError("bad_role", f"MIDI goes to the bass or the keys section, not {role!r}")
     lib = Path(settings.library_path)
     th = settings.thresholds
     # Sources: (label for names, [(display name, bytes, original path)])
@@ -874,9 +879,8 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
                 if not info.notes:
                     failed.append(f"{name}: no notes")
                     continue
-                role = midimod.guess_role(f"{name}.mid", info.notes, th)
-                if role not in ("bass", "keys"):
-                    ignored += 1   # unrelated leads, strings, etc. are only used for key detection
+                if label and len(members) > 1 and midimod.named_role(name) != role:
+                    ignored += 1   # the zip's other parts (leads, strings, …) only help find its key
                     continue
                 sha1 = hashlib.sha1(data).hexdigest()
                 if db.midi_by_sha1(sha1):
