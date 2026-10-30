@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 Category = Literal[
     "kick", "clap", "snare", "hat", "hat_closed", "hat_open", "ride", "cymbal", "shaker",
     "perc", "top", "groove", "drums", "fill", "roll", "fx_riser", "fx_downlifter", "fx_impact",
-    "fx_sweep", "fx_atmos", "fx", "melodic", "full_mix", "ignore",
+    "fx_sweep", "fx_atmos", "fx", "melodic", "full_mix", "ignore", "disco_hit",
 ]
 ZipStatus = Literal["queued", "processing", "done", "needs_review", "error", "skipped", "cancelled"]
 SampleKind = Literal["oneshot", "loop", "event"]
@@ -106,7 +106,7 @@ class Overrides(BaseModel):
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
                  "render_bass", "serum_presets", "save_midi", "set_midi_meta",
-                 "delete_midi", "shutdown"]
+                 "delete_midi", "import_hits", "set_hit_meta", "delete_hits", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -227,6 +227,26 @@ class SaveMidiParams(BaseModel):
     bars: int = Field(ge=1, le=16)
     key_label: Optional[str] = None
     role: Literal["bass", "keys", "other"] = "bass"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportHitsParams(BaseModel):
+    """Add disco hits (SCOPE.md §6.8) from audio files, folders and zips."""
+    paths: list[str]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SetHitMetaParams(BaseModel):
+    """Correct a disco hit's key, or the semitones it plays off from the track key."""
+    hit_id: int
+    key_label: Optional[str] = None
+    clear_key: bool = False
+    pitch_fix: Optional[int] = Field(default=None, ge=-24, le=24)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteHitsParams(BaseModel):
+    hit_ids: list[int]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

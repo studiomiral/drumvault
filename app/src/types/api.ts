@@ -18,6 +18,11 @@ export interface AppSettings {
   lastProject: string | null
   /** Folder of the last stem export. */
   lastExportDir?: string | null
+  /**
+   * Serum 2's presets folder (SCOPE.md §6.7), one for every module that plays Serum patches; each
+   * module (bass, keys, …) picks its own folders under it.
+   */
+  serumPresetRoot?: string
   /** Bass (SCOPE.md §6.7): Serum 2 presets to draw patches from, and the ones you starred. */
   bass?: BassSettings
   /** Independent Serum 2 patch pool for keys, piano and organ. */
@@ -25,12 +30,14 @@ export interface AppSettings {
 }
 
 export interface BassSettings {
-  /** The Serum 2 presets folder. */
+  /** The Serum 2 presets folder: the shared `serumPresetRoot` (stored here by older versions). */
   presetRoot: string
   /** Folders under presetRoot that make up the patch pool. */
   folders: string[]
   /** Starred presets (absolute paths): picked more often. */
   favorites: string[]
+  /** Octave set for a preset in Generate (semitones, a multiple of 12, by path): kept for every next track. */
+  octaves?: Record<string, number>
 }
 
 /** An imported MIDI file (SCOPE.md §6.7). Notes: [start beats, length beats, pitch, velocity]. */
@@ -48,6 +55,29 @@ export interface MidiItem {
   /** The MIDI zip it came from ("83686"), and the processed stem zip of the same track (S0001). */
   source: string | null
   source_code: string | null
+}
+
+/** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
+export interface HitItem {
+  id: number
+  file_name: string
+  name: string
+  rel_path: string
+  key_label: string | null
+  key_camelot: string | null
+  /** Where the key came from: the file name, the sound, or set by hand. */
+  key_source: 'name' | 'detected' | 'manual' | null
+  /** Semitones on top of the move into the track key (set with the pitch slider in Generate). */
+  pitch_fix: number
+  duration_s: number
+  channels: number
+}
+
+export interface HitImportResult {
+  imported: { id: number; file_name: string; key_label: string | null; key_source: string | null }[]
+  skipped: number
+  failed: string[]
+  warnings: string[]
 }
 
 export interface SerumPreset {
@@ -303,6 +333,16 @@ export interface DrumvaultAPI {
   deleteMidi(midiIds: number[]): Promise<void>
   /** Imported MIDI files. */
   listMidi(): Promise<MidiItem[]>
+  /** Add disco hits from audio files, folders and zips (SCOPE.md §6.8). */
+  importHits(paths: string[]): Promise<HitImportResult>
+  /** File dialog for disco hits: audio files, folders, zips. */
+  chooseHits(): Promise<string[]>
+  /** Correct a hit's key (null: no key, never moved into the track key). */
+  setHitKey(hitId: number, key: string | null): Promise<void>
+  /** The semitones a hit plays off from the track key, −12…12 (a key read wrong, fixed once). */
+  setHitPitch(hitId: number, pitchFix: number): Promise<void>
+  deleteHits(hitIds: number[]): Promise<void>
+  listHits(): Promise<HitItem[]>
   /** Every processed track's arrangement (the Generate view's structure templates). */
   arrangements(): Promise<TrackArrangement[]>
   /** Preset folders under `root` with counts, and the presets in `folders`. */
@@ -349,6 +389,8 @@ export interface DrumvaultAPI {
   existingFiles(dir: string, names: string[]): Promise<string[]>
   writeExportFile(dir: string, name: string, data: ArrayBuffer): Promise<void>
   revealPath(path: string): Promise<void>
+  /** Open a folder in Finder; resolves to an error message, or '' when it opened. */
+  openFolder(path: string): Promise<string>
   /** Nearest neighbours by fingerprint (same kind, category and loop length). */
   similarSamples(sampleId: number, limit: number): Promise<(SampleListItem & { similarity: number })[]>
 

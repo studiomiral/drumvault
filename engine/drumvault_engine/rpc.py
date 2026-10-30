@@ -22,13 +22,13 @@ from typing import Any, Callable, TextIO
 
 from pydantic import ValidationError
 
-from . import __version__, key as keymod, pipeline, stretch
+from . import __version__, hits as hitsmod, key as keymod, pipeline, stretch
 from .config import Settings
 from .schemas import (
-    AnalyzeZipParams, CancelParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
-    HealthResult, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
+    AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
+    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
-    SerumPresetsParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
+    SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
@@ -41,7 +41,8 @@ DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSam
                   "stretch_samples": StretchSamplesParams, "import_midi": ImportMidiParams,
                   "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams,
                   "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
-                  "delete_midi": DeleteMidiParams}
+                  "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams,
+                  "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams}
 
 
 @dataclass
@@ -218,9 +219,15 @@ class RpcServer:
                 self._reply(req_id, pipeline.set_midi_meta(settings, p.midi_id, p.role, p.key_label, p.clear_key))
             elif method == "delete_midi":
                 self._reply(req_id, pipeline.delete_midi(settings, p.midi_ids))
+            elif method == "import_hits":
+                self._reply(req_id, hitsmod.import_hits(settings, p.paths))
+            elif method == "set_hit_meta":
+                self._reply(req_id, hitsmod.set_hit_meta(settings, p.hit_id, p.key_label, p.clear_key, p.pitch_fix))
+            elif method == "delete_hits":
+                self._reply(req_id, hitsmod.delete_hits(settings, p.hit_ids))
             else:
                 self._reply(req_id, pipeline.serum_presets(settings, p.root, p.folders))
-        except pipeline.PipelineError as e:
+        except (pipeline.PipelineError, hitsmod.HitError) as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
             log.error("%s failed:\n%s", method, traceback.format_exc())

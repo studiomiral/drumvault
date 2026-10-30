@@ -11,11 +11,12 @@ import { expandCompatible } from '../lib/camelot'
 import { BEATS_PER_BAR, makeLane, makeMarker, newProject, sampleRef, STEPS_PER_BAR, uid } from '../lib/project'
 import type { Category, SampleKind } from '../types/engine'
 import { bassPath } from '../audio/schedule'
-import type { MidiItem, SampleListItem, SerumPreset, TrackArrangement } from '../types/api'
-import type { AudioClip, BassRender, Clip, ClipFilter, PatternClip, Project, StepGroove, Velocity } from '../types/project'
+import type { HitItem, MidiItem, SampleListItem, SerumPreset, TrackArrangement } from '../types/api'
+import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generatedMidi, isGenerated, type BassNote } from './bassline'
 import { bassFor, harmonyOf, moves, progressionName, type Harmony } from './harmony'
 import { keysModel, generateKeys, generatedKeysMidi } from './keys'
+import { hitPitch, hitSample } from './disco'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
@@ -23,6 +24,7 @@ import { templateFrom } from './template'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'keys' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
+  | 'disco' | 'disco2'
 
 /** Volume per lane (dB on top of the starting mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -48,6 +50,8 @@ export const LANES: { role: Role; name: string; volumeDb: number; color: string 
   { role: 'groove', name: 'Groove', volumeDb: -8, color: '#a3e635' },
   { role: 'bass', name: 'Bass', volumeDb: -4, color: '#fda4af' },
   { role: 'keys', name: 'Keys', volumeDb: -7, color: '#c4b5fd' },
+  { role: 'disco', name: 'Disco Hit', volumeDb: -6, color: '#f0abfc' },
+  { role: 'disco2', name: 'Disco Hit 2', volumeDb: -7, color: '#f5d0fe' },
   { role: 'fills', name: 'Fills', volumeDb: -5, color: '#fb923c' },
   { role: 'fx', name: 'FX', volumeDb: -9, color: '#a78bfa' },
   { role: 'fx2', name: 'FX 2', volumeDb: -11, color: '#c4b5fd' },
@@ -88,6 +92,10 @@ export interface GenerateOptions {
   /** Bass (SCOPE.md §6.7): imported basslines and the Serum patch pool; null or empty = no bass. */
   bass?: BassOptions | null
   keys?: BassOptions | null
+  /** Reverb builds on top loops and/or keys; null or left out = none. */
+  verb?: VerbOptions | null
+  /** Disco hits (SCOPE.md §6.8) a track may drop at key moments; null or empty = none. */
+  disco?: { hits: HitItem[] } | null
   /**
    * Project tempo: a whole BPM from this range per track (min = max for a fixed one); null or
    * left out = the library BPM (`bpm`). Loops are sliced and FX stretched to it in playback.
@@ -111,9 +119,27 @@ export interface BassOptions {
   presets: SerumPreset[]
   /** Starred presets (paths): picked more often. */
   favorites: string[]
+  /** Octave per preset (semitones by path), on top of the move into the track key. */
+  octaves?: Record<string, number>
   /** Sidechain depth under the kick, 0…1. */
   sidechain: number
 }
+
+/**
+ * Reverb builds (SCOPE.md §6.6): the loops' reverb send rising into every drop and breakdown
+ * (over 2 bars), and if `every` is set also at the end of every 8 or 16 bars (over 1 bar).
+ */
+export interface VerbOptions {
+  tops: boolean
+  keys: boolean
+  every: 8 | 16 | null
+  /** The send where a build peaks, 0…1. */
+  amount: number
+}
+
+/** Bars a reverb build rises over: into drops and breakdowns, and at phrase ends. */
+const VERB_INTO_BARS = 2
+const VERB_PHRASE_BARS = 1
 
 export interface Keep {
   structure?: Section[]
@@ -372,6 +398,8 @@ interface BarPattern {
   sample: SampleListItem
   steps: Steps
   filter?: ClipFilter
+  /** Semitones (a disco hit moved into the track key). */
+  pitch?: number
 }
 
 interface Segment {
@@ -379,6 +407,7 @@ interface Segment {
   start: number    // beats
   length: number   // beats
   filter?: ClipFilter
+  verb?: ClipReverb
   bass?: BassRender
   /** Loop variations: beats into the loop at `start`, only its first bars, semitones. */
   trim?: number
@@ -396,12 +425,13 @@ function loopLen(s: Segment): number {
 function alike(a: Segment, b: Segment): boolean {
   return a.sample.id === b.sample.id && (a.pitch ?? 0) === (b.pitch ?? 0) && (a.loopBars ?? 0) === (b.loopBars ?? 0)
     && JSON.stringify(a.filter ?? null) === JSON.stringify(b.filter ?? null) && JSON.stringify(a.bass ?? null) === JSON.stringify(b.bass ?? null)
+    && JSON.stringify(a.verb ?? null) === JSON.stringify(b.verb ?? null)
 }
 
 /** Lanes whose one-shot patterns take on the track's feel (the kick and crash stay on the grid). */
 const GROOVED = new Set<Role>(['clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4'])
 
-const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}`
+const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}`
 
 class Lanes {
   bars = new Map<Role, (BarPattern | null)[]>()
@@ -443,12 +473,12 @@ class Lanes {
     return out
   }
 
-  /** Split `role`'s loops that run across `beat` into two that play on seamlessly. */
-  splitAt(role: Role, beat: number): void {
+  /** Split `role`'s loops that run across `beat` into two that play on seamlessly (`rendered`: bass and keys parts too). */
+  splitAt(role: Role, beat: number, rendered = false): void {
     const segs = this.segs.get(role)
     if (!segs) return
     this.segs.set(role, segs.flatMap((s) => {
-      if (s.sample.kind !== 'loop' || s.bass || beat <= s.start || beat >= s.start + s.length) return [s]
+      if (s.sample.kind !== 'loop' || (s.bass && !rendered) || beat <= s.start || beat >= s.start + s.length) return [s]
       const L = loopLen(s)
       const head = beat - s.start
       return [{ ...s, length: head }, { ...s, start: beat, length: s.length - head, trim: ((s.trim ?? 0) + head) % L }]
@@ -464,6 +494,22 @@ class Lanes {
       Object.assign(s, patch)
       if (s.trim) s.trim %= loopLen(s)
     }
+  }
+
+  /**
+   * A reverb build on `role`'s loops (keys parts too) over [from, to) beats: the send rising to
+   * `peak` where they stop (at `to`, or earlier when they stop before the line). False when
+   * nothing plays there.
+   */
+  swell(role: Role, from: number, to: number, peak: number): boolean {
+    this.splitAt(role, from, true)
+    this.splitAt(role, to, true)
+    const segs = (this.segs.get(role) ?? []).filter((s) => s.sample.kind === 'loop' && s.start >= from && s.start < to)
+    if (!segs.length) return false
+    const end = Math.max(...segs.map((s) => s.start + s.length))
+    const at = (beat: number) => peak * Math.min(1, (beat - from) / (end - from)) ** 2
+    for (const s of segs) s.verb = { from: at(s.start), to: at(s.start + s.length) }
+    return true
   }
 
   /** `role`'s loops stop for [from, to) beats and play on after it. */
@@ -525,6 +571,7 @@ class Lanes {
           gainDb: 0, sample: sampleRef(run.p.sample), patternBars: 1, steps: [...run.p.steps],
         }
         if (run.p.filter) c.filter = { ...run.p.filter }
+        if (run.p.pitch) c.pitch = run.p.pitch
         if (this.feel && GROOVED.has(role)) c.groove = grooveFor(this.feel, c.steps)
         out.push(c)
         run = null
@@ -560,6 +607,7 @@ class Lanes {
           sample: sampleRef(s.sample),
         }
         if (s.filter) c.filter = { ...s.filter }
+        if (s.verb) c.verb = { ...s.verb }
         if (s.bass) c.bass = { ...s.bass }
         if (s.pitch) c.pitch = s.pitch
         if (s.loopBars && s.loopBars < (s.sample.bars ?? 1)) c.loopBars = s.loopBars
@@ -653,7 +701,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const bassPreset = bassMidi && bo
     ? keep.bassPreset ?? rng.pickBy(bo.presets, (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
   const bass: GenerationBass | null = bassMidi && bassPreset
-    ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key), ...(keep.bassMidi ? keep.bassEdit : undefined) }
+    ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key) + (bo?.octaves?.[bassPreset.path] ?? 0), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
 
   // An independent RNG keeps existing drum/bass choices stable when Keys is enabled.
@@ -664,8 +712,15 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const keysPreset = keysMidi && ko
     ? keep.keysPreset ?? krng.pickBy(ko.presets, (p) => 1 + (ko.favorites.includes(p.path) ? 3 : 0)) : null
   const keys: GenerationBass | null = keysMidi && keysPreset
-    ? { midi: keysMidi, preset: keysPreset, transpose: transposeTo(keysMidi.key_label, key), ...(keep.keysMidi ? keep.keysEdit : undefined) } : null
+    ? { midi: keysMidi, preset: keysPreset, transpose: transposeTo(keysMidi.key_label, key) + (ko?.octaves?.[keysPreset.path] ?? 0), ...(keep.keysMidi ? keep.keysEdit : undefined) } : null
   const harmony = harmonyOfKeys(keys, key)
+
+  // ---- disco hits (SCOPE.md §6.8): the Disco Hits page's samples, moved into the track key. An
+  // RNG of their own keeps the rest of the track the same with or without them ----
+  const drng = new Rng(seed ^ 0x44495343)
+  const hitItems = opts.disco?.hits ?? []
+  const hitPool = hitItems.map(hitSample)
+  const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
 
   const fills = pool(of('event', 'fill'))
   const rolls = pool(of('event', 'roll'))
@@ -770,6 +825,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     keysBreaks: krng.weighted([['full', 2], ['filtered', 2], ['none', 1]] as const),
     keysBuild: krng.weighted([['sweep', 3], ['filtered', 1], ['none', 2]] as const),
     keysCutoff: krng.int(600, 1600),
+    // Disco hits in some tracks: one or two, on the 1 where each drop starts and halfway through
+    // it, or every 16 or 8 bars of the drops, or also where each breakdown starts.
+    discoIn: hitPool.length > 0 && drng.chance(0.6),
+    discoCount: drng.weighted([[1, 2], [2, 1]] as const) as number,
+    discoAt: drng.weighted([['drops', 3], ['16', 2], ['8', 1], ['all', 2]] as const),
     // The feel: how much of the main loop's groove the one-shots and the bass take on.
     feel: rng.int(70, 100) / 100,
     // Loop variations: a top layer (or the second perc / hat loop) a little higher or lower, and
@@ -1141,6 +1201,40 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     kick, fill: fills.length ? endOn : null, fills,
   })
 
+  // ---- disco hits on the 1 of key moments, taking turns when there are two (after the 8-bar
+  // variations, so the rest of the track is the same with or without them) ----
+  const avoidHits = new Set(keep.avoid)
+  const keptHit = (role: Role) => (keep.picks?.[role] ? hitPool.find((s) => s.rel_path === keep.picks![role]!.rel_path) ?? null : null)
+  const pickHit = (not: SampleListItem | null) => {
+    const cands = hitPool.filter((s) => s.rel_path !== not?.rel_path)
+    const fresh = cands.filter((s) => !avoidHits.has(s.rel_path))
+    return fresh.length ? drng.pick(fresh) : cands.length ? drng.pick(cands) : null
+  }
+  const disco1 = keptHit('disco') ?? (rules.discoIn ? pickHit(null) : null)
+  const disco2 = disco1 && (keptHit('disco2') ?? (rules.discoCount >= 2 ? pickHit(disco1) : null))
+  const discoHits = [disco1, disco2].filter((s): s is SampleListItem => !!s)
+  if (discoHits.length) {
+    const at: number[] = []
+    for (const sec of sections) {
+      const z = sec.start + sec.bars
+      if (sec.kind === 'drop') {
+        if (rules.discoAt === '16' || rules.discoAt === '8') for (let b = sec.start; b < z; b += Number(rules.discoAt)) at.push(b)
+        else {
+          at.push(sec.start)
+          const half = sec.start + Math.floor(sec.bars / 2 / PHRASE) * PHRASE
+          if (half > sec.start && half < z) at.push(half)
+        }
+      } else if (sec.kind === 'break' && rules.discoAt === 'all') at.push(sec.start)
+    }
+    at.forEach((b, i) => {
+      const s = discoHits[i % discoHits.length]
+      const pitch = hitPitch(hitOf.get(s.rel_path)!, key)
+      lanes.setBar(i % discoHits.length ? 'disco2' : 'disco', b, { sample: s, steps: steps([0]), ...(pitch ? { pitch } : {}) })
+    })
+    picks.disco = disco1!
+    if (disco2) picks.disco2 = disco2
+  }
+
   // ---- the silence before every drop: where its FX and fill stop (the producer's), or when
   // they run right up to it, the track's beat or two (FX, fills and hits ring through) ----
   rules.dropGaps = dropGaps
@@ -1149,6 +1243,25 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const t = dropGaps[s.start] ?? 0
     const sixteenths = t > TO_THE_LINE ? Math.min(t, MAX_SILENCE) : rules.dropSilence * 4
     if (sixteenths) lanes.silence(s.start * 4 - sixteenths / 4, s.start * 4, THROUGH_SILENCE)
+  }
+
+  // ---- reverb builds: on the loops still playing into each drop and break (after the silence
+  // before drops, so a build peaks where they stop and its tail rings through the gap) ----
+  const vo = opts.verb
+  const builds = { into: 0, phrase: 0 }
+  if (vo && (vo.tops || vo.keys)) {
+    const roles: Role[] = [...(vo.tops ? TOP_ROLES : []), ...(vo.keys ? ['keys' as const] : [])]
+    const ends = new Map<number, number>()  // bar → bars the build rises over
+    sections.forEach((sec, i) => {
+      const z = sec.start + sec.bars
+      const next = sections[i + 1]?.kind
+      if (next === 'drop' || next === 'break') ends.set(z, VERB_INTO_BARS)
+      if (vo.every) for (let b = sec.start + vo.every; b <= z && b < total; b += vo.every) if (!ends.has(b)) ends.set(b, VERB_PHRASE_BARS)
+    })
+    for (const [bar, n] of ends) {
+      const hit = roles.map((r) => lanes.swell(r, (bar - n) * BEATS_PER_BAR, bar * BEATS_PER_BAR, vo.amount)).some(Boolean)
+      if (hit) builds[n === VERB_INTO_BARS ? 'into' : 'phrase']++
+    }
   }
 
   // ---- the project ----
@@ -1193,6 +1306,14 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (rules.pitchTop || rules.pitchPerc2 || rules.pitchHats2) choices.push('a pitched loop layer')
   if (rules.ioShort) choices.push(`intro loops on their first ${rules.ioShort === 1 ? 'bar' : '2 bars'} at first`)
   if (varied) choices.push(`${varied} small variations at 8-bar marks`)
+  if (discoHits.length) {
+    const where = { drops: 'where drops start and halfway', 16: 'every 16 bars of drops', 8: 'every 8 bars of drops', all: 'where drops and breaks start, halfway through drops' }[rules.discoAt]
+    choices.push(`disco hit${discoHits.length > 1 ? 's' : ''} ${discoHits.map((s) => s.name).join(' and ')} ${where}`)
+  }
+  if (vo && builds.into + builds.phrase) {
+    const on = [vo.tops && 'tops', vo.keys && keys && 'keys'].filter(Boolean).join(' and ')
+    choices.push(`reverb builds on ${on}${builds.into ? ' into drops and breaks' : ''}${builds.phrase ? `${builds.into ? ',' : ''} every ${vo.every} bars` : ''}`)
+  }
   if (tops.length > 1) choices.push(`${Math.min(tops.length, tracks.tops + 1)} top loops`)
   if (claps.length > 1) choices.push(`${claps.length} layered claps`)
   if (ride) choices.push({ late: 'ride later in drop 1', second: 'ride from drop 2', both: 'ride late in drop 1, then all through' }[rules.ride])
@@ -1332,9 +1453,10 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
   keys: ['keysBreaks', 'keysBuild', 'keysCutoff'],
   bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassCutoff'],
+  disco: ['discoIn', 'discoCount', 'discoAt'],
 }
 const LAYER_OF: Partial<Record<Role, Role>> = {
-  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx',
+  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', disco2: 'disco',
 }
 
 /**

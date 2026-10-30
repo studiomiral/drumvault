@@ -5,7 +5,7 @@ import { Button, cx, Segmented } from '../components/ui'
 import { BEATS_PER_BAR, contentShift, formatPosition, loopBeats, shiftContent, PRESETS, presetSteps, resizePattern, STEPS_PER_BAR, STEPS_PER_BEAT } from '../lib/project'
 import { useProject } from '../store/project'
 import { BassEditor } from './BassEditor'
-import type { Clip, ClipFilter, PatternClip, Velocity } from '../types/project'
+import type { Clip, ClipFilter, ClipReverb, PatternClip, Velocity } from '../types/project'
 
 /** Bottom panel: step editor for the open pattern clip, or an inspector for one selected clip. */
 export function BottomPanel() {
@@ -94,6 +94,43 @@ function FilterControl({ clip }: { clip: Clip }) {
   )
 }
 
+/** Reverb build: off, or the send from the clip's start to its end (rising late). */
+function ReverbControl({ clip }: { clip: Clip }) {
+  const edit = useProject((s) => s.edit)
+  const v = clip.verb
+  const set = (label: string, next: ClipReverb | null, coalesce?: string) => edit(label, (d) => {
+    const c = d.clips.find((x) => x.id === clip.id)!
+    if (next) c.verb = next
+    else delete c.verb
+  }, { coalesce })
+  const slider = (x: number, onX: (x: number) => void, title: string) => (
+    <input type="range" min={0} max={1} step={0.01} value={x} className="w-16 accent-[#e2c35f]" title={title}
+           onChange={(e) => onX(Number(e.target.value))} />
+  )
+  const pct = (x: number) => `${Math.round(x * 100)}%`
+  return (
+    <div className="flex items-center gap-2 text-[12px] text-muted"
+         title="Sends the clip to the lane's reverb, rising from the start to the end of the clip; the tail rings on after it (and is in the stem)">
+      Reverb
+      <select className="h-6 rounded-md bg-[rgb(0_0_0/0.25)] px-1.5 text-text text-[12px] outline-none"
+              value={v ? 'on' : 'off'}
+              onChange={(e) => set(e.target.value === 'on' ? 'Reverb build' : 'Reverb off', e.target.value === 'on' ? { from: 0, to: 0.6 } : null)}>
+        <option value="off">Off</option>
+        <option value="on">Build</option>
+      </select>
+      {v && (
+        <>
+          {slider(v.from, (from) => set('Reverb build', { ...v, from }, `vf-${clip.id}`), 'Send at the clip start')}
+          <span className="w-9 tabular-nums">{pct(v.from)}</span>
+          →
+          {slider(v.to, (to) => set('Reverb build', { ...v, to }, `vt-${clip.id}`), 'Send at the clip end')}
+          <span className="w-9 tabular-nums">{pct(v.to)}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ClipInspector({ clip }: { clip: Clip }) {
   const openEditor = useProject((s) => s.openEditor)
   return (
@@ -106,6 +143,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
       <ShiftControl clip={clip} />
       <GainSlider clip={clip} />
       <FilterControl clip={clip} />
+      <ReverbControl clip={clip} />
       {clip.type === 'pattern' && <Button variant="secondary" onClick={() => openEditor(clip.id)}>Edit pattern</Button>}
     </div>
   )

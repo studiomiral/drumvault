@@ -2,9 +2,11 @@
 // offline export with an OfflineAudioContext, so both render identically.
 //
 // source → [clip filter] → clip gain → lane gain → lane duck (sidechain) → lane pan → master
+//                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
 
 import { dbToGain } from '../lib/project'
 import type { Lane } from '../types/project'
+import { createReverb, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
 export interface LaneNodes {
@@ -12,6 +14,20 @@ export interface LaneNodes {
   /** Sidechain ducking under the kick (unity unless the lane has `duck`). */
   duck: GainNode
   pan: StereoPannerNode
+  /** The lane's reverb, made when a clip first sends to it. */
+  verb?: Reverb
+}
+
+/** The lane's reverb (made on first use). */
+export function laneVerb(ctx: BaseAudioContext, nodes: LaneNodes): Reverb {
+  nodes.verb ??= createReverb(ctx, nodes.gain)
+  return nodes.verb
+}
+
+/** Drop the lane's reverb and whatever tail it still rings (stop): the next send makes a new one. */
+export function dropVerb(nodes: LaneNodes): void {
+  nodes.verb?.output.disconnect()
+  nodes.verb = undefined
 }
 
 export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNodes {
@@ -58,14 +74,14 @@ export function laneAudible(lane: Lane, lanes: Lane[]): boolean {
 }
 
 /**
- * Start one event. `when` is the context time of `ev.start`; `cutAt` (context time)
+ * Start one event on its lane. `when` is the context time of `ev.start`; `cutAt` (context time)
  * optionally ends the sound early (loop-region wrap).
  *
  * Start times and offsets are snapped to whole sample frames: Chromium interpolates
  * (and slightly dulls) sounds that start between two samples, so snapping keeps every
  * hit a bit-exact copy of the library sample, at most half a sample from the grid.
  */
-export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: AudioBuffer, dest: AudioNode,
+export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: AudioBuffer, lane: LaneNodes,
                           when: number, cutAt?: number): AudioBufferSourceNode | null {
   const sr = ctx.sampleRate
   when = Math.round(when * sr) / sr
@@ -111,7 +127,17 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   } else {
     src.connect(head)
   }
-  g.connect(dest)
+  g.connect(lane.gain)
+  if (ev.verb?.some((v) => v > 0)) {
+    // Reverb build: the send follows the clip's curve over the event (after its fades).
+    const s = ctx.createGain()
+    if (ev.verb.length === 1) s.gain.value = ev.verb[0]
+    else {
+      s.gain.value = ev.verb[0]
+      s.gain.setValueCurveAtTime(Float32Array.from(ev.verb), when, Math.max(1e-3, ev.duration ?? duration))
+    }
+    g.connect(s).connect(laneVerb(ctx, lane).input)
+  }
   src.start(when, offset, duration * rate)  // Web Audio's duration is buffer time
   return src
 }

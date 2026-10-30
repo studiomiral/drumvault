@@ -1,11 +1,11 @@
-// Keys material: imported and saved piano/organ parts and the Serum 2 patch pool (the preset
-// folders chosen in Settings), shared by Generate, Arrange and Settings.
+// Keys material: imported and saved piano/organ parts and the Serum 2 patch pool (the folders
+// chosen for Keys under the shared Serum 2 presets folder in Settings), shared by Generate, Arrange and Settings.
 
 import { create } from 'zustand'
 import { api } from '../api'
 import { KEYS_DEFAULTS } from '../lib/defaults'
 import type { BassSettings, MidiItem, SerumPreset } from '../types/api'
-import { useApp } from './app'
+import { serumPresetRoot, useApp } from './app'
 
 interface KeysState {
   parts: MidiItem[]
@@ -17,7 +17,7 @@ interface KeysState {
 export const useKeys = create<KeysState>(() => ({ parts: [], presets: [], loaded: false, error: null }))
 
 export function keysSettings(): BassSettings {
-  return { ...KEYS_DEFAULTS, ...useApp.getState().settings?.keys }
+  return { ...KEYS_DEFAULTS, ...useApp.getState().settings?.keys, presetRoot: serumPresetRoot() }
 }
 
 let loading: Promise<void> | null = null

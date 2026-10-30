@@ -17,8 +17,11 @@ import {
 import { JobTracker } from './jobs'
 import { Sidecar } from './sidecar'
 
-// Tests and parallel profiles can point the app at their own settings folder.
+// Tests and parallel profiles can point the app at their own settings folder. Otherwise settings,
+// logs and the engine's environment stay in ~/Library/Application Support/Drumvault, where they
+// were before the app was called Warehouse.
 if (process.env.DRUMVAULT_USER_DATA) app.setPath('userData', process.env.DRUMVAULT_USER_DATA)
+else app.setPath('userData', join(app.getPath('appData'), 'Drumvault'))
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
 const logFile = () => join(app.getPath('userData'), 'logs', 'engine.log')
@@ -191,7 +194,7 @@ function registerIpc(): void {
   ipcMain.handle('settings:save', (_e, patch: Partial<AppSettings>) => applySettings(patch))
   ipcMain.handle('dialog:library', async () => {
     const r = await dialog.showOpenDialog(win!, {
-      title: 'Choose the Drumvault library folder',
+      title: 'Choose the Warehouse library folder',
       buttonLabel: 'Use as library',
       properties: ['openDirectory', 'createDirectory'],
     })
@@ -305,6 +308,34 @@ function registerIpc(): void {
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
+  ipcMain.handle('hits:import', async (_e, paths: string[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request('import_hits', { paths, settings: engineSettings() }, 600_000)
+    send('library-changed')
+    return r
+  })
+  ipcMain.handle('dialog:hits', async () => {
+    const r = await dialog.showOpenDialog(win!, {
+      title: 'Add disco hits', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
+      filters: [{ name: 'Audio files and zips', extensions: ['wav', 'aif', 'aiff', 'flac', 'zip'] }],
+    })
+    return r.canceled ? [] : r.filePaths
+  })
+  ipcMain.handle('hits:key', async (_e, hitId: number, key: string | null) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('set_hit_meta', { hit_id: hitId, key_label: key, clear_key: key == null, settings: engineSettings() })
+    send('library-changed')
+  })
+  ipcMain.handle('hits:pitch', async (_e, hitId: number, pitchFix: number) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('set_hit_meta', { hit_id: hitId, pitch_fix: pitchFix, settings: engineSettings() })
+  })
+  ipcMain.handle('hits:delete', async (_e, hitIds: number[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    await sidecar.request('delete_hits', { hit_ids: hitIds, settings: engineSettings() })
+    send('library-changed')
+  })
+  ipcMain.handle('lib:hits', () => reader.listHits())
   ipcMain.handle('lib:arrangements', () => reader.arrangements())
   ipcMain.handle('serum:presets', async (_e, root: string, folders: string[] | null) => {
     if (!sidecar) throw new Error('Engine is not running')
@@ -372,6 +403,7 @@ function registerIpc(): void {
     await rename(tmp, path)
   })
   ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
+  ipcMain.handle('shell:openFolder', (_e, path: string) => shell.openPath(path))
 
   ipcMain.handle('lib:read', async (_e, relPath: string) => {
     const buf = await readFile(libraryFile(lib(), relPath))
@@ -409,7 +441,7 @@ function createWindow(): void {
     height: 920,
     minWidth: 1024,
     minHeight: 640,
-    title: 'Drumvault',
+    title: 'Warehouse',
     backgroundColor: '#1c1d20',
     // macOS: hidden title bar, traffic lights over the sidebar.
     ...(process.platform === 'darwin'
@@ -469,12 +501,13 @@ function buildMenu(): void {
     {
       label: 'View',
       submenu: [
-        { label: 'Process', accelerator: 'CmdOrCtrl+1', click: () => send('menu', 'view:process') },
+        { label: 'Drumvault', accelerator: 'CmdOrCtrl+1', click: () => send('menu', 'view:process') },
         { label: 'Library', accelerator: 'CmdOrCtrl+2', click: () => send('menu', 'view:library') },
         { label: 'Generate', accelerator: 'CmdOrCtrl+3', click: () => send('menu', 'view:generate') },
         { label: 'Arrange', accelerator: 'CmdOrCtrl+4', click: () => send('menu', 'view:arrange') },
         { label: 'Grid', accelerator: 'CmdOrCtrl+5', click: () => send('menu', 'view:grid') },
         { label: 'MIDI', accelerator: 'CmdOrCtrl+6', click: () => send('menu', 'view:midi') },
+        { label: 'Disco Hits', accelerator: 'CmdOrCtrl+7', click: () => send('menu', 'view:hits') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

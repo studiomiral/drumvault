@@ -371,7 +371,7 @@ export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random
   }
   if (what === 'patch') {
     if (!presets.length) {
-      useApp.getState().toast('info', 'No Serum 2 patches: choose the matching preset folders in Settings.')
+      useApp.getState().toast('info', 'No Serum 2 patches: tick folders for it under Settings → Serum 2.')
       return
     }
     await changeBass('Change bass patch', (b) => {

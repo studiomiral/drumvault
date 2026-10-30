@@ -24,6 +24,8 @@ export interface ScheduledEvent {
   gain: number
   /** Clip filter, with its cutoff at the event's start and end (Hz). */
   filter?: { type: BiquadFilterType; q: number; f0: number; f1: number }
+  /** Reverb send (0…1) at evenly spaced points from the event's start to its end (one value: all through). */
+  verb?: number[]
   /** The clip's fades (project seconds); the gain follows `fadeAt` over the event. */
   fade?: EventFade
   /** A 16th slice of a loop played at another tempo: tiny fades at both ends against clicks. */
@@ -167,19 +169,36 @@ function withFade(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
   return fade ? { ...ev, fade } : ev
 }
 
+/** Reverb send of a clip at project time `sec`: from `from` to `to` over the clip, rising late (squared). */
+export function verbSend(clip: Clip, bpm: number, sec: number): number {
+  const v = clip.verb!
+  const t = clamp01((sec - beatToSec(clip.start, bpm)) / beatToSec(clip.length, bpm))
+  return v.from + (v.to - v.from) * t * t
+}
+
+/** Points per 16th of an event's send curve (ramped linearly between them), at most this many. */
+const VERB_POINTS = 33
+
+function withVerb(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
+  if (!clip.verb) return ev
+  if (ev.duration == null) return { ...ev, verb: [verbSend(clip, bpm, ev.start)] }  // a hit: one send
+  const n = Math.max(2, Math.min(VERB_POINTS, Math.ceil(ev.duration / beatToSec(1 / STEPS_PER_BEAT, bpm)) + 1))
+  return { ...ev, verb: Array.from({ length: n }, (_, i) => verbSend(clip, bpm, ev.start + (ev.duration! * i) / (n - 1))) }
+}
+
 function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
               gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number,
               relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number } = {}): void {
   const rate = opts.rate ?? 1
   const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}) }
   if (start >= from - EPS && start < to - EPS) {
-    out.push(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm))
+    out.push(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
-    out.push(withFade(withFilter({
+    out.push(withVerb(withFade(withFilter({
       laneId: clip.laneId, clipId: clip.id, relPath, start: from, offset: offset + late * rate,
       duration: duration == null ? null : duration - late, gain, ...extra,
-    }, clip, bpm), clip, bpm))
+    }, clip, bpm), clip, bpm), clip, bpm))
   }
 }
 

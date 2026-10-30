@@ -8,7 +8,8 @@ import { Module } from './Module'
 import { isGenerated } from '../generate/bassline'
 import { attempt, useApp } from '../store/app'
 import { loadKeys, useKeys, toggleFavoriteKeysPreset } from '../store/keys'
-import { useGenerate, newKeysPart, setKeysOptions, setGenerationKeys } from '../store/generate'
+import { useGenerate, newKeysPart, setKeysOptions, setGenerationKeys, shiftOctave } from '../store/generate'
+import { PatchOctave } from './PatchOctave'
 import { PianoRoll, type RollNote } from './PianoRoll'
 import { BarSlider } from '../arrange/LaneHeaders'
 import { IconStar } from './icons'
@@ -39,7 +40,7 @@ export function KeysPanel({ g }: { g: Generation }) {
   }
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
   const missing = !parts.length ? 'No keys, piano or organ MIDI to learn from yet: add your MIDI zips on the MIDI page.'
-    : !presets.length ? 'No Serum 2 patches yet: choose preset folders under Settings → Keys.' : null
+    : !presets.length ? 'No Serum 2 patches yet: tick folders for Keys under Settings → Serum 2.' : null
 
   const kept = [keep.keysPart && 'part', keep.keysPatch && 'patch'].filter(Boolean).join(' and ')
   const harmony = harmonyOfKeys(b, g.key)
@@ -104,8 +105,9 @@ export function KeysPanel({ g }: { g: Generation }) {
               <button className={btn} onClick={() => setGenerationKeys({ transpose: Math.max(-24, b.transpose - 1) })}>−</button>
               <span className="w-16 text-center tabular-nums">{b.transpose > 0 ? '+' : ''}{b.transpose} st</span>
               <button className={btn} onClick={() => setGenerationKeys({ transpose: Math.min(24, b.transpose + 1) })}>+</button>
-              <button className={btn} title="Down / up an octave" onClick={() => setGenerationKeys({ transpose: Math.max(-24, b.transpose - 12) })}>−12</button>
-              <button className={btn} onClick={() => setGenerationKeys({ transpose: Math.min(24, b.transpose + 12) })}>+12</button>
+              <button className={btn} title="An octave down: the patch remembers it for the next tracks" onClick={() => void shiftOctave('keys', -12)}>−12</button>
+              <button className={btn} title="An octave up: the patch remembers it for the next tracks" onClick={() => void shiftOctave('keys', 12)}>+12</button>
+              <PatchOctave role="keys" path={b.preset.path} />
               <span className="text-faint text-[11.5px] ml-1">
                 {g.key ? `into ${g.key} (${transposeTo(b.midi.key_label, g.key) >= 0 ? '+' : ''}${transposeTo(b.midi.key_label, g.key)} st from ${b.midi.key_label ?? '?'})` : 'no track key'}
               </span>

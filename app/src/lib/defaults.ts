@@ -34,9 +34,12 @@ export const ENGINE_DEFAULTS: Required<Omit<EngineOptions, 'thresholds' | 'rubbe
   serum_plugin_name: 'Serum 2',
 }
 
-/** Bass patch pool (SCOPE.md §6.7): Serum 2's presets folder; you pick the folders in Settings. */
+/** Serum 2's presets folder, shared by the modules that play Serum patches. */
+export const SERUM_PRESET_ROOT = '/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Presets'
+
+/** Bass patch pool (SCOPE.md §6.7): folders under the Serum 2 presets folder, picked in Settings. */
 export const BASS_DEFAULTS = {
-  presetRoot: '/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Presets',
+  presetRoot: SERUM_PRESET_ROOT,
   folders: [] as string[],
   favorites: [] as string[],
 }

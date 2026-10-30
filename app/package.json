@@ -1,9 +1,9 @@
 {
   "name": "drumvault",
-  "productName": "Drumvault",
+  "productName": "Warehouse",
   "version": "0.2.0",
   "private": true,
-  "description": "Stem zips in, tempo-matched drum sample library out.",
+  "description": "Club house tracks from your own stems: the Drumvault drum library, bass, keys, disco hits and an arrangement.",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -42,7 +42,7 @@
   },
   "build": {
     "appId": "com.studiomiral.drumvault",
-    "productName": "Drumvault",
+    "productName": "Warehouse",
     "directories": {
       "output": "release",
       "buildResources": "build"

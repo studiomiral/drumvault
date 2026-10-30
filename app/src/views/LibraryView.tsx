@@ -250,7 +250,7 @@ export function LibraryView() {
           {loaded && items.length === 0 ? (
             similarTo ? <Empty title="Nothing similar">No other samples in this category{' '}to compare with.</Empty> :
             <Empty title={facets?.total ? 'No samples match' : 'The library is empty'}>
-              {facets?.total ? 'Try removing some filters.' : 'Process some zips in the Process view to fill it.'}
+              {facets?.total ? 'Try removing some filters.' : 'Process some zips on the Drumvault page to fill it.'}
             </Empty>
           ) : (
             <VirtualList

@@ -7,6 +7,8 @@ import { Button, cx, Empty, inputClass, PageTitle, SectionTitle } from '../compo
 import { Module } from '../components/Module'
 import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
 import { KeysPanel } from '../components/KeysPanel'
+import { VerbPanel } from '../components/VerbPanel'
+import { DiscoPanel } from '../components/DiscoPanel'
 import { bassBars, KEEPABLE, LANES, laneRole, transposeTo, type Generation, type Role } from '../generate/generator'
 import { isGenerated } from '../generate/bassline'
 import { PianoRoll, type RollNote } from '../components/PianoRoll'
@@ -17,8 +19,9 @@ import { laneAudible } from '../audio/graph'
 import { attempt, useApp } from '../store/app'
 import {
   attachPlayback, current, invalidate, loadSamples, newBassline, next, playSection, previous, rerollLane, saveTempo, setBassOptions,
-  setGenerationBass, setLaneVolume, toggleLane, useGenerate, type KeepToggles,
+  setGenerationBass, setLaneVolume, shiftOctave, toggleLane, useGenerate, type KeepToggles,
 } from '../store/generate'
+import { PatchOctave } from '../components/PatchOctave'
 import type { ZipListItem } from '../types/api'
 
 const ROLE_LABEL: Partial<Record<Role, string>> = Object.fromEntries(LANES.map((l) => [l.role, l.name]))
@@ -122,6 +125,8 @@ export function GenerateView() {
               <div className="grid grid-cols-1 min-[1280px]:grid-cols-2 gap-5 items-start">
                 <BassPanel g={g} />
                 <KeysPanel g={g} />
+                <VerbPanel />
+                <DiscoPanel g={g} />
               </div>
               <div className="grid grid-cols-[1fr_340px] gap-5">
                 <Details g={g} />
@@ -468,7 +473,7 @@ function BassPanel({ g }: { g: Generation }) {
   }
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
   const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.'
-    : !presets.length ? 'No Serum 2 patches yet: choose preset folders under Settings → Bass.' : null
+    : !presets.length ? 'No Serum 2 patches yet: tick folders for Bass under Settings → Serum 2.' : null
 
   const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
   const summary = !opts.enabled ? 'Off: G generates without bass'
@@ -525,8 +530,9 @@ function BassPanel({ g }: { g: Generation }) {
               <button className={btn} onClick={() => setGenerationBass({ transpose: Math.max(-24, b.transpose - 1) })}>−</button>
               <span className="w-16 text-center tabular-nums">{b.transpose > 0 ? '+' : ''}{b.transpose} st</span>
               <button className={btn} onClick={() => setGenerationBass({ transpose: Math.min(24, b.transpose + 1) })}>+</button>
-              <button className={btn} title="Down / up an octave" onClick={() => setGenerationBass({ transpose: Math.max(-24, b.transpose - 12) })}>−12</button>
-              <button className={btn} onClick={() => setGenerationBass({ transpose: Math.min(24, b.transpose + 12) })}>+12</button>
+              <button className={btn} title="An octave down: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', -12)}>−12</button>
+              <button className={btn} title="An octave up: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', 12)}>+12</button>
+              <PatchOctave role="bass" path={b.preset.path} />
               <span className="text-faint text-[11.5px] ml-1">
                 {g.key ? `into ${g.key} (${transposeTo(b.midi.key_label, g.key) >= 0 ? '+' : ''}${transposeTo(b.midi.key_label, g.key)} st from ${b.midi.key_label ?? '?'})` : 'no track key'}
               </span>

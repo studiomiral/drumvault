@@ -192,6 +192,13 @@ export function splitClip(c: Clip, beat: number): [Clip, Clip] | null {
   const right = { ...structuredClone(c), id: uid('c'), start: beat, length: c.length - d, fadeIn: undefined }
   if (left.fadeIn) left.fadeIn = Math.min(left.fadeIn, d) || undefined
   if (right.fadeOut) right.fadeOut = Math.min(right.fadeOut, right.length) || undefined
+  if (c.verb) {
+    // The reverb build carries on where it was: the left half up to the split, the right from it.
+    const t = (d / c.length) ** 2
+    const mid = c.verb.from + (c.verb.to - c.verb.from) * t
+    left.verb = { from: c.verb.from, to: mid }
+    right.verb = { from: mid, to: c.verb.to }
+  }
   if (right.type === 'audio' && c.type === 'audio') {
     const L = loopBeats(c)
     right.trimBeats = (((c.trimBeats + d) % L) + L) % L
@@ -276,7 +283,7 @@ export function serializeProject(p: Project): string {
 /** Parse and validate a .dvproj file; fills in fields added in later versions. */
 export function parseProject(text: string): Project {
   const p = JSON.parse(text) as Partial<Project>
-  if (p.format !== 'drumvault-project') throw new Error('Not a Drumvault project')
+  if (p.format !== 'drumvault-project') throw new Error('Not a Warehouse project')
   if (p.version !== 1) throw new Error(`Unsupported project version ${p.version}`)
   const now = new Date().toISOString()
   return {

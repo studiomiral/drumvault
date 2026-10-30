@@ -143,8 +143,8 @@ input, select, textarea {
 }
 
 .menu-icon {
-  width: 40px;
-  height: 40px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
   display: block;
   object-fit: contain;

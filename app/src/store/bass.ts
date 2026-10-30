@@ -5,7 +5,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { BASS_DEFAULTS } from '../lib/defaults'
 import type { BassSettings, MidiItem, SerumPreset } from '../types/api'
-import { useApp } from './app'
+import { serumPresetRoot, useApp } from './app'
 
 interface BassState {
   basslines: MidiItem[]
@@ -17,7 +17,7 @@ interface BassState {
 export const useBass = create<BassState>(() => ({ basslines: [], presets: [], loaded: false, error: null }))
 
 export function bassSettings(): BassSettings {
-  return { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass }
+  return { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot() }
 }
 
 let loading: Promise<void> | null = null

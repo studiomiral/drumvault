@@ -4,7 +4,8 @@
 export type Category =
   | "kick" | "clap" | "snare" | "hat" | "hat_closed" | "hat_open" | "ride" | "cymbal"
   | "shaker" | "perc" | "top" | "groove" | "drums" | "fill" | "roll" | "fx_riser" | "fx_downlifter"
-  | "fx_impact" | "fx_sweep" | "fx_atmos" | "fx" | "melodic" | "full_mix" | "ignore";
+  | "fx_impact" | "fx_sweep" | "fx_atmos" | "fx" | "melodic" | "full_mix" | "ignore"
+  | "disco_hit";  // the Disco Hits page's samples (their own table, never a stem's category)
 
 export type ZipStatus =
   | "queued" | "processing" | "done" | "needs_review" | "error" | "skipped" | "cancelled";
@@ -141,6 +142,9 @@ export type RpcRequest =
   | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; settings: EngineSettings } }
   | { id: string; method: "set_midi_meta"; params: { midi_id: number; role?: string | null; key_label?: string | null; clear_key?: boolean; settings: EngineSettings } }
   | { id: string; method: "delete_midi"; params: { midi_ids: number[]; settings: EngineSettings } }
+  | { id: string; method: "import_hits"; params: { paths: string[]; settings: EngineSettings } }
+  | { id: string; method: "set_hit_meta"; params: { hit_id: number; key_label?: string | null; clear_key?: boolean; pitch_fix?: number | null; settings: EngineSettings } }
+  | { id: string; method: "delete_hits"; params: { hit_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; role?: string; settings: EngineSettings } }
   | { id: string; method: "serum_presets"; params: { root: string; folders: string[] | null; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }

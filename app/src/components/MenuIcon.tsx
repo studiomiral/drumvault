@@ -2,21 +2,22 @@ import type { View } from '../store/app'
 
 export type MenuIconName = View | 'shortcuts'
 
-// Render directly from the full-resolution artwork. Pre-shrinking the transparent
-// renders introduced edge ringing before Chromium's final display-size reduction.
-// Explicit URLs also bundle the source images into packaged Electron builds.
+// Flat SVG artwork stays sharp at every display density. Explicit URLs let Vite
+// bundle the same assets into development and packaged Electron builds.
 const artwork: Record<MenuIconName, string> = {
-  process: new URL('../../artwork/menu-3d/process.png', import.meta.url).href,
-  library: new URL('../../artwork/menu-3d/library.png', import.meta.url).href,
-  grid: new URL('../../artwork/menu-3d/grid-waveform.png', import.meta.url).href,
-  midi: new URL('../../artwork/menu-3d/midi.png', import.meta.url).href,
-  generate: new URL('../../artwork/menu-3d/generate.png', import.meta.url).href,
-  arrange: new URL('../../artwork/menu-3d/arrange.png', import.meta.url).href,
-  settings: new URL('../../artwork/menu-3d/settings.png', import.meta.url).href,
-  shortcuts: new URL('../../artwork/menu-3d/shortcuts.png', import.meta.url).href,
+  process: new URL('../assets/menu-flat/process.svg', import.meta.url).href,
+  library: new URL('../assets/menu-flat/library.svg', import.meta.url).href,
+  grid: new URL('../assets/menu-flat/grid.svg', import.meta.url).href,
+  midi: new URL('../assets/menu-flat/midi.svg', import.meta.url).href,
+  // Disco Hits: the Library's artwork until it has its own.
+  hits: new URL('../assets/menu-flat/library.svg', import.meta.url).href,
+  generate: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
+  arrange: new URL('../assets/menu-flat/arrange.svg', import.meta.url).href,
+  settings: new URL('../assets/menu-flat/settings.svg', import.meta.url).href,
+  shortcuts: new URL('../assets/menu-flat/shortcuts.svg', import.meta.url).href,
 }
 
 export function MenuIcon({ name }: { name: MenuIconName }) {
-  return <img src={artwork[name]} alt="" aria-hidden="true" draggable={false} width={40} height={40}
+  return <img src={artwork[name]} alt="" aria-hidden="true" draggable={false} width={24} height={24}
               className="menu-icon" />
 }

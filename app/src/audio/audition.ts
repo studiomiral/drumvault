@@ -10,6 +10,8 @@ export interface Playable {
   rel_path: string
   kind: SampleKind
   bars?: number | null
+  /** One-shots: played this much faster or slower (a pitched disco hit); 1 when left out. */
+  rate?: number
 }
 
 type Listener = (playingId: number | null) => void
@@ -41,10 +43,11 @@ class Audition {
     const done = () => {
       if (this.token === token) this.setPlaying(null)
     }
-    if (playback.auditionSynced(buf, s.kind, s.bars ?? null, done)) return
+    if (playback.auditionSynced(buf, s.kind, s.bars ?? null, done, s.rate)) return
     const src = ctx.createBufferSource()
     src.buffer = buf
     src.loop = s.kind === 'loop'
+    if (s.rate && s.kind !== 'loop') src.playbackRate.value = s.rate
     src.connect(ctx.destination)
     src.onended = () => {
       if (this.source === src) {

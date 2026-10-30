@@ -7,19 +7,21 @@ import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
   applyMix, bassBars, bassRenderOf, generate, harmonyOfKeys, LANES, playedLine, rerollLane as rerollSounds, type GenerateOptions, type Generation, type GenerationBass,
-  type Keep, type Mix, type Role,
+  type Keep, type Mix, type Role, type VerbOptions,
 } from '../generate/generator'
 import { bassPath } from '../audio/schedule'
-import { bassSettings, loadBass, useBass } from './bass'
-import { keysSettings, loadKeys, useKeys } from './keys'
+import { bassSettings, loadBass, saveBassSettings, useBass } from './bass'
+import { keysSettings, loadKeys, saveKeysSettings, useKeys } from './keys'
+import { loadHits, useHits } from './hits'
+import { hitSampleId, hitTranspose } from '../generate/disco'
 import { keysModel, generateKeys, generatedKeysMidi } from '../generate/keys'
 import { bassModel, generatedMidi, isGenerated } from '../generate/bassline'
 import { bassFor } from '../generate/harmony'
 import { Rng, randomSeed } from '../generate/rng'
 import { newProject } from '../lib/project'
-import type { SampleListItem, TrackArrangement } from '../types/api'
+import type { HitItem, SampleListItem, TrackArrangement } from '../types/api'
 import type { Project } from '../types/project'
-import { useApp } from './app'
+import { attempt, useApp } from './app'
 import { useProject } from './project'
 
 export interface GenerateSettings {
@@ -34,6 +36,10 @@ export interface GenerateSettings {
   /** Bass on/off, its sidechain depth under the kick (0…1) and new basslines' length (null: any). */
   bass: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null }
   keys: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null }
+  /** Reverb builds on/off, on which parts, also every 8 or 16 bars, and how far the send rises. */
+  verb: { enabled: boolean } & VerbOptions
+  /** Disco hits on/off: when on, some tracks get one or two (SCOPE.md §6.8). */
+  disco: { enabled: boolean }
 }
 
 const BASS_KEY = 'drumvault.generate.bass'
@@ -49,6 +55,21 @@ function savedBass(): GenerateSettings['bass'] {
 function savedKeys(): GenerateSettings['keys'] {
   try { return { enabled: true, sidechain: 0.4, bars: null, ...JSON.parse(localStorage.getItem('drumvault.generate.keys') ?? '{}') } }
   catch { return { enabled: true, sidechain: 0.4, bars: null } }
+}
+
+const VERB_KEY = 'drumvault.generate.verb'
+const VERB_DEFAULTS: GenerateSettings['verb'] = { enabled: true, tops: true, keys: true, every: 16, amount: 0.6 }
+
+function savedVerb(): GenerateSettings['verb'] {
+  try { return { ...VERB_DEFAULTS, ...JSON.parse(localStorage.getItem(VERB_KEY) ?? '{}') } }
+  catch { return VERB_DEFAULTS }
+}
+
+const DISCO_KEY = 'drumvault.generate.disco'
+
+function savedDisco(): GenerateSettings['disco'] {
+  try { return { enabled: true, ...JSON.parse(localStorage.getItem(DISCO_KEY) ?? '{}') } }
+  catch { return { enabled: true } }
 }
 
 const TEMPO_KEY = 'drumvault.generate.tempo'
@@ -115,7 +136,7 @@ export const useGenerate = create<GenerateState>((set) => ({
   templates: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), keys: savedKeys() },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), keys: savedKeys(), verb: savedVerb(), disco: savedDisco() },
   keep: { structure: false, key: false, lanes: [], bassline: false, patch: false, keysPart: false, keysPatch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
@@ -150,11 +171,14 @@ function options(): GenerateOptions {
   const { settings, templates } = useGenerate.getState()
   const { basslines, presets } = useBass.getState()
   const bass = settings.bass.enabled && basslines.length && presets.length
-    ? { midis: basslines, presets, favorites: bassSettings().favorites, sidechain: settings.bass.sidechain, bars: settings.bass.bars } : null
+    ? { midis: basslines, presets, favorites: bassSettings().favorites, octaves: bassSettings().octaves, sidechain: settings.bass.sidechain, bars: settings.bass.bars } : null
   const ks = useKeys.getState()
   const keys = settings.keys.enabled && ks.parts.length && ks.presets.length
-    ? { midis: ks.parts, presets: ks.presets, favorites: keysSettings().favorites, sidechain: settings.keys.sidechain, bars: settings.keys.bars } : null
-  return { ...settings, bpm: bpm(), bass, keys, templates }
+    ? { midis: ks.parts, presets: ks.presets, favorites: keysSettings().favorites, octaves: keysSettings().octaves, sidechain: settings.keys.sidechain, bars: settings.keys.bars } : null
+  const { enabled, ...verb } = settings.verb
+  const { hits } = useHits.getState()
+  const disco = settings.disco.enabled && hits.length ? { hits } : null
+  return { ...settings, bpm: bpm(), bass, keys, verb: enabled ? verb : null, disco, templates }
 }
 
 function make(seed = randomSeed()): Generation | null {
@@ -245,6 +269,38 @@ export function setLaneVolume(role: Role, volumeDb: number): void {
   }
 }
 
+/** The octave saved for a patch (semitones, a multiple of 12), Bass's and Keys' each their own. */
+export function presetOctave(role: 'bass' | 'keys', path: string): number {
+  return (role === 'keys' ? keysSettings() : bassSettings()).octaves?.[path] ?? 0
+}
+
+/** Another patch plays at its own saved octave instead of the last one's. */
+function withOctave(role: 'bass' | 'keys', b: GenerationBass, change: Partial<GenerationBass>): Partial<GenerationBass> {
+  if (!change.preset || change.preset.path === b.preset.path || 'transpose' in change) return change
+  const d = presetOctave(role, change.preset.path) - presetOctave(role, b.preset.path)
+  return d ? { ...change, transpose: Math.max(-24, Math.min(24, b.transpose + d)) } : change
+}
+
+/**
+ * −12 / +12 in Generate: the bass or keys part moves an octave, and its patch remembers that, so
+ * every next track with the patch plays it in the same octave.
+ */
+export async function shiftOctave(role: 'bass' | 'keys', semis: 12 | -12): Promise<void> {
+  const g = current()
+  const b = role === 'keys' ? g?.keys : g?.bass
+  if (!b) return
+  const transpose = Math.max(-24, Math.min(24, b.transpose + semis))
+  if (transpose === b.transpose) return
+  const s = role === 'keys' ? keysSettings() : bassSettings()
+  const octave = Math.max(-24, Math.min(24, (s.octaves?.[b.preset.path] ?? 0) + (transpose - b.transpose)))
+  const octaves = { ...s.octaves }
+  if (octave) octaves[b.preset.path] = octave
+  else delete octaves[b.preset.path]
+  await (role === 'keys' ? saveKeysSettings : saveBassSettings)({ octaves })
+  if (role === 'keys') setGenerationKeys({ transpose }, g)
+  else setGenerationBass({ transpose }, g)
+}
+
 /**
  * Change the current generation's bass in place (another patch or bassline, or a transpose):
  * every bass clip follows, the new part renders and plays as soon as it's ready.
@@ -253,6 +309,7 @@ export function setGenerationBass(change: Partial<GenerationBass>, g: Generation
   if (!g?.bass) return
   // Another bassline drops the piano-roll edits of the previous one.
   if (change.midi && change.midi.id !== g.bass.midi.id && !('notes' in change)) change = { ...change, notes: undefined, bars: undefined }
+  change = withOctave('bass', g.bass, change)
   g.bass = { ...g.bass, ...change }
   writeBassClips(g)
   useGenerate.getState().set({ history: [...useGenerate.getState().history] })
@@ -288,7 +345,7 @@ export function newBassline(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   if (!g?.bass || !model) return false
   // A riff that goes with the track's keys, when it has them.
   const line = bassFor(model, new Rng(randomSeed()), { key: g.key, bars }, harmonyOfKeys(g.keys, g.key))
-  setGenerationBass({ midi: generatedMidi(line, g.key), transpose: isGenerated(g.bass.midi) ? g.bass.transpose : 0 })
+  setGenerationBass({ midi: generatedMidi(line, g.key), transpose: isGenerated(g.bass.midi) ? g.bass.transpose : presetOctave('bass', g.bass.preset.path) })
   return true
 }
 
@@ -309,11 +366,68 @@ export function setGenerationKeys(change: Partial<GenerationBass>, g: Generation
   if (!g?.keys) return
   // Another Keys part drops the piano-roll edits of the previous one.
   if (change.midi && change.midi.id !== g.keys.midi.id && !('notes' in change)) change = { ...change, notes: undefined, bars: undefined }
+  change = withOctave('keys', g.keys, change)
   g.keys = { ...g.keys, ...change }
   writeKeysClips(g)
   useGenerate.getState().set({ history: [...useGenerate.getState().history] })
   void playback.reloadClips(g.project, g.project.clips.filter((c) => c.type === 'audio' && c.bass && c.bass.role === 'keys').map((c) => c.id))
   invalidate()
+}
+
+/** Disco hits on/off: remembered; for new generations. */
+export function setDiscoOptions(patch: Partial<GenerateSettings['disco']>): void {
+  const { settings, set } = useGenerate.getState()
+  const disco = { ...settings.disco, ...patch }
+  set({ settings: { ...settings, disco } })
+  try {
+    localStorage.setItem(DISCO_KEY, JSON.stringify(disco))
+  } catch {
+    // not remembered
+  }
+  invalidate()
+}
+
+/**
+ * A disco hit plays `pitch` semitones off in the current generation (every clip of it, at once),
+ * and the difference from the move into the track key is saved on the hit: the next tracks
+ * pitch it the same way (a key read wrong, fixed once).
+ */
+export function setHitPitchInTrack(hit: HitItem, pitch: number): void {
+  const g = current()
+  if (!g) return
+  const id = hitSampleId(hit.id)
+  for (const c of g.project.clips) {
+    if (c.sample.id !== id) continue
+    if (pitch) c.pitch = pitch
+    else delete c.pitch
+  }
+  const fix = pitch - hitTranspose(hit, g.key)
+  useHits.setState((s) => ({ hits: s.hits.map((h) => (h.id === hit.id ? { ...h, pitch_fix: fix } : h)) }))
+  useGenerate.getState().set({ history: [...useGenerate.getState().history] })
+  void attempt(() => api.setHitPitch(hit.id, fix))
+  invalidate()
+}
+
+/**
+ * Reverb builds: remembered; for new generations. A new amount also applies to the builds of the
+ * generations already made (their sends scale with it).
+ */
+export function setVerbOptions(patch: Partial<GenerateSettings['verb']>): void {
+  const { settings, history, pending, set } = useGenerate.getState()
+  const verb = { ...settings.verb, ...patch }
+  set({ settings: { ...settings, verb } })
+  if (patch.amount !== undefined && settings.verb.amount > 0) {
+    const k = verb.amount / settings.verb.amount
+    for (const g of [...history, pending]) {
+      for (const c of g?.project.clips ?? []) if (c.verb) c.verb = { from: c.verb.from * k, to: c.verb.to * k }
+    }
+  }
+  try {
+    localStorage.setItem(VERB_KEY, JSON.stringify(verb))
+  } catch {
+    // not remembered
+  }
+  if (patch.amount === undefined) invalidate()
 }
 
 /** Keys on/off and sidechain depth: remembered; the sidechain applies to the current generation at once. */
@@ -344,7 +458,7 @@ export function newKeysPart(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   if (!g?.keys || !model) return false
   // A keys loop that goes with the track's bass riff.
   const line = generateKeys(model, new Rng(randomSeed()), { key: g.key, bars, bass: g.bass ? playedLine(g.bass) : null })
-  setGenerationKeys({ midi: generatedKeysMidi(line, g.key), transpose: isGenerated(g.keys.midi) ? g.keys.transpose : 0 })
+  setGenerationKeys({ midi: generatedKeysMidi(line, g.key), transpose: isGenerated(g.keys.midi) ? g.keys.transpose : presetOctave('keys', g.keys.preset.path) })
   return true
 }
 
@@ -354,7 +468,7 @@ export function invalidate(): void {
 }
 
 export async function loadSamples(): Promise<void> {
-  const [samples, templates] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), loadBass(), loadKeys()])
+  const [samples, templates] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), loadBass(), loadKeys(), loadHits()])
   useGenerate.getState().set({ samples, templates })
   prefetch()
 }

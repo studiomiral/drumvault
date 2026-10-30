@@ -7,7 +7,7 @@ import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
-import { applyLane, createLaneNodes, duckAt, laneAudible, playEvent, resetDuck, type LaneNodes } from './graph'
+import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, playEvent, resetDuck, type LaneNodes } from './graph'
 import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
 import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
@@ -117,6 +117,11 @@ class PlaybackEngine {
     if (ctx.state === 'suspended') await ctx.resume()
     const project = this.getProject()
     this.syncLanes(project.lanes)
+    // Lanes with reverb builds get their reverb now, not mid-playback when the first build starts.
+    for (const c of project.clips) {
+      const n = c.verb && this.lanes.get(c.laneId)
+      if (n) laneVerb(ctx, n)
+    }
     // Bass renders through Serum can take a while (the first one loads the plugin), so play
     // doesn't wait for them: the bass comes in, from the playhead, once it's rendered.
     const isBass = (c: Project['clips'][number]) => c.type === 'audio' && !!c.bass
@@ -173,7 +178,10 @@ class PlaybackEngine {
     this.sources.clear()
     this.stopAudition()
     const now = audioContext().currentTime
-    for (const n of this.lanes.values()) resetDuck(n, now)
+    for (const n of this.lanes.values()) {
+      resetDuck(n, now)
+      dropVerb(n)  // a reverb tail stops with the rest
+    }
     this.playing = false
   }
 
@@ -231,7 +239,7 @@ class PlaybackEngine {
       const buf = buffers.get(ev.relPath)
       const lane = this.lanes.get(ev.laneId)
       if (!buf || !lane) continue
-      const src = playEvent(ctx, ev, buf, lane.gain, this.ctxAt(ev.start), cutAt)
+      const src = playEvent(ctx, ev, buf, lane, this.ctxAt(ev.start), cutAt)
       if (src) this.track(src, ev.clipId)
     }
     if (p.metronome) {
@@ -285,7 +293,7 @@ class PlaybackEngine {
       const buf = buffers.get(ev.relPath)
       const lane = this.lanes.get(ev.laneId)
       if (!buf || !lane) continue
-      const src = playEvent(ctx, ev, buf, lane.gain, this.ctxAt(ev.start), cutAt)
+      const src = playEvent(ctx, ev, buf, lane, this.ctxAt(ev.start), cutAt)
       if (src) this.track(src, ev.clipId)
     }
   }
@@ -309,7 +317,7 @@ class PlaybackEngine {
    * repeat; events (fills, FX) start on the next bar and play once; one-shots play at once.
    * Returns false when not playing (caller plays normally).
    */
-  auditionSynced(buffer: AudioBuffer, kind: SampleKind, bars: number | null, onEnd: () => void): boolean {
+  auditionSynced(buffer: AudioBuffer, kind: SampleKind, bars: number | null, onEnd: () => void, rate = 1): boolean {
     if (!this.playing) return false
     const ctx = audioContext()
     const p = this.getProject()
@@ -331,6 +339,8 @@ class PlaybackEngine {
       const loopBpm = ((bars ?? 1) * BEATS_PER_BAR * 60) / buffer.duration
       if (Math.abs(loopBpm - p.bpm) > 0.01) src.playbackRate.value = p.bpm / loopBpm
       src.loopEnd = buffer.duration
+    } else if (rate !== 1) {
+      src.playbackRate.value = rate
     }
     src.connect(this.out())
     src.onended = () => {

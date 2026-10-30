@@ -1,9 +1,9 @@
 # CLAUDE.md
 
-This repo is **Drumvault**, a personal macOS desktop app. `SCOPE.md` is the source of truth for what to build — read it before starting any task, and follow its phases in order.
+This repo is **Warehouse** (until recently called Drumvault), a personal macOS desktop app. **Drumvault** is now the name of its stem-processing module (the first page, formerly "Process"); the repo, the `drumvault_engine` package, the library folder, `window.drumvault` and the `.dvproj` format keep the old name. `SCOPE.md` is the source of truth for what to build — read it before starting any task, and follow its phases in order.
 
 ## Project in one line
-Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out → arrange drums on a mini timeline → export full-length drum stems for Logic Pro.
+Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out (the Drumvault) → generate whole club house tracks with bass, keys and disco hits → arrange on a mini timeline → export full-length stems for Logic Pro.
 
 ## Stack
 - `app/` — Electron + React + Vite (electron-vite) + TypeScript + Tailwind + Zustand. Web Audio for playback/export. Dark matte theme with pastels and a subtle yellow accent (see SCOPE.md §6.1).

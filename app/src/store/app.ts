@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { api } from '../api'
+import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo } from '../types/api'
 
-export type View = 'process' | 'library' | 'grid' | 'midi' | 'generate' | 'arrange' | 'settings'
+export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'generate' | 'arrange' | 'settings'
 
 export interface Toast {
   id: number
@@ -88,6 +89,12 @@ export const useApp = create<AppState>((set, get) => ({
 }))
 
 /** Run an API call; errors become toasts. */
+/** Serum 2's presets folder, shared by Bass, Keys and what comes (older settings: the bass one). */
+export function serumPresetRoot(): string {
+  const s = useApp.getState().settings
+  return s?.serumPresetRoot || s?.bass?.presetRoot || SERUM_PRESET_ROOT
+}
+
 export async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
   try {
     return await fn()

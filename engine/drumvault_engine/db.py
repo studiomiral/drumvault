@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS midi_files (
   favorite INTEGER DEFAULT 0,
   source TEXT,                      -- the MIDI zip it came from ("83686"), null for loose files
   source_code TEXT,                 -- the processed stem zip of the same track (S0001), if any
+  created_at TEXT
+);
+
+-- Disco hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Disco Hits/.
+CREATE TABLE IF NOT EXISTS hits (
+  id INTEGER PRIMARY KEY,
+  file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, file_sha1 TEXT UNIQUE,
+  key_label TEXT, key_camelot TEXT,
+  key_source TEXT,                  -- "name" (in the file name) | "detected" (from the audio) | "manual"
+  pitch_fix INTEGER DEFAULT 0,      -- semitones on top of the move into the track key (a wrong key fixed)
+  duration_s REAL, sample_rate INTEGER, channels INTEGER, peak_db REAL,
   created_at TEXT
 );
 
@@ -294,6 +305,30 @@ class LibraryDB:
     def delete_midi(self, midi_id: int) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM midi_files WHERE id = ?", (midi_id,))
+
+    def hit_by_sha1(self, sha1: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM hits WHERE file_sha1 = ?", (sha1,)).fetchone()
+
+    def get_hit(self, hit_id: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM hits WHERE id = ?", (hit_id,)).fetchone()
+
+    def list_hits(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM hits ORDER BY id").fetchall()
+
+    def insert_hit(self, **fields: Any) -> int:
+        with self._lock:
+            return self._insert("hits", fields)
+
+    def update_hit(self, hit_id: int, **fields: Any) -> None:
+        with self._lock:
+            self._update("hits", hit_id, fields)
+
+    def delete_hit(self, hit_id: int) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM hits WHERE id = ?", (hit_id,))
+
+    def hit_path_taken(self, rel_path: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM hits WHERE rel_path = ?", (rel_path,)).fetchone() is not None
 
     def midi_path_taken(self, rel_path: str) -> bool:
         return self.conn.execute("SELECT 1 FROM midi_files WHERE rel_path = ?", (rel_path,)).fetchone() is not None

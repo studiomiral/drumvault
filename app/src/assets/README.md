@@ -1,7 +1,7 @@
 # Menu and top-bar artwork
 
-- Menu icons render directly from the full-resolution transparent PNGs in `app/artwork/menu-3d/`, at 40 × 40 CSS pixels. This avoids the intermediate 128px resize that introduced edge ringing. No brightness or shadow filters are applied to the icons.
-- `grid-waveform.png` replaces the old four-pad icon with a waveform over beat-timing lines. The exact built-in image generation prompts, including the waveform and smooth background revisions, are saved beside the artwork.
+- `menu-flat/*.svg`: current menu artwork. Eight flat vector icons at 24 × 24 pixels, with consistent strokes, solid colors and restrained secondary tones. No surrounding tiles, gradients, shadows, or raster textures. Grid uses a waveform over beat markers.
+- `app/artwork/menu-3d/`: previous full-resolution 3D icons and their built-in image generation prompts, retained as source history; no longer used by the menu.
 - `menu-3d/*.png`: previous 128px exports, retained but no longer used.
 - `menu/*.svg`: previous vector tile icons, retained as source history; no longer used by the menu.
 - `topbar-waves.png`: original background generated with the built-in image generation tool (2172 × 724).

@@ -103,7 +103,7 @@ export function ProcessView() {
     >
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-          <PageTitle>Process</PageTitle>
+          <PageTitle>Drumvault</PageTitle>
           <div className="flex-1" />
         </header>
         <EngineBanner />

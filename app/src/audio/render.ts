@@ -1,5 +1,6 @@
 // Offline rendering for stem export (SCOPE.md §6.5): one OfflineAudioContext per stem, using
-// the same scheduler (schedule.ts) and node graph (graph.ts) as live playback.
+// the same scheduler (schedule.ts) and node graph (graph.ts) as live playback. Reverb builds
+// are baked into their lane's stem, tails and all.
 
 import { beatToSec, dbToGain } from '../lib/project'
 import type { Project } from '../types/project'
@@ -44,7 +45,7 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
   for (const ev of events) {
     const buf = buffers.get(ev.relPath)
     const lane = nodes.get(ev.laneId)
-    if (buf && lane) playEvent(ctx, ev, buf, lane.gain, ev.start - from)
+    if (buf && lane) playEvent(ctx, ev, buf, lane, ev.start - from)
   }
   // Sidechain, from all kicks (also when the kick lane isn't part of this render).
   const hits = kickHits(project, from, to)

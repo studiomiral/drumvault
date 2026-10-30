@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { bassPath, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath } from '../src/audio/schedule'
+import { bassPath, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath, verbSend } from '../src/audio/schedule'
 import { bassNotes, notesMidi } from '../src/lib/midi'
-import { newProject } from '../src/lib/project'
+import { newProject, splitClip } from '../src/lib/project'
 import type { AudioClip, PatternClip, Project, SampleRef, Velocity } from '../src/types/project'
 
 const BPM = 124
@@ -310,5 +310,38 @@ describe('feel and loop variations', () => {
     const g = bassPath({ ...b, groove: [0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2] }, BPM)
     expect(g).not.toBe(bassPath(b, BPM))
     expect(g).toMatch(/-g[0-9a-f]{8}-0-124\.wav$/)
+  })
+})
+
+describe('reverb builds', () => {
+  const build = (): AudioClip => ({ ...audio(0, 16, 2), verb: { from: 0, to: 0.8 } })
+
+  it('rises late over the clip: a quarter of the way at half way, all of it at the end', () => {
+    const c = build()
+    expect(verbSend(c, BPM, 0)).toBe(0)
+    expect(verbSend(c, BPM, 8 * BEAT)).toBeCloseTo(0.2, 9)
+    expect(verbSend(c, BPM, 16 * BEAT)).toBeCloseTo(0.8, 9)
+  })
+
+  it('gives every event its stretch of the curve, the same in windows as in one go', () => {
+    const p = project([build()])
+    const ev = eventsInRange(p, 0, 1000)
+    expect(ev).toHaveLength(2)
+    expect(ev[0].verb![0]).toBe(0)
+    expect(ev[0].verb!.at(-1)).toBeCloseTo(0.2, 9)
+    expect(ev[1].verb![0]).toBeCloseTo(0.2, 9)
+    expect(ev[1].verb!.at(-1)).toBeCloseTo(0.8, 9)
+    expect(ev[0].verb!.length).toBe(33)  // 2 bars: at most 33 points
+    expect(windowed(p, 0, 16 * BEAT).map((e) => e.verb)).toEqual(ev.map((e) => e.verb))
+    // A clip without one sends nothing; one-shot hits send the clip's amount where they land.
+    expect(eventsInRange(project([audio(0, 16)]), 0, 1000).every((e) => !e.verb)).toBe(true)
+    const hits = eventsInRange(project([{ ...pattern(0, 4, four()), verb: { from: 0, to: 1 } }]), 0, 1000)
+    expect(hits.map((e) => e.verb)).toEqual([0, 1, 2, 3].map((b) => [(b / 4) ** 2]))
+  })
+
+  it('splits where the build is: each half carries on from the split', () => {
+    const [a, b] = splitClip(build(), 8)!
+    expect(a.verb).toEqual({ from: 0, to: 0.2 })
+    expect(b.verb).toEqual({ from: 0.2, to: 0.8 })
   })
 })

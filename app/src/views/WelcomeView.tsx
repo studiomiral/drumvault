@@ -13,10 +13,11 @@ export function WelcomeView() {
   return (
     <div className="app-drag h-full flex items-center justify-center bg-bg">
       <div className="w-[520px] rounded-3xl surface-pop p-9">
-        <div className="font-display text-[30px] font-medium leading-tight">Welcome to <span className="text-brand">Drumvault</span></div>
+        <div className="font-display text-[30px] font-medium leading-tight">Welcome to <span className="text-brand">Warehouse</span></div>
         <p className="text-muted mt-2 leading-relaxed">
-          Drumvault turns zips of stems into one drum sample library: one-shots and tempo-matched loops,
-          labelled with the source track's key. Choose the folder for that library. Everything goes in
+          Warehouse builds club house tracks from your own material. Its Drumvault turns zips of stems into
+          one drum sample library (one-shots and tempo-matched loops, labelled with the source track's key);
+          bass, keys and disco hits join them in Generate. Choose the folder for that library. Everything goes in
           there, including its index, so you can back it up or move it as one folder.
         </p>
         <Button variant="primary" className="mt-6 h-9 px-4 text-[13.5px]" onClick={() => void choose()}>

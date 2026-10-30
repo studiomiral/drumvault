@@ -9,7 +9,7 @@ import { expandCompatible } from '../src/lib/camelot'
 import { fileName, parseJsonArray } from '../src/lib/format'
 import type { PeaksFile, SampleKind, StemRow } from '../src/types/engine'
 import type {
-  EventShape, LibraryFacets, LoopGroove, MidiItem, PeakPoints, RemovedSample, SampleFilter, SampleListItem, TrackArrangement,
+  EventShape, HitItem, LibraryFacets, LoopGroove, MidiItem, PeakPoints, RemovedSample, SampleFilter, SampleListItem, TrackArrangement,
   ZipDetail, ZipListItem,
 } from '../src/types/api'
 
@@ -179,6 +179,14 @@ export class LibraryReader {
               ${this.hasColumn('midi_files', 'source') ? 'source, source_code' : 'NULL AS source, NULL AS source_code'}
        FROM midi_files ORDER BY id`)
       .map((r) => ({ ...r, name: r.file_name.replace(/\.midi?$/i, ''), notes: JSON.parse(r.notes) }))
+  }
+
+  /** Disco hits (schema v10), oldest first. */
+  listHits(): HitItem[] {
+    if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hits'").length) return []
+    return this.all<Omit<HitItem, 'name'>>(
+      `SELECT id, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels FROM hits ORDER BY id`)
+      .map((r) => ({ ...r, pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
 
   listZips(): ZipListItem[] {

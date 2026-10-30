@@ -116,6 +116,13 @@ class Thresholds:
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
     bass_peak_dbfs: float = -1.0
+    # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
+    # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
+    hit_max_len_s: float = 6.0
+    hit_tail_db: float = -60.0
+    hit_tail_hold_ms: float = 50.0
+    hit_fade_out_ms: float = 10.0
+    hit_peak_dbfs: float = -1.0
     tempo_confidence_window_ms: float = 10.0
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak

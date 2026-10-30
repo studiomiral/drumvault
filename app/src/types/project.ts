@@ -30,14 +30,24 @@ export interface Lane {
 }
 
 /**
- * The one effect in the DAW (SCOPE.md §6.6): a low- or high-pass filter on a clip, fixed at
- * `from` Hz or swept (exponentially) from `from` to `to` Hz across the clip.
+ * One of the two effects in the DAW (SCOPE.md §6.6): a low- or high-pass filter on a clip, fixed
+ * at `from` Hz or swept (exponentially) from `from` to `to` Hz across the clip.
  */
 export interface ClipFilter {
   type: 'lowpass' | 'highpass'
   from: number
   to: number | null
   q: number
+}
+
+/**
+ * The other one (SCOPE.md §6.6): a clip sent to the lane's reverb, by `from` (0…1) at the clip's
+ * start rising to `to` at its end, most of it late (a reverb build). The tail rings on past the
+ * clip, and is part of the lane's stem.
+ */
+export interface ClipReverb {
+  from: number
+  to: number
 }
 
 interface ClipBase {
@@ -48,6 +58,7 @@ interface ClipBase {
   gainDb: number
   sample: SampleRef
   filter?: ClipFilter
+  verb?: ClipReverb
   /** Fade-in / fade-out lengths in beats: linear gain ramps from the clip's edges. */
   fadeIn?: number
   fadeOut?: number

@@ -14,6 +14,7 @@ import { useProject } from './store/project'
 import { GenerateView } from './views/GenerateView'
 import { GridView } from './views/GridView'
 import { MidiView } from './views/MidiView'
+import { HitsView } from './views/HitsView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
@@ -21,10 +22,11 @@ import { WelcomeView } from './views/WelcomeView'
 
 const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = [
   { label: 'Samples', items: [
-    { view: 'process', label: 'Process' },
+    { view: 'process', label: 'Drumvault' },
     { view: 'library', label: 'Library' },
     { view: 'grid', label: 'Grid' },
     { view: 'midi', label: 'MIDI' },
+    { view: 'hits', label: 'Disco Hits' },
   ] },
   { label: 'Create', items: [
     { view: 'generate', label: 'Generate' },
@@ -119,6 +121,7 @@ export function App() {
         {view === 'library' && <LibraryView />}
         {view === 'grid' && <GridView />}
         {view === 'midi' && <MidiView />}
+        {view === 'hits' && <HitsView />}
         {view === 'generate' && <GenerateView />}
         {view === 'arrange' && <ArrangeView />}
         {view === 'settings' && <SettingsView />}
@@ -140,7 +143,7 @@ function NavItem({ label, icon, active, onClick, badge, hint }: {
 }) {
   return (
     <button onClick={onClick} aria-current={active ? 'page' : undefined}
-            className={cx('menu-item flex items-center gap-3 h-12 px-2.5 rounded-xl text-[13px] transition-colors',
+            className={cx('menu-item flex items-center gap-3 h-10 px-2.5 rounded-xl text-[13px] transition-colors',
               active ? 'menu-item-active text-text font-medium' : 'text-muted hover:text-text hover:bg-[#2d2e32]')}>
       <MenuIcon name={icon} />
       <span className="flex-1 text-left">{label}</span>
