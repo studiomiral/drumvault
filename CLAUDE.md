@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-This repo is **Drumvault**, a personal macOS desktop app. `SCOPE.md` is the source of truth for what to build — read it before starting any task, and follow its phases in order.
+This repo is **Warehouse** (until recently called Drumvault), a personal macOS desktop app. **Drumvault** is now the name of its stem-processing module (the first page, formerly "Process"); the repo, the `drumvault_engine` package, the library folder, `window.drumvault` and the `.dvproj` format keep the old name. `SCOPE.md` is the source of truth for what to build — read it before starting any task, and follow its phases in order.
 
 ## Project in one line
-Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out → arrange drums on a mini timeline → export full-length drum stems for Logic Pro.
+Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out (the Drumvault) → generate whole club house tracks with bass, keys and disco hits → arrange on a mini timeline → export full-length stems for Logic Pro.
 
 ## Stack
-- `app/` — Electron + React + Vite + TypeScript + Tailwind + Zustand. Web Audio for playback/export.
+- `app/` — Electron + React + Vite (electron-vite) + TypeScript + Tailwind + Zustand. Web Audio for playback/export. Dark matte theme with pastels and a subtle yellow accent (see SCOPE.md §6.1).
 - `engine/` — Python 3.12 sidecar managed with **uv**: numpy, scipy, soundfile, librosa, essentia. Time-stretch via the `rubberband` CLI.
 - SQLite library index in `<Library>/.drumvault/library.sqlite` (engine writes, app reads).
 - App ↔ engine: JSON-lines RPC over stdin/stdout (see SCOPE.md §5.14). The engine must only print RPC messages to stdout; all logs go to stderr.
@@ -44,4 +44,5 @@ pip install uv          # or: pipx install uv
 - Engine tests: `cd engine && uv run pytest`
 - Engine CLI: `uv run python -m drumvault_engine cli process <zip> --library ./out --bpm 124`
 - App dev (Mac only): `cd app && npm install && npm run dev`
-- Node 20+ required for the app.
+- Node 22.13+ required for the app's build tools and tests (`node:sqlite`); Electron bundles its own Node at runtime.
+- App tests: `cd app && npm test` (builds a small library with the engine first; needs uv).

@@ -1,0 +1,20 @@
+# Python / uv
+engine/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated test fixtures and local output
+engine/tests/fixtures/
+engine/out/
+out/
+
+# Node / Electron
+app/node_modules/
+app/dist/
+app/dist-electron/
+app/release/
+app/out/
+
+.DS_Store
+*.tsbuildinfo

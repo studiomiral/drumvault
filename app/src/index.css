@@ -1,0 +1,157 @@
+@import "tailwindcss";
+
+/* Dark matte theme (after the NeuroNest dashboard reference): charcoal surfaces with thin
+   borders and large rounded cards, pastels for kinds and categories, a subtle yellow accent for
+   primary actions and selection (flat fills and tints, no glows). */
+@theme {
+  --color-bg: #1c1d20;
+  --color-panel: #26272b;
+  --color-panel-2: #212226;
+  --color-raised: #313236;
+  --color-line: #313236;
+  --color-text: #f1f1ef;
+  --color-muted: #a5a5a1;
+  --color-faint: #707070;
+  --color-accent: #e2c35f;
+  --color-accent-soft: #e2c35f17;
+  --color-on-accent: #1c1606;
+  /* Pastels mark kinds and categories (one-shots, loops, FX & fills); text on them is dark. */
+  --color-pastel-blue: #d5dee8;
+  --color-pastel-mint: #d2e5d0;
+  --color-pastel-yellow: #f2edc2;
+  --color-pastel-lavender: #dcd4ef;
+  --color-on-pastel: #1d1e21;
+  --color-ok: #4ade80;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+  /* Claude-like pairing: a warm book serif for titles, a friendly grotesk for the UI. */
+  --font-sans: "Hanken Grotesk Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  /* Page titles in the top bar: heavy, modern display caps. */
+  --font-title: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Yellow accent fills: primary buttons, active states, progress, the logo. A barely-there
+   top sheen instead of a loud gradient. Text on it is dark (text-on-accent). */
+@utility bg-brand {
+  background-image: linear-gradient(180deg, #e9cd70 0%, #e2c35f 100%);
+}
+
+@utility bg-brand-soft {
+  background-image: linear-gradient(180deg, #e2c35f14 0%, #e2c35f0d 100%);
+}
+
+@utility text-brand {
+  background-image: linear-gradient(180deg, #ecd486 0%, #e2c35f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Cards: dark fill, thin border, large radius. */
+@utility surface-card {
+  background-color: var(--color-panel-2);
+  border: 1px solid var(--color-line);
+}
+
+/* Floating layers: dialogs, menus, popovers, toasts. */
+@utility surface-pop {
+  background-color: #2a2b2f;
+  border: 1px solid #3a3b40;
+  box-shadow: 0 24px 60px -20px rgb(0 0 0 / 0.7), 0 8px 20px -10px rgb(0 0 0 / 0.5);
+}
+
+/* Raised controls (secondary buttons, the active nav item, segmented pills). */
+@utility surface-raised {
+  background-color: var(--color-raised);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+@utility font-title {
+  font-family: var(--font-title);
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.01em;
+}
+
+/* Hidden title bar: bars marked app-drag move the window; their controls stay clickable. */
+@utility app-drag {
+  -webkit-app-region: drag;
+  & :is(button, input, select, textarea, a, label, [role="slider"], [draggable="true"]) {
+    -webkit-app-region: no-drag;
+  }
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color-scheme: dark;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+input, select, textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.12); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.22); }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* Smooth, lossless artwork on its own layer: soften the image without blurring
+   header text or controls. Isolation keeps the decorative layer behind content. */
+.topbar-art {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--color-bg);
+}
+
+.topbar-art::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(90deg, rgb(28 29 32 / 0.64), rgb(28 29 32 / 0.28)),
+    url('./assets/topbar-waves-smooth.png');
+  background-size: cover;
+  background-position: center 53%;
+  background-repeat: no-repeat;
+  filter: blur(0.7px);
+  clip-path: inset(0);
+}
+
+.topbar-art-sidebar::before {
+  background-size: auto, auto 160px;
+  background-position: center, left 53%;
+}
+
+.menu-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.menu-item-active {
+  background: linear-gradient(100deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.035));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+}
