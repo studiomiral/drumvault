@@ -14,9 +14,9 @@ export function Button({ variant = 'secondary', className, ...rest }: ButtonHTML
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 h-7 text-[12.5px] font-medium transition-all',
         'disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap active:scale-[0.98]',
+        variant !== 'ghost' && 'tactile-button',
         // Primary is a soft yellow tint, not a solid fill: the accent stays quiet.
-        variant === 'primary' && 'bg-accent/15 text-accent hover:bg-accent/22 '
-          + 'shadow-[0_0_0_1px_rgb(226_195_95/0.35),inset_0_1px_0_rgb(255_255_255/0.06)]',
+        variant === 'primary' && 'tactile-primary bg-accent/15 text-accent hover:bg-accent/22',
         (variant === 'secondary' || variant === 'danger') && 'surface-raised hover:bg-[rgb(255_255_255/0.13)]',
         variant === 'secondary' && 'text-text',
         variant === 'ghost' && 'text-muted hover:text-text hover:bg-raised',
@@ -24,6 +24,24 @@ export function Button({ variant = 'secondary', className, ...rest }: ButtonHTML
         className,
       )}
     />
+  )
+}
+
+/** Compact module enable switch; the native button handles Space/Enter and focus. */
+export function Toggle({ checked, onChange, label, title, disabled = false }: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label: string
+  title?: string
+  disabled?: boolean
+}) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label}
+            title={title ?? label} disabled={disabled} className="tactile-switch"
+            onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); onChange(!checked) }}>
+      <span className="tactile-switch-thumb" aria-hidden="true" />
+    </button>
   )
 }
 
