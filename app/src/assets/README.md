@@ -1,5 +1,7 @@
 # Menu and top-bar artwork
 
+- `surface-grain.png`: static 128 × 128 monochrome grain tile, blended into charcoal surfaces with soft-light. Generated from deterministic Gaussian noise (seed 1847); no runtime noise generation or animation. Text, icons and timeline canvases are not filtered.
+
 - `menu-flat/*.svg`: current menu artwork. Ten flat vector icons at 24 × 24 pixels, with consistent strokes, solid colors and restrained secondary tones. No surrounding tiles, gradients, shadows, or raster textures. Grid uses a waveform over beat markers; Chord Stabs uses three aligned MIDI notes; Disco Hits uses a disco ball and glint.
 - `app/artwork/menu-3d/`: previous full-resolution 3D icons and their built-in image generation prompts, retained as source history; no longer used by the menu.
 - `menu-3d/*.png`: previous 128px exports, retained but no longer used.

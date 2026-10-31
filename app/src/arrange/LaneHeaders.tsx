@@ -215,7 +215,7 @@ export function BarSlider({ min, max, step, value, reset, origin = min, color, t
   }
   return (
     <div title={title} role="slider" aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
-         className={cx('relative h-3.5 rounded-[3px] border border-line bg-raised overflow-hidden cursor-ew-resize', className)}
+         className={cx('tactile-meter relative h-3.5 rounded-[3px] border border-line bg-raised overflow-hidden cursor-ew-resize', className)}
          onPointerDown={(e) => {
            if (e.button !== 0) return
            e.preventDefault()
@@ -234,7 +234,7 @@ export function BarSlider({ min, max, step, value, reset, origin = min, color, t
            dragging.current = false
          }}
          onDoubleClick={() => onChange(reset)}>
-      <div className="absolute inset-y-0 opacity-80" style={{ left: `${from * 100}%`, width: `${(to - from) * 100}%`, background: color }} />
+      <div className="tactile-meter-fill absolute inset-y-0 opacity-80" style={{ left: `${from * 100}%`, width: `${(to - from) * 100}%`, backgroundColor: color }} />
       {origin !== min && <div className="absolute inset-y-0 w-px bg-faint/60" style={{ left: `${frac(origin) * 100}%` }} />}
     </div>
   )
