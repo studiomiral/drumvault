@@ -10,10 +10,10 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  applyMix, bassBars, bassRenderOf, changeKey, generate, harmonyOfKeys, laneRole, LANES, newLaneSound, playedLine, rerollDisco, rerollKeys, rerollLane as rerollSounds, rerollStabs,
+  applyMix, bassBars, bassRenderOf, changeKey, generate, harmonyOfKeys, laneRole, newLaneSound, playedLine, rerollDisco, rerollKeys, rerollLane as rerollSounds, rerollStabs,
   setStabRhythm, setTrackRule, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
-import { CHOICES } from '../generate/choices'
+import { CHOICES, choiceValue } from '../generate/choices'
 import { bassPath } from '../audio/schedule'
 import { bassSettings, loadBass, saveBassSettings, useBass } from './bass'
 import { keysSettings, loadKeys, saveKeysSettings, useKeys } from './keys'
@@ -442,7 +442,8 @@ export function toggleLock(rule: string): void {
   const { settings } = useGenerate.getState()
   const g = current()
   const { [rule]: was, ...rest } = settings.locks
-  saveLocks(was !== undefined || !g ? rest : { ...settings.locks, [rule]: g.rules[rule] ?? null })
+  const c = CHOICES.find((x) => x.rule === rule)
+  saveLocks(was !== undefined || !g ? rest : { ...settings.locks, [rule]: c ? choiceValue(c, g) : g.rules[rule] ?? null })
 }
 
 function saveLocks(locks: Rules): void {
@@ -557,8 +558,7 @@ function prefetch(): void {
  */
 export function setLaneVolume(role: Role, volumeDb: number): void {
   const { settings, history, pending, set } = useGenerate.getState()
-  const base = LANES.find((l) => l.role === role)?.volumeDb ?? 0
-  const mix = { ...settings.mix, [role]: volumeDb - base }
+  const mix = { ...settings.mix, [role]: volumeDb }
   set({ settings: { ...settings, mix } })
   for (const g of [...history, pending]) if (g) applyMix(g.project, mix)
   const g = current()

@@ -145,8 +145,54 @@ def test_analyze_library_fills_in_older_libraries(fixtures, tmp_path):
         # The same shapes as processing measured, the source bar worked out from the stored offset.
         again = dict(db.conn.execute("SELECT id, shape FROM samples WHERE kind = 'event'").fetchall())
         assert {k: json.loads(v) for k, v in again.items()} == {k: json.loads(v) for k, v in shapes.items()}
-    assert pipeline.analyze_library(settings) == {"grooves": 0, "shapes": 0, "kept": 0, "not_kept": [], "arrangements": 0,
-                                                   "missing": []}
+    assert pipeline.analyze_library(settings) == {"loudness": 0, "grooves": 0, "shapes": 0, "kept": 0, "not_kept": [],
+                                                   "arrangements": 0, "missing": []}
+
+
+def test_k_energy_matches_lufs():
+    """A 997 Hz sine at -20 dBFS (mono) is -23.05 LUFS (ITU-R BS.1770); 4 s of it 6 dB more energy than 1 s."""
+    from drumvault_engine.audioutil import k_energy_db
+    import pyloudnorm
+    for sr in (44100, 48000):
+        t = np.arange(4 * sr) / sr
+        x = (np.sin(2 * np.pi * 997 * t) * 0.1).astype(np.float32)
+        assert k_energy_db(x, sr) - 10 * np.log10(4) == pytest.approx(pyloudnorm.Meter(sr).integrated_loudness(x.astype(np.float64)), abs=0.05)
+        assert k_energy_db(x, sr) - k_energy_db(x[:sr], sr) == pytest.approx(10 * np.log10(4), abs=0.05)
+    assert k_energy_db(np.zeros(1000, dtype=np.float32), 44100) is None
+
+
+def test_arrangement_measures_the_producers_balance():
+    """Each part's loudness in its full bars; the balance is the producer's unless the stems were normalised one by one."""
+    kick = _bars([0.5] * 8 + [0] * 4 + [0.5] * 8)
+    hats = _bars([0.05] * 20)
+    a = arrangement.measure([("Kick", "kick", kick, 8000), ("Hats", "hat_closed", hats, 8000)], BPM, 0.0, Thresholds())
+    lv = a["levels"]["parts"]
+    assert lv["kick"] - lv["hats"] == pytest.approx(20.0, abs=1.5)   # the breakdown doesn't pull the kick down
+    peaky = lambda x: x / np.max(np.abs(x))  # noqa: E731
+    th = Thresholds()
+    assert not a["levels"]["normalized"]
+    norm = arrangement.measure([("Kick", "kick", peaky(kick), 8000), ("Hats", "hat_closed", peaky(hats), 8000),
+                                ("Perc", "perc", peaky(hats), 8000)], BPM, 0.0, th)
+    assert norm["levels"]["normalized"]
+    # A full drum loop plays with the tops but isn't their level (it's mostly a kick).
+    with_drums = arrangement.measure([("Kick", "kick", kick, 8000), ("Top", "top", hats, 8000), ("Drums", "drums", kick, 8000)],
+                                     BPM, 0.0, th)
+    assert with_drums["levels"]["parts"]["top"] == pytest.approx(lv["hats"], abs=0.2)
+
+
+def test_samples_and_hits_get_their_loudness(fixtures, tmp_path):
+    settings = Settings(library_path=str(tmp_path / "lib"))
+    pipeline.process_zip(fixtures.zip("deep_groove"), settings)
+    with LibraryDB(settings.library_path) as db:
+        rows = db.conn.execute("SELECT id, energy_db FROM samples").fetchall()
+        assert rows and all(r["energy_db"] is not None and -60 < r["energy_db"] < 20 for r in rows)
+        measured = {r["id"]: r["energy_db"] for r in rows}
+        db.conn.execute("UPDATE samples SET energy_db = NULL")
+        assert db.get_arrangement(1)["levels"]["parts"]["kick"] < 0
+    assert pipeline.analyze_library(settings)["loudness"] == len(measured)
+    with LibraryDB(settings.library_path) as db:
+        again = {r["id"]: r["energy_db"] for r in db.conn.execute("SELECT id, energy_db FROM samples")}
+        assert again == pytest.approx(measured, abs=0.02)
 
 
 def test_old_library_gets_the_new_columns(tmp_path):

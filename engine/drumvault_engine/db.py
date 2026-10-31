@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS samples (
   shift_beats INTEGER DEFAULT 0,    -- loops/events: sound rotated this many beats later (v5)
   groove TEXT,                      -- loops: timing and accents per 16th, JSON (v7; '{}' = none found)
   shape TEXT,                       -- events: how it plays (events.shape) and the source bar its body ends on, JSON (v9)
+  energy_db REAL,                   -- K-weighted energy, dB (LUFS + 10·log10 s): how loud it plays (v13)
   created_at TEXT
 );
 
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS arrangements (
   bpm REAL, bars INTEGER,
   parts TEXT,                       -- JSON {part: "0122…"} (0 silent, 1 quiet/filtered, 2 full)
   detail TEXT,                      -- JSON {part: {db: [...], bright: [...]}} per bar: the producer's rides (v11)
+  levels TEXT,                      -- JSON {parts: {part: LUFS in its full bars}, normalized}: the producer's balance (v13)
   created_at TEXT
 );
 
@@ -105,6 +107,7 @@ CREATE TABLE IF NOT EXISTS hits (
   key_source TEXT,                  -- "name" (in the file name) | "detected" (from the audio) | "manual"
   pitch_fix INTEGER DEFAULT 0,      -- semitones on top of the move into the track key (a wrong key fixed)
   duration_s REAL, sample_rate INTEGER, channels INTEGER, peak_db REAL,
+  energy_db REAL,                   -- as samples.energy_db (v13)
   created_at TEXT
 );
 
@@ -155,6 +158,8 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE samples ADD COLUMN groove TEXT")
         if "shape" not in cols:  # v9: event shapes (filled by analyze_library or a reprocess)
             self.conn.execute("ALTER TABLE samples ADD COLUMN shape TEXT")
+        if "energy_db" not in cols:  # v13: loudness (filled by analyze_library or a reprocess)
+            self.conn.execute("ALTER TABLE samples ADD COLUMN energy_db REAL")
         removed_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(removed_samples)")}
         for col, typ in (("sample", "TEXT"), ("fingerprint", "BLOB"), ("removed_at", "TEXT")):
             if col not in removed_cols:  # v4: restorable deleted samples
@@ -171,9 +176,13 @@ class LibraryDB:
         arr_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(arrangements)")}
         if "detail" not in arr_cols:  # v11: rides, bar by bar (measured again by analyze_library)
             self.conn.execute("ALTER TABLE arrangements ADD COLUMN detail TEXT")
+        if "levels" not in arr_cols:  # v13: the producer's balance (measured again by analyze_library)
+            self.conn.execute("ALTER TABLE arrangements ADD COLUMN levels TEXT")
         hit_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(hits)")}
         if "kind" not in hit_cols:  # v12: chord stabs beside disco hits
             self.conn.execute("ALTER TABLE hits ADD COLUMN kind TEXT DEFAULT 'disco'")
+        if "energy_db" not in hit_cols:  # v13: loudness (filled by analyze_library)
+            self.conn.execute("ALTER TABLE hits ADD COLUMN energy_db REAL")
 
     def close(self) -> None:
         self.conn.close()
@@ -346,6 +355,19 @@ class LibraryDB:
         return self.conn.execute(
             "SELECT id, rel_path, bpm FROM samples WHERE kind = 'loop' AND groove IS NULL").fetchall()
 
+    def samples_without_energy(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT id, rel_path FROM samples WHERE energy_db IS NULL").fetchall()
+
+    def hits_without_energy(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT id, rel_path FROM hits WHERE energy_db IS NULL").fetchall()
+
+    def set_energy(self, table: str, row_id: int, energy_db: float | None) -> None:
+        """A sample's or hit's loudness (a silent one: -240, so it isn't measured again)."""
+        assert table in ("samples", "hits"), table
+        with self._lock:
+            self.conn.execute(f"UPDATE {table} SET energy_db = ? WHERE id = ?",
+                              (-240.0 if energy_db is None else energy_db, row_id))
+
     def set_groove(self, sample_id: int, groove: dict | None) -> None:
         with self._lock:
             self.conn.execute("UPDATE samples SET groove = ? WHERE id = ?", (json.dumps(groove or {}), sample_id))
@@ -355,16 +377,18 @@ class LibraryDB:
             self.conn.execute("DELETE FROM arrangements WHERE zip_id = ?", (zip_id,))
             if arrangement:
                 self.conn.execute(
-                    "INSERT INTO arrangements(zip_id, bpm, bars, parts, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO arrangements(zip_id, bpm, bars, parts, detail, levels, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (zip_id, arrangement["bpm"], arrangement["bars"], json.dumps(arrangement["parts"]),
-                     json.dumps(arrangement["detail"]) if arrangement.get("detail") is not None else None, now_iso()))
+                     json.dumps(arrangement["detail"]) if arrangement.get("detail") is not None else None,
+                     json.dumps(arrangement["levels"]) if arrangement.get("levels") is not None else None, now_iso()))
 
     def get_arrangement(self, zip_id: int) -> dict | None:
-        r = self.conn.execute("SELECT bpm, bars, parts, detail FROM arrangements WHERE zip_id = ?", (zip_id,)).fetchone()
+        r = self.conn.execute("SELECT bpm, bars, parts, detail, levels FROM arrangements WHERE zip_id = ?", (zip_id,)).fetchone()
         if not r:
             return None
         return {"bpm": r["bpm"], "bars": r["bars"], "parts": json.loads(r["parts"]),
-                "detail": json.loads(r["detail"]) if r["detail"] else None}
+                "detail": json.loads(r["detail"]) if r["detail"] else None,
+                "levels": json.loads(r["levels"]) if r["levels"] else None}
 
     def events_without_shape(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -378,7 +402,7 @@ class LibraryDB:
     def zips_without_arrangement(self) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM zips WHERE status IN ('done', 'needs_review') AND kind = 'stems' "
-            "AND id NOT IN (SELECT zip_id FROM arrangements WHERE detail IS NOT NULL)").fetchall()
+            "AND id NOT IN (SELECT zip_id FROM arrangements WHERE detail IS NOT NULL AND levels IS NOT NULL)").fetchall()
 
     def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()
@@ -455,7 +479,7 @@ def _kind_filter(kind: Kinds, column: str = "kind") -> tuple[str, tuple[str, ...
 
 # Sample columns kept for a restore (ids, the stem link and the fingerprint are handled apart).
 RESTORE_COLUMNS = ("kind", "category", "rel_path", "bpm", "bars", "body_bars", "key_label", "key_camelot",
-                   "duration_s", "sample_rate", "channels", "peak_db", "gain_applied_db", "source_offset_s",
+                   "duration_s", "sample_rate", "channels", "peak_db", "gain_applied_db", "source_offset_s", "energy_db",
                    "favorite", "rating", "tags", "shift_beats", "created_at")
 
 

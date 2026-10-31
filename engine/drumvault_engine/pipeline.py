@@ -19,7 +19,7 @@ import soundfile as sf
 from . import arrangement as arrmod, classify, events as eventmod, groove as groovemod, key as keymod, loops as loopmod
 from . import naming, normalize, originals, samples as samplemod
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
-from .audioutil import Audio, info as audio_info, load, resample, write_wav
+from .audioutil import Audio, info as audio_info, k_energy_db, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
 from .db import LibraryDB, SampleMatcher, library_dir, now_iso
 from .schemas import GridPreview, KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
@@ -498,7 +498,7 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars, body_bars=body_bars,
                     key_label=label, key_camelot=camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
-                    gain_applied_db=gain_db, source_offset_s=offset_s, created_at=created)
+                    gain_applied_db=gain_db, source_offset_s=offset_s, energy_db=_energy(data, out_sr), created_at=created)
                 fingerprint = fp.astype(np.float32).tobytes()
                 rid = removed.find(stem_name, kind, bars, offset_s)
                 prev = json.loads(db.get_removed([rid])[0]["sample"] or "{}") if rid is not None else None
@@ -1247,11 +1247,17 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
                        bar_one_ms=bar_one_ms, manual=manual, stems=sorted(names))
 
 
+def _energy(data: np.ndarray, sr: int) -> float:
+    """A sample's loudness as stored (silent: -240, so it isn't measured again)."""
+    e = k_energy_db(data, sr)
+    return -240.0 if e is None else e
+
+
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
     each zip's arrangement (from its stems, on its stored grid; again for those measured before
-    the rides were). Nothing else changes."""
+    the rides were, or the balance), and every sample's and hit's loudness. Nothing else changes."""
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)
@@ -1260,11 +1266,21 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
         events = db.events_without_shape()
         zips = db.zips_without_arrangement()
         unkept = _unkept(lib, db)
-        total = max(1, len(loops) + len(events) + 10 * len(unkept) + 10 * len(zips))
+        loud = [("samples", r) for r in db.samples_without_energy()] + [("hits", r) for r in db.hits_without_energy()]
+        total = max(1, len(loud) + len(loops) + len(events) + 10 * len(unkept) + 10 * len(zips))
+        for i, (table, r) in enumerate(loud):
+            ctx.check()
+            if i % 25 == 0:
+                ctx.progress("loudness", i / total, f"Loudness ({i + 1}/{len(loud)})")
+            path = lib / r["rel_path"]
+            if path.exists():
+                a = load(path)
+                db.set_energy(table, r["id"], k_energy_db(a.data, a.sr))
+        done = len(loud)
         for i, r in enumerate(loops):
             ctx.check()
             if i % 10 == 0:
-                ctx.progress("groove", i / total, f"Loop grooves ({i + 1}/{len(loops)})")
+                ctx.progress("groove", (done + i) / total, f"Loop grooves ({i + 1}/{len(loops)})")
             path = lib / r["rel_path"]
             g = None
             if path.exists():
@@ -1275,7 +1291,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
         for i, r in enumerate(events):
             ctx.check()
             if i % 10 == 0:
-                ctx.progress("shape", (len(loops) + i) / total, f"Event shapes ({i + 1}/{len(events)})")
+                ctx.progress("shape", (done + len(loops) + i) / total, f"Event shapes ({i + 1}/{len(events)})")
             path = lib / r["rel_path"]
             if not path.exists():
                 continue
@@ -1290,7 +1306,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
         not_kept = []
         for j, z in enumerate(unkept):
             ctx.check()
-            at = (len(loops) + len(events) + 10 * j) / total
+            at = (done + len(loops) + len(events) + 10 * j) / total
             ctx.progress("keep", at, f"Keeping {z['file_name']} in the library ({j + 1}/{len(unkept)})")
             sub = JobContext(progress=lambda st, pct, msg, at=at: ctx.progress(st, at + 10 * pct / total, msg),
                              is_cancelled=ctx.is_cancelled)
@@ -1310,7 +1326,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             if w:
                 not_kept.append(f"{z['file_name']}: {w}")
         missing = []
-        base = len(loops) + len(events) + 10 * len(unkept)
+        base = done + len(loops) + len(events) + 10 * len(unkept)
         for j, z in enumerate(zips):
             ctx.check()
             ctx.progress("arrangement", (base + 10 * j) / total,
@@ -1328,9 +1344,9 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
                 arr = arrmod.measure([(n, category[n], ex.audio(n).mono(), ex.audio(n).sr) for n in names],
                                      bpm, bar_one_s, th)
             db.set_arrangement(z["id"], arr)
-    ctx.progress("done", 1.0, f"{len(loops)} loop grooves, {len(events)} event shapes, "
+    ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "
                               f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")
-    return {"grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
+    return {"loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
             "arrangements": len(zips) - len(missing), "missing": missing}
 
 

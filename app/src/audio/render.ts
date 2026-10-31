@@ -33,7 +33,7 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
     if (!wanted.has(lane.id)) continue
     const n = createLaneNodes(ctx, ctx.destination)
     // Fixed values, not the live ramps, so the level is exact from the first sample.
-    n.gain.gain.value = lane.mute ? 0 : dbToGain(lane.volumeDb)
+    n.gain.gain.value = lane.mute ? 0 : dbToGain(lane.volumeDb + (lane.levelDb ?? 0))
     n.pan.pan.value = Math.max(-1, Math.min(1, lane.pan))
     nodes.set(lane.id, n)
   }

@@ -8,12 +8,17 @@ full level. The app turns these into sections and track rules (app/src/generate/
 For the producer's rides (filter and fader moves) each part's bars are also measured finer: dB
 against the part's full level, and brightness in octaves against its median in full bars (below
 zero: darker, a low-pass; above: thinner, a high-pass). Null where the part is silent.
+
+And the producer's balance: each part's K-weighted loudness in its full bars (LUFS of the mono
+mix, ungated), which the app takes as reference levels, unless the stems were normalised one by
+one (most of them peaking at full scale), when the balance is not the producer's.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from .audioutil import amp_to_db, k_weight
 from .classify import is_bass
 from .config import Thresholds
 
@@ -24,6 +29,10 @@ PART_OF = {
     "fill": "fills", "roll": "fills",
     "fx_riser": "fx", "fx_downlifter": "fx", "fx_impact": "fx", "fx_sweep": "fx", "fx_atmos": "fx", "fx": "fx",
 }
+
+
+# Stems that play where their part does but aren't its level: a full drum loop is mostly its kick.
+BALANCE_SKIP = {"drums"}
 
 
 def part_of(name: str, category: str) -> str | None:
@@ -75,7 +84,7 @@ def brightness(bands: np.ndarray, th: Thresholds) -> np.ndarray:
 def measure(stems: list[tuple[str, str, np.ndarray, int]], bpm: float, bar_one_s: float,
             th: Thresholds) -> dict | None:
     """`stems`: (name, category, mono, sample rate). {"bpm", "bars", "parts": {part: "0012…"},
-    "detail": {part: {"db": [...], "bright": [...]}}}."""
+    "detail": {part: {"db": [...], "bright": [...]}}, "levels": {"parts": {part: LUFS}, "normalized": bool}}."""
     stems = [(n, c, m, sr) for n, c, m, sr in stems if part_of(n, c)]
     if not stems:
         return None
@@ -85,13 +94,17 @@ def measure(stems: list[tuple[str, str, np.ndarray, int]], bpm: float, bar_one_s
     if bars < 1:
         return None
     power: dict[str, np.ndarray] = {}
+    kpower: dict[str, np.ndarray] = {}
     bands: dict[str, np.ndarray] = {}
     for n, c, m, sr in stems:
         p = part_of(n, c)
         power[p] = power.get(p, np.zeros(bars)) + bar_power(m, sr, bpm, bar_one_s, bars)
+        if c not in BALANCE_SKIP:
+            kpower[p] = kpower.get(p, np.zeros(bars)) + bar_power(k_weight(m, sr), sr, bpm, bar_one_s, bars)
         bands[p] = bands.get(p, np.zeros((bars, th.arrangement_bands))) + bar_bands(m, sr, bpm, bar_one_s, bars, th)
     parts = {}
     detail = {}
+    levels = {}
     for p, pw in sorted(power.items()):
         db = 10 * np.log10(np.maximum(pw, 1e-12))
         loud = db[db > th.arrangement_silence_db]
@@ -105,8 +118,15 @@ def measure(stems: list[tuple[str, str, np.ndarray, int]], bpm: float, bar_one_s
         ref = bright[(state == 2) & np.isfinite(bright)]
         mid = float(np.median(ref)) if ref.size else float(np.nanmedian(bright))
         playing = state > 0
+        kfull = kpower[p][state == 2] if p in kpower else np.zeros(0)
+        if kfull.size and kfull.mean() > 0:
+            levels[p] = round(-0.691 + 10 * float(np.log10(kfull.mean())), 1)
         detail[p] = {
             "db": [round(float(d - full), 1) if on else None for d, on in zip(db, playing)],
             "bright": [round(float(b - mid), 2) if on and np.isfinite(b) else None for b, on in zip(bright, playing)],
         }
-    return {"bpm": float(bpm), "bars": bars, "parts": parts, "detail": detail} if parts else None
+    peaks = [amp_to_db(float(np.max(np.abs(m)))) if m.size else -240.0 for _, _, m, _ in stems]
+    hot = sum(1 for d in peaks if d >= th.arrangement_normalized_peak_db)
+    normalized = len(peaks) >= th.arrangement_normalized_min_stems and hot >= th.arrangement_normalized_share * len(peaks)
+    return {"bpm": float(bpm), "bars": bars, "parts": parts, "detail": detail,
+            "levels": {"parts": levels, "normalized": bool(normalized)}} if parts else None

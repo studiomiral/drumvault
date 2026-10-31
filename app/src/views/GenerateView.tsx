@@ -8,7 +8,7 @@ import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
 import { ChoiceRow, LanePanel } from '../components/LanePanel'
 import { panelOf, type Panel } from '../store/arrange'
 import { CHOICE_GROUPS, choicesFor } from '../generate/choices'
-import { LANES, laneRole, type Generation } from '../generate/generator'
+import { laneRole, type Generation } from '../generate/generator'
 import { markerColor } from '../lib/project'
 import { laneAudible } from '../audio/graph'
 import { useApp } from '../store/app'
@@ -404,8 +404,8 @@ function Overview({ g, panel, onPanel }: { g: Generation; panel: Panel; onPanel:
                       isOpen(lane.name) ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text hover:bg-raised')}
                     title={`Open ${lane.name} in the lane panel`} onClick={() => onPanel(panelOf(lane.name))}>{lane.name}</button>
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb}
-                       reset={LANES.find((l) => l.role === role)?.volumeDb ?? 0} color={lane.color} dragging={dragging}
-                       title={`Volume ${fmtDb(lane.volumeDb)} (double-click: starting level)`}
+                       reset={0} color={lane.color} dragging={dragging}
+                       title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the balance` : ''}`}
                        onChange={(v) => role && setLaneVolume(role, v)} />
             <span className="w-10 text-right text-[10.5px] tabular-nums text-faint">{fmtDb(lane.volumeDb)}</span>
           </div>

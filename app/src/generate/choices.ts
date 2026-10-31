@@ -4,7 +4,7 @@
 // A layer lane (Clap 2, Perc 2, Tops 4, …) is listed only where the rule moves it: most layers
 // play in drops only, so not in the intro, the outro, breakdowns or the bars before a drop.
 
-import type { Generation, Role } from './generator'
+import { BUILDUP_ROLES, type Generation, type Role } from './generator'
 
 export interface Choice {
   rule: string
@@ -15,6 +15,8 @@ export interface Choice {
   roles: Role[]
   /** Only on tracks it applies to (with breakdowns, with keys, …). */
   when?: (g: Generation) => boolean
+  /** Its value on a track made before the rule was. */
+  unset?: unknown
 }
 
 const CLAPS: Role[] = ['clap', 'clap2', 'clap3']
@@ -39,7 +41,14 @@ export const CHOICES: Choice[] = [
   { rule: 'dropSilence', label: 'Silence before drops', group: 'Drops', roles: SILENCED,
     options: [{ value: 0, label: 'none' }, { value: 1, label: '1 beat' }, { value: 2, label: '2 beats' }] },
   { rule: 'dropKickOut', label: 'Kick into drops', group: 'Drops', roles: ['kick'], options: yesNo('four kicks out', 'plays on') },
-  { rule: 'dropFill', label: 'Into drops', group: 'Drops', roles: ['fills'],
+  { rule: 'buildup', label: 'Build-up', group: 'Drops', roles: BUILDUP_ROLES, unset: 'none',
+    options: [{ value: 'none', label: 'none' }, { value: 'snareRoll', label: 'snare roll, filter opening' }, { value: 'snareSteps', label: 'snare in 4ths, 8ths, 16ths' },
+      { value: 'kickRoll', label: 'kick roll, low-passed 8ths' }, { value: 'claps', label: 'claps on every beat' }] },
+  { rule: 'buildupBars', label: 'Build-up length', group: 'Drops', roles: ['buildup', 'kick', 'clap'], when: (g) => (g.rules.buildup ?? 'none') !== 'none',
+    options: [{ value: 2, label: '2 bars' }, { value: 4, label: '4 bars' }, { value: 8, label: '8 bars' }] },
+  { rule: 'buildupCrash', label: 'Crashes into drops', group: 'Drops', roles: ['crash'], unset: 'none',
+    options: [{ value: 'none', label: 'none' }, { value: 'faster', label: 'faster and faster' }, { value: 'last4', label: 'on the last 4 counts' }] },
+  { rule: 'dropFill', label: 'Into drops', group: 'Drops', roles: BUILDUP_ROLES,
     options: [{ value: 'roll', label: 'a roll' }, { value: 'fill', label: 'a fill' }, { value: null, label: 'no fill' }] },
   { rule: 'dropRiser', label: 'Riser into drops', group: 'Drops', roles: ['fx', 'fx2'], options: yesNo('yes', 'no') },
   { rule: 'mixHp', label: 'Mix high-passed', group: 'Drops', roles: MIX,
@@ -93,6 +102,11 @@ export function choicesFor(g: Generation): Choice[] {
 /** The choices shaping a lane (by its role, or the role it's a layer of). */
 export function choicesOfRole(role: Role): Choice[] {
   return CHOICES.filter((c) => c.roles.includes(role))
+}
+
+/** A track's value of a choice. */
+export function choiceValue(c: Choice, g: Generation): unknown {
+  return g.rules[c.rule] ?? c.unset ?? null
 }
 
 /** A value as an option key (values are JSON: null, booleans, numbers, strings). */

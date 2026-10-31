@@ -169,7 +169,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
         {!compact && (
           <div className="flex items-center gap-1.5">
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb} reset={0}
-                       color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (double-click: 0 dB)`} dragging={controlDrag}
+                       color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the generated mix's balance` : ''}`} dragging={controlDrag}
                        onChange={(v) => set('Lane volume', { volumeDb: v }, `vol-${lane.id}`)} />
             <span className="w-11 text-right text-[10.5px] tabular-nums text-muted">{fmtDb(lane.volumeDb)}</span>
             <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}
@@ -190,7 +190,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
 
 /**
  * A rectangle filled up to the value (from `origin`, default the minimum): click or drag
- * to set it, double-click to reset. Marks `dragging` so the lane strip doesn't move along.
+ * to set it, ⌥-click or double-click to reset. Marks `dragging` so the lane strip doesn't move along.
  */
 export function BarSlider({ min, max, step, value, reset, origin = min, color, title, className, dragging, onChange }: {
   min: number
@@ -220,6 +220,10 @@ export function BarSlider({ min, max, step, value, reset, origin = min, color, t
            if (e.button !== 0) return
            e.preventDefault()
            e.stopPropagation()
+           if (e.altKey) {
+             onChange(reset)
+             return
+           }
            dragging.current = true
            e.currentTarget.setPointerCapture(e.pointerId)
            onChange(fromX(e.currentTarget, e.clientX))

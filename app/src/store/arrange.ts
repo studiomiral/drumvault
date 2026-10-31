@@ -16,6 +16,7 @@ export function panelOf(laneName: string): Panel {
 
 export const MIN_PX_PER_BEAT = 0.5  // 192 bars fit in ~400 px
 export const MAX_PX_PER_BEAT = 160
+export const DEFAULT_PX_PER_BEAT = 12
 
 interface ArrangeState {
   pxPerBeat: number
@@ -34,7 +35,7 @@ interface ArrangeState {
 }
 
 export const useArrange = create<ArrangeState>((set) => ({
-  pxPerBeat: 12,
+  pxPerBeat: DEFAULT_PX_PER_BEAT,
   scrollX: 0,
   scrollY: 0,
   libraryOpen: true,

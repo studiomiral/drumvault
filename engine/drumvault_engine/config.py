@@ -245,6 +245,12 @@ class Thresholds:
     arrangement_bands: int = 24
     arrangement_band_lo_hz: float = 40.0
     arrangement_band_hi_hz: float = 16000.0
+    # The mix balance (K-weighted loudness of each part in its full bars, the app's reference
+    # levels): unless the stems were normalised one by one, when this share of them (and at
+    # least this many) peaks within this of full scale.
+    arrangement_normalized_peak_db: float = -1.0
+    arrangement_normalized_share: float = 0.8
+    arrangement_normalized_min_stems: int = 3
 
     # ---- loose samples (samples.py): Splice and other packs ----------------------
     sample_loop_fit_s: float = 0.03         # a loop's length within this of whole bars (else a tail is cut)

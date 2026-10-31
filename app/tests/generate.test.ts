@@ -5,6 +5,7 @@ import {
   transposeTo, type GenerateOptions, type Generation, type Role,
 } from '../src/generate/generator'
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
+import { dropRanges, KICK_LEVEL_DB, laneLoudness } from '../src/generate/balance'
 import { bassPath } from '../src/audio/schedule'
 import type { EventShape, HitItem, LoopGroove, MidiItem, SerumPreset, TrackArrangement } from '../src/types/api'
 import { hitPitch } from '../src/generate/disco'
@@ -187,16 +188,18 @@ describe('generator: rules every generation keeps', () => {
       .toBeGreaterThan(gens.length * 0.8)
   })
 
-  it('applies the lane volume sliders on top of the starting mix', () => {
+  it('applies the lane volume sliders at 0 dB by default, the starting mix as levels where nothing is measured', () => {
     const g = generate(LIB, { ...OPTS, mix: { top: -3, kick: 2 } }, 1234)
-    const vol = (name: string) => g.project.lanes.find((l) => l.name === name)?.volumeDb
-    const base = (name: string) => LANES.find((l) => l.name === name)!.volumeDb
-    expect(vol('Kick')).toBe(base('Kick') + 2)
-    expect(vol('Tops')).toBe(base('Tops') - 3)
-    if (vol('Tops 2') != null) expect(vol('Tops 2')).toBe(base('Tops 2'))  // its own slider
+    const lane = (name: string) => g.project.lanes.find((l) => l.name === name)
+    const start = (name: string) => LANES.find((l) => l.name === name)!.startDb
+    expect(lane('Kick')!.volumeDb).toBe(2)
+    expect(lane('Tops')!.volumeDb).toBe(-3)
+    if (lane('Tops 2')) expect(lane('Tops 2')!.volumeDb).toBe(0)  // its own slider
+    // The test library has no loudness measured: each lane plays at its step in the starting mix.
+    for (const l of g.project.lanes) expect(l.levelDb).toBe(start(l.name))
+    expect(g.choices.some((c) => c.startsWith('mix balanced'))).toBe(false)
     applyMix(g.project, {})
-    expect(vol('Kick')).toBe(base('Kick'))
-    expect(base('Kick')).toBeLessThan(0)  // the kick starts a little lower than before
+    expect(lane('Kick')!.volumeDb).toBe(0)
   })
 
   it('brings rides in only in drops: later in the first one and/or all through later ones', () => {
@@ -1658,5 +1661,151 @@ describe('generator: changing a made track (choices, a new sound, keys instead o
     expect(rest(r)).toEqual(rest(g))
     const roles: Role[] = r.project.lanes.map((l) => laneRole(l.name)!).filter(Boolean)
     expect(roles).toContain('keys')
+  })
+})
+
+describe('generator: build-ups into drops', () => {
+  const at = (g: Generation, name: string, bar: number) =>
+    g.project.clips.find((c): c is PatternClip => c.type === 'pattern' && c.laneId === laneOf(g, name) && c.start <= bar * 4 && c.start + c.length > bar * 4)
+  const hits = (c: PatternClip | undefined) => (c ? c.steps.slice(0, 16).filter(Boolean).length : 0)
+  /** Locked so nothing else moves the bars before drops: no silence, no FX or fill stopping early. */
+  const quiet = (locks: Record<string, unknown>): GenerateOptions => ({ ...OPTS, locks: { dropSilence: 0, dropRiser: false, dropFill: null, dropBreath: null, mixHp: 0, ...locks } })
+  const intoDrops = (g: Generation) => g.sections.slice(0, -1).filter((_s, i) => g.sections[i + 1].kind === 'drop')
+  const barsOf = (g: Generation, sec: Generation['sections'][number]) =>
+    Math.min(g.rules.buildup === 'none' ? 0 : (g.rules.buildupBars as number), Math.floor(sec.bars / (sec.kind === 'intro' ? 4 : 2)))
+
+  it('rolls a snare in 16ths into every drop, opening from low-passed and thinning out at the end, louder as it goes', () => {
+    for (let i = 0; i < 12; i++) {
+      const g = generate(LIB, quiet({ buildup: 'snareRoll', buildupBars: 8 }), 4100 + i)
+      expect(g.picks.buildup?.category).toMatch(/snare|clap/)
+      expect(g.project.clips.some((c) => c.sample.category === 'roll')).toBe(false)
+      for (const sec of intoDrops(g)) {
+        const n = barsOf(g, sec)
+        const z = sec.start + sec.bars
+        expect(at(g, 'Build-up', z - n - 1)).toBeUndefined()
+        const bars = Array.from({ length: n }, (_, j) => at(g, 'Build-up', z - n + j)!)
+        for (const c of bars) expect(hits(c)).toBe(16)
+        const hp = Math.ceil(n / 4)
+        bars.forEach((c, j) => expect(c.filter!.type).toBe(j < n - hp ? 'lowpass' : 'highpass'))
+        expect(bars[0].gainDb).toBe(-15)
+        expect(bars[n - 1].gainTo).toBe(0)
+        for (let j = 1; j < n; j++) expect(bars[j].gainDb).toBeGreaterThanOrEqual(bars[j - 1].gainDb)
+        expect(bars[n - 1].steps[15]).toBe(3)
+        expect(bars[0].steps[0]).toBe(1)
+      }
+    }
+  })
+
+  it('plays a snare in quarters, then 8ths, then 16ths', () => {
+    const g = generate(LIB, quiet({ buildup: 'snareSteps', buildupBars: 8 }), 4200)
+    const sec = intoDrops(g).find((s) => barsOf(g, s) === 8)!
+    const z = sec.start + sec.bars
+    expect(hits(at(g, 'Build-up', z - 8))).toBe(4)
+    expect(hits(at(g, 'Build-up', z - 4))).toBe(8)
+    expect(hits(at(g, 'Build-up', z - 1))).toBe(16)
+  })
+
+  it('rolls the kick low-passed in 8ths with the kick lane out there, and claps every beat with the claps out', () => {
+    const k = generate(LIB, quiet({ buildup: 'kickRoll', buildupBars: 4, dropKickOut: false, dropLastKick: false }), 4300)
+    for (const sec of intoDrops(k)) {
+      const z = sec.start + sec.bars
+      for (let b = z - barsOf(k, sec); b < z; b++) {
+        const c = at(k, 'Build-up', b)!
+        expect(c.sample.relPath).toBe(k.picks.kick!.rel_path)
+        expect(hits(c)).toBe(8)
+        expect(c.filter?.type).toBe('lowpass')
+        expect(at(k, 'Kick', b)).toBeUndefined()
+      }
+      if (sec.kind !== 'break') expect(at(k, 'Kick', z - barsOf(k, sec) - 1)).toBeDefined()
+    }
+    const c = generate(LIB, quiet({ buildup: 'claps', buildupBars: 4 }), 4400)
+    for (const sec of intoDrops(c)) {
+      const z = sec.start + sec.bars
+      for (let b = z - barsOf(c, sec); b < z; b++) {
+        expect(at(c, 'Build-up', b)!.steps.slice(0, 16).map((v, s) => (v ? s : -1)).filter((s) => s >= 0)).toEqual([0, 4, 8, 12])
+        expect(at(c, 'Clap', b)).toBeUndefined()
+      }
+    }
+  })
+
+  it('brings crashes faster into drops (half bars, quarters, 8ths), or on the last four counts', () => {
+    const f = generate(LIB, quiet({ buildupCrash: 'faster' }), 4500)
+    for (const sec of f.sections.filter((s) => s.kind === 'drop' && s.start > 0)) {
+      expect([3, 2, 1].map((k) => hits(at(f, 'Crash', sec.start - k)))).toEqual([2, 4, 8])
+      expect(hits(at(f, 'Crash', sec.start))).toBeGreaterThan(0)
+    }
+    const l = generate(LIB, quiet({ buildupCrash: 'last4' }), 4500)
+    for (const sec of l.sections.filter((s) => s.kind === 'drop' && s.start > 0)) expect(hits(at(l, 'Crash', sec.start - 1))).toBe(4)
+    expect(l.choices).toContain('crashes on the last four counts into drops')
+  })
+
+  it('goes without a roll sample when it has a build-up, and without the build-up when the roll is locked', () => {
+    const withRoll = gens.filter((g) => g.rules.dropFill === 'roll')
+    expect(withRoll.length).toBeGreaterThan(0)
+    for (const g of gens) if (g.rules.buildup !== 'none') expect(g.rules.dropFill).not.toBe('roll')
+    const locked = generate(LIB, { ...OPTS, locks: { dropFill: 'roll' } }, gens.find((g) => g.rules.buildup !== 'none')!.seed)
+    expect(locked.rules.buildup).toBe('none')
+    expect(laneOf(locked, 'Build-up')).toBeUndefined()
+  })
+
+  it('makes the Build-up lane again as another build-up, the kick lane following, the rest as it is', () => {
+    const g = generate(LIB, { ...OPTS, locks: { buildup: 'kickRoll' } }, 4600)
+    const r = rerollLane(LIB, OPTS, g, laneOf(g, 'Build-up')!, 11)!
+    expect(r.rules.buildup).not.toBe('kickRoll')
+    const sec = intoDrops(r)[0]
+    const z = sec.start + sec.bars
+    expect(at(r, 'Kick', z - 2)).toBeDefined()
+    const same = (x: Generation, name: string) => JSON.stringify(x.project.clips.filter((c) => c.laneId === laneOf(x, name)).map(({ id: _i, laneId: _l, ...c }) => c))
+    for (const name of ['Hats', 'Tops', 'Perc', 'Crash', 'FX']) expect(same(r, name)).toBe(same(g, name))
+  })
+
+  it('remakes a track from before build-ups without one', () => {
+    const g = structuredClone(gens.find((x) => x.rules.buildup !== 'none' && laneOf(x, 'Clap'))!)
+    const id = laneOf(g, 'Build-up')!
+    g.project.clips = g.project.clips.filter((c) => c.laneId !== id)
+    g.project.lanes = g.project.lanes.filter((l) => l.id !== id)
+    for (const k of ['buildup', 'buildupBars', 'buildupCrash']) delete g.rules[k]
+    const r = setTrackRule(LIB, OPTS, g, 'clapRolls', g.rules.clapRolls === 'none' ? '16' : 'none', [...CHOICES.find((c) => c.rule === 'clapRolls')!.roles, 'kick'])
+    expect(laneOf(r, 'Build-up')).toBeUndefined()
+    expect(r.rules.buildup).toBeUndefined()
+  })
+})
+
+describe('generator: the mix balance', () => {
+  // The test library with loudness measured: every sample its own level (hats louder than the rest).
+  const loud = LIB.map((s, i) => ({ ...s, energy_db: (s.category.startsWith('hat') ? -12 : -16) + (i % 7) - 3 }))
+  const byPathLoud = new Map(loud.map((s) => [s.rel_path, s]))
+  const opts: GenerateOptions = { ...OPTS, templates: [] }
+  const heard = (g: Generation, name: string) => {
+    const lane = g.project.lanes.find((l) => l.name === name)!
+    return laneLoudness(g.project.clips.filter((c) => c.laneId === lane.id), byPathLoud, g.project.bpm, dropRanges(g.sections))!
+      + lane.volumeDb + (lane.levelDb ?? 0)
+  }
+
+  it('brings every lane to its place against the kick, whatever its samples\' levels', () => {
+    for (let i = 0; i < 10; i++) {
+      const g = generate(loud, opts, 8100 + i)
+      expect(g.project.lanes.every((l) => l.levelDb != null)).toBe(true)
+      expect(heard(g, 'Kick')).toBeCloseTo(KICK_LEVEL_DB, 0)
+      if (!laneOf(g, 'Hats 2')) expect(heard(g, 'Hats') - heard(g, 'Kick')).toBeCloseTo(-10, 0)
+      expect(g.choices).toContain('mix balanced on house defaults')
+    }
+    // A library not measured yet: the starting mix as before.
+    expect(generate(LIB, opts, 8100).project.lanes.every((l) => l.levelDb === LANES.find((x) => x.name === l.name)!.startDb)).toBe(true)
+  })
+
+  it('levels a lane again when it gets another sound or is made again', () => {
+    const g = generate(loud, opts, 8200)
+    const hats = laneOf(g, 'Hats')!
+    const level = (x: Generation) => x.project.lanes.find((l) => l.name === 'Hats')!.levelDb!
+    const swapped = newLaneSound(loud, opts, g, hats, 3)!
+    const rolled = rerollLane(loud, opts, g, hats, 5)!
+    for (const x of [swapped, rolled]) {
+      const before = g.project.clips.find((c) => c.laneId === hats)!.sample.relPath
+      const after = x.project.clips.find((c) => c.laneId === laneOf(x, 'Hats'))!.sample.relPath
+      if (byPathLoud.get(before)!.energy_db !== byPathLoud.get(after)!.energy_db) expect(level(x)).not.toBe(level(g))
+      // (Levels are in half-dB steps.)
+      expect(Math.abs(heard(x, 'Hats') - heard(x, 'Kick') - (heard(g, 'Hats') - heard(g, 'Kick')))).toBeLessThanOrEqual(0.51)
+    }
   })
 })

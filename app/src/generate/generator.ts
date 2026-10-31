@@ -25,44 +25,48 @@ import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
 import { templateFrom } from './template'
+import { balanceFrom, dropRanges, levelLanes, type Balance } from './balance'
 
-export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
+export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'keys' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
   | 'disco' | 'disco2' | 'stab'
 
-/** Volume per lane (dB on top of the starting mix), set with the Generate view's lane sliders. */
+/** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
 
 /**
- * Lanes of a generated project, in order, with a starting mix. Layers of the same kind (up to
- * three claps, four top loops, …) get their own lane, each a little quieter.
+ * Lanes of a generated project, in order. Layers of the same kind (up to three claps, four top
+ * loops, …) get their own lane, each a little quieter (`startDb`: the step between them). The mix
+ * balance (balance.ts) levels each lane; `startDb` is also the level of a lane whose samples
+ * aren't measured yet (the starting mix from before the balance). The sliders start at 0 dB.
  */
-export const LANES: { role: Role; name: string; volumeDb: number; color: string }[] = [
-  { role: 'kick', name: 'Kick', volumeDb: -2, color: '#e2c35f' },
-  { role: 'clap', name: 'Clap', volumeDb: -3, color: '#f472b6' },
-  { role: 'clap2', name: 'Clap 2', volumeDb: -7, color: '#f9a8d4' },
-  { role: 'clap3', name: 'Clap 3', volumeDb: -9, color: '#fbcfe8' },
-  { role: 'hats', name: 'Hats', volumeDb: -6, color: '#22d3ee' },
-  { role: 'hats2', name: 'Hats 2', volumeDb: -9, color: '#67e8f9' },
-  { role: 'ride', name: 'Ride', volumeDb: -9, color: '#5eead4' },
-  { role: 'perc', name: 'Perc', volumeDb: -7, color: '#4ee3a6' },
-  { role: 'perc2', name: 'Perc 2', volumeDb: -9, color: '#86efac' },
-  { role: 'top', name: 'Tops', volumeDb: -6, color: '#60a5fa' },
-  { role: 'top2', name: 'Tops 2', volumeDb: -8, color: '#7dd3fc' },
-  { role: 'top3', name: 'Tops 3', volumeDb: -9, color: '#93c5fd' },
-  { role: 'top4', name: 'Tops 4', volumeDb: -10, color: '#a5b4fc' },
-  { role: 'groove', name: 'Groove', volumeDb: -8, color: '#a3e635' },
-  { role: 'bass', name: 'Bass', volumeDb: -4, color: '#fda4af' },
-  { role: 'keys', name: 'Keys', volumeDb: -7, color: '#c4b5fd' },
-  { role: 'stab', name: 'Stab', volumeDb: -7, color: '#fcd34d' },
-  { role: 'disco', name: 'Disco Hit', volumeDb: -6, color: '#f0abfc' },
-  { role: 'disco2', name: 'Disco Hit 2', volumeDb: -7, color: '#f5d0fe' },
-  { role: 'fills', name: 'Fills', volumeDb: -5, color: '#fb923c' },
-  { role: 'fx', name: 'FX', volumeDb: -9, color: '#a78bfa' },
-  { role: 'fx2', name: 'FX 2', volumeDb: -11, color: '#c4b5fd' },
-  { role: 'crash', name: 'Crash', volumeDb: -8, color: '#fef08a' },
-  { role: 'hits', name: 'Hits', volumeDb: -6, color: '#fde68a' },
-  { role: 'atmos', name: 'Atmos', volumeDb: -11, color: '#94a3b8' },
+export const LANES: { role: Role; name: string; startDb: number; color: string }[] = [
+  { role: 'kick', name: 'Kick', startDb: -2, color: '#e2c35f' },
+  { role: 'clap', name: 'Clap', startDb: -3, color: '#f472b6' },
+  { role: 'clap2', name: 'Clap 2', startDb: -7, color: '#f9a8d4' },
+  { role: 'clap3', name: 'Clap 3', startDb: -9, color: '#fbcfe8' },
+  { role: 'buildup', name: 'Build-up', startDb: -5, color: '#fb7185' },
+  { role: 'hats', name: 'Hats', startDb: -6, color: '#22d3ee' },
+  { role: 'hats2', name: 'Hats 2', startDb: -9, color: '#67e8f9' },
+  { role: 'ride', name: 'Ride', startDb: -9, color: '#5eead4' },
+  { role: 'perc', name: 'Perc', startDb: -7, color: '#4ee3a6' },
+  { role: 'perc2', name: 'Perc 2', startDb: -9, color: '#86efac' },
+  { role: 'top', name: 'Tops', startDb: -6, color: '#60a5fa' },
+  { role: 'top2', name: 'Tops 2', startDb: -8, color: '#7dd3fc' },
+  { role: 'top3', name: 'Tops 3', startDb: -9, color: '#93c5fd' },
+  { role: 'top4', name: 'Tops 4', startDb: -10, color: '#a5b4fc' },
+  { role: 'groove', name: 'Groove', startDb: -8, color: '#a3e635' },
+  { role: 'bass', name: 'Bass', startDb: -4, color: '#fda4af' },
+  { role: 'keys', name: 'Keys', startDb: -7, color: '#c4b5fd' },
+  { role: 'stab', name: 'Stab', startDb: -7, color: '#fcd34d' },
+  { role: 'disco', name: 'Disco Hit', startDb: -6, color: '#f0abfc' },
+  { role: 'disco2', name: 'Disco Hit 2', startDb: -7, color: '#f5d0fe' },
+  { role: 'fills', name: 'Fills', startDb: -5, color: '#fb923c' },
+  { role: 'fx', name: 'FX', startDb: -9, color: '#a78bfa' },
+  { role: 'fx2', name: 'FX 2', startDb: -11, color: '#c4b5fd' },
+  { role: 'crash', name: 'Crash', startDb: -8, color: '#fef08a' },
+  { role: 'hits', name: 'Hits', startDb: -6, color: '#fde68a' },
+  { role: 'atmos', name: 'Atmos', startDb: -11, color: '#94a3b8' },
 ]
 /** Lanes that keep playing in the beat or two of silence before a drop. */
 const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'hits'])
@@ -79,11 +83,56 @@ const BREATH_DRUMS: Role[] = [...CLAP_ROLES, 'hats', 'hats2', 'perc', 'perc2', '
 /** A bass build's high-pass ends here: the sub coming in towards the drop. */
 const BASS_SWEEP_TO_HZ = 40
 
-/** Lane volumes = the starting mix + the Generate view's sliders (dB per group). */
+/**
+ * The build-ups into drops (SCOPE.md §6.6), programmed on their own lane over the last bars
+ * before each drop: a snare roll in 16ths opening from low-passed and thinning out at the end,
+ * a snare in quarters, 8ths, then 16ths, a low-passed kick in 8ths (the kick lane out there), or
+ * claps on every beat (the clap lane out there). Each gets louder towards the drop.
+ */
+export const BUILDUPS = ['snareRoll', 'snareSteps', 'kickRoll', 'claps'] as const
+export type Buildup = typeof BUILDUPS[number] | 'none'
+/** The snare roll's low-pass opens from … to … Hz, then a high-pass rises from … to … Hz over its last quarter. */
+const ROLL_LP_FROM_HZ = 350
+const ROLL_LP_TO_HZ = 16000
+const ROLL_HP_FROM_HZ = 60
+const ROLL_HP_TO_HZ = 1800
+/** The kick roll's low-pass opens from … to … Hz. */
+const KICK_ROLL_LP_FROM_HZ = 160
+const KICK_ROLL_LP_TO_HZ = 2400
+/** dB each build-up starts at, rising evenly to 0 on the drop. */
+const BUILDUP_FROM_DB: Record<typeof BUILDUPS[number], number> = { snareRoll: -15, snareSteps: -9, kickRoll: -6, claps: -4 }
+/** Crashes coming faster into drops: per bar before it, how often (16ths apart) and how loud (dB). */
+const CRASH_FASTER: [number, number][] = [[8, -6], [4, -3], [2, 0]]
+const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
+  snareRoll: 'snare roll opening up', snareSteps: 'snare in 4ths, 8ths, 16ths', kickRoll: 'low-passed kick roll', claps: 'claps on every beat',
+}
+/**
+ * Rules newer than some saved generations: a track made before them is remade without them
+ * (no build-up appears on a lane made again).
+ */
+const LATER_RULES: Rules = { buildup: 'none', buildupBars: 4, buildupCrash: 'none' }
+const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
+
+/** A lane's step in the starting mix (see LANES). */
+const startingDb = (role: Role) => LANES.find((l) => l.role === role)?.startDb ?? 0
+
+/**
+ * Every generated lane of `project` (or `only` these) brought to its place in the balance
+ * (balance.ts): the producers' in the user's tracks, else the house defaults.
+ */
+function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOptions, sections: Section[], only?: Set<string>): Balance & { measured: number } {
+  const hits = [...opts.disco?.hits ?? [], ...opts.stabs?.hits ?? []].map(hitSample)
+  const byPath = new Map([...all, ...hits].map((s) => [s.rel_path, s]))
+  const balance = balanceFrom(opts.templates ?? [])
+  const measured = levelLanes(project, byPath, balance, dropRanges(sections), laneRole, startingDb, only)
+  return { ...balance, measured }
+}
+
+/** Lane volumes = the Generate view's sliders (dB per lane, 0 by default). */
 export function applyMix(project: Project, mix: Mix): void {
   for (const lane of project.lanes) {
     const l = LANES.find((x) => x.name === lane.name)
-    if (l) lane.volumeDb = l.volumeDb + (mix[l.role] ?? 0)
+    if (l) lane.volumeDb = mix[l.role] ?? 0
   }
 }
 
@@ -98,7 +147,7 @@ export interface GenerateOptions {
   zipIds: number[] | null
   /** Favourites and ratings make samples more likely. */
   useRatings: boolean
-  /** Volume per lane in dB, on top of the starting mix. */
+  /** Volume per lane in dB, on top of the balanced mix. */
   mix?: Mix
   /** Bass (SCOPE.md §6.7): imported basslines and the Serum patch pool; null or empty = no bass. */
   bass?: BassOptions | null
@@ -455,6 +504,9 @@ interface BarPattern {
   filter?: ClipFilter
   /** Semitones (a disco hit moved into the track key). */
   pitch?: number
+  /** A volume ride over the bar (a build-up getting louder): dB at its start, and at its end. */
+  gainDb?: number
+  gainTo?: number
 }
 
 interface Segment {
@@ -491,7 +543,7 @@ function alike(a: Segment, b: Segment): boolean {
 // (Not the chord stabs: they sit straight on the grid, where a patch's arp keeps them anyway.)
 const GROOVED = new Set<Role>(['clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4'])
 
-const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}`
+const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}`
 
 class Lanes {
   bars = new Map<Role, (BarPattern | null)[]>()
@@ -657,8 +709,9 @@ class Lanes {
         if (!steps.some(Boolean)) return
         const c: PatternClip = {
           id: uid('c'), laneId, type: 'pattern', start: start * BEATS_PER_BAR, length: len * BEATS_PER_BAR,
-          gainDb: 0, sample: sampleRef(p.sample), patternBars, steps: [...steps],
+          gainDb: p.gainDb ?? 0, sample: sampleRef(p.sample), patternBars, steps: [...steps],
         }
+        if (p.gainTo != null) c.gainTo = p.gainTo
         if (p.filter) c.filter = { ...p.filter }
         if (p.pitch) c.pitch = p.pitch
         if (this.feel && GROOVED.has(role)) c.groove = grooveFor(this.feel, c.steps)
@@ -860,6 +913,19 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // RNG of their own keeps the rest of the track the same with or without them ----
   const drng = new Rng(seed ^ 0x44495343)
   const hpRng = new Rng(seed ^ 0x4d495848)
+  // The build-ups into drops and their snare: an RNG of their own too.
+  const brng = new Rng(seed ^ 0x4255494c)
+  const buildDrawn = {
+    buildup: brng.weighted([['none', 3], ['snareRoll', 2], ['snareSteps', 2], ['kickRoll', 1.5], ['claps', 1.5]] as const) as Buildup,
+    buildupBars: brng.weighted([[2, 1], [4, 3], [8, 2]] as const) as number,
+    buildupCrash: brng.weighted([['none', 4], ['faster', 1.5], ['last4', 1.5]] as const) as 'none' | 'faster' | 'last4',
+  }
+  const snares = pool(of('oneshot', 'snare')).filter((x) => !claps.some((c) => c.id === x.id))
+  const snareCands = snares.length ? snares : clapShots.filter((x) => !claps.some((c) => c.id === x.id))
+  const freshSnares = snareCands.filter((x) => !keep.avoid?.includes(x.rel_path))
+  const drawnSnare = (freshSnares.length ? freshSnares : snareCands).length ? brng.pick(freshSnares.length ? freshSnares : snareCands) : null
+  const keptSnare = keep.picks?.buildup && of('oneshot', 'snare', 'clap')(keep.picks.buildup) ? keep.picks.buildup : null
+  const snare = keptSnare ?? drawnSnare ?? clap
   const hitItems = opts.disco?.hits ?? []
   const hitPool = hitItems.map(hitSample)
   const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
@@ -919,6 +985,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // (With the producer's own FX into a drop: what they layered there.)
     dropFill: inSet((s) => s.category === 'roll') ? 'roll' as const : inSet((s) => s.category === 'fill') ? 'fill' as const
       : rolls.length && rng.chance(0.45) ? 'roll' as const : fills.length && rng.chance(0.85) ? 'fill' as const : null,
+    // Or a build-up of the track's own (none when it takes a producer's roll), the bars it runs,
+    // and crashes building the drop: faster and faster, or on the last four counts.
+    buildup: inSet((s) => s.category === 'roll') ? 'none' as Buildup : buildDrawn.buildup,
+    buildupBars: buildDrawn.buildupBars,
+    buildupCrash: buildDrawn.buildupCrash,
     dropRiser: !!drawnSet || (risers.length > 0 && rng.chance(0.8)),
     dropImpact: inSet((s) => s.category === 'fx_impact') || (impacts.length > 0 && rng.chance(0.5)),
     // The silence before drops when their FX and fill run right up to it (else theirs).
@@ -1004,6 +1075,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   const rules: typeof drawn = { ...drawn, ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined) }
+  // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
+  // otherwise the build-up takes the roll's place (a fill can still lead in with it).
+  if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
+    if (opts.locks && 'dropFill' in opts.locks && !('buildup' in opts.locks)) rules.buildup = 'none'
+    else rules.dropFill = fills.length ? 'fill' : null
+  }
   const fxChance = { sparse: 0.45, normal: 0.75, busy: 0.95 }[rules.fx]
   const keptGaps = rules.dropGaps
   const dropGaps: Record<string, number> = {}
@@ -1147,6 +1224,50 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   const crashAt = new Set<number>()
   const tracks = { tops: Math.min(tops.length, rules.dropTops) }
+  /**
+   * The track's build-up over the last bars of `sec`, into the drop after it: bar by bar on the
+   * Build-up lane, louder as it goes (a kick roll or claps take the kick or clap lane's place there).
+   */
+  const buildUp = (sec: Section) => {
+    const type = rules.buildup as Buildup
+    if (type === 'none') return
+    const sample = type === 'kickRoll' ? kick : type === 'claps' ? clap : snare
+    if (!sample) return
+    const z = sec.start + sec.bars
+    // At most half the section, a quarter of an intro (its mix-in half stays the intro's).
+    const n = Math.min(rules.buildupBars, Math.max(1, Math.floor(sec.bars / (sec.kind === 'intro' ? 4 : 2))))
+    const a = z - n
+    const fromDb = BUILDUP_FROM_DB[type]
+    const db = (bar: number) => Math.round(fromDb * (1 - (bar - a) / n) * 2) / 2 || 0
+    const sweep = (f0: number, f1: number, x0: number, x1: number, type_: ClipFilter['type'], n_: number): ClipFilter => ({
+      type: type_, from: Math.round(f0 * (f1 / f0) ** (x0 / n_)), to: Math.round(f0 * (f1 / f0) ** (x1 / n_)), q: 0.7,
+    })
+    // The snare roll: low-pass opening, then a high-pass thinning it out over its last quarter.
+    const hpBars = Math.ceil(n / 4)
+    const lpBars = n - hpBars
+    for (let b = a; b < z; b++) {
+      const j = b - a
+      const s_ = new Array(STEPS_PER_BAR).fill(0) as Steps
+      for (let k = 0; k < STEPS_PER_BAR; k++) {
+        const t = (j * STEPS_PER_BAR + k) / (n * STEPS_PER_BAR)
+        const on = type === 'snareRoll' ? true
+          : type === 'snareSteps' ? (t < 1 / 3 ? k % 4 === 0 : t < 2 / 3 ? k % 2 === 0 : true)
+            : type === 'kickRoll' ? k % 2 === 0 : k % 4 === 0
+        if (!on) continue
+        s_[k] = (type === 'snareRoll' ? (t < 1 / 3 ? 1 : t < 2 / 3 ? 2 : 3) : type === 'kickRoll' ? 3 : t < 1 / 2 ? 2 : 3) as Velocity
+      }
+      const filter = type === 'snareRoll'
+        ? (j < lpBars ? sweep(ROLL_LP_FROM_HZ, ROLL_LP_TO_HZ, j, j + 1, 'lowpass', lpBars) : sweep(ROLL_HP_FROM_HZ, ROLL_HP_TO_HZ, j - lpBars, j - lpBars + 1, 'highpass', hpBars))
+        : type === 'kickRoll' ? sweep(KICK_ROLL_LP_FROM_HZ, KICK_ROLL_LP_TO_HZ, j, j + 1, 'lowpass', n) : undefined
+      lanes.setBar('buildup', b, { sample, steps: s_, ...(filter ? { filter } : {}), gainDb: db(b), gainTo: db(b + 1) })
+      if (type === 'kickRoll') lanes.setBar('kick', b, null)
+      if (type === 'claps') for (const r of CLAP_ROLES) lanes.setBar(r, b, null)
+    }
+    if (sample === snare) picks.buildup = snare
+    built = n
+  }
+  let built = 0
+
   let dropIndex = 0
   sections.forEach((sec, i) => {
     const a = sec.start
@@ -1382,6 +1503,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         if (rules.dropDown && rules.fx !== 'sparse') placeFree(['hits', 'fx2', 'fx'], trackPick('drop-down', downs, true), end)
         dropGaps[z] = t ?? 0
         crashAt.add(z)  // every drop starts with a crash
+        buildUp(sec)
       } else if (intoBreak) {
         const fill = rules.breakFill ? endOn('fill', 'fills', fills, end, 8, 1) : null
         if (rules.breakCrash) crashAt.add(z)
@@ -1399,6 +1521,19 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   // ---- crashes on the 1 of key moments ----
   if (crash) for (const b of crashAt) if (b < total) lanes.setBar('crash', b, { sample: crash, steps: steps([0]) })
+  // … and crashes building every drop: coming faster bar by bar (half bars, quarters, 8ths), or
+  // on each of the last four counts.
+  if (crash && rules.buildupCrash !== 'none') {
+    for (const sec of sections) {
+      if (sec.kind !== 'drop' || sec.start < CRASH_FASTER.length) continue
+      if (rules.buildupCrash === 'last4') lanes.setBar('crash', sec.start - 1, { sample: crash, steps: steps(FOUR) })
+      else {
+        CRASH_FASTER.forEach(([every, db], k) => lanes.setBar('crash', sec.start - CRASH_FASTER.length + k, {
+          sample: crash, steps: steps(Array.from({ length: STEPS_PER_BAR / every }, (_, x) => x * every), k === CRASH_FASTER.length - 1 ? 3 : 2), ...(db ? { gainDb: db } : {}),
+        }))
+      }
+    }
+  }
 
   // ---- the intro's loops repeat only their first bar or two at first (the outro mirrors it) ----
   if (rules.ioShort) {
@@ -1538,7 +1673,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // ---- the project ----
   const project = newProject('Generated', bpm)
   project.lengthBars = total
-  project.lanes = LANES.map((l, i) => ({ ...makeLane(l.name, i), color: l.color, volumeDb: l.volumeDb }))
+  project.lanes = LANES.map((l, i) => ({ ...makeLane(l.name, i), color: l.color }))
   applyMix(project, opts.mix ?? {})
   const bassLane = project.lanes.find((l) => l.name === 'Bass')
   if (bassLane && bo) bassLane.duck = bo.sidechain
@@ -1549,6 +1684,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const used = new Set(project.clips.map((c) => c.laneId))
   project.lanes = project.lanes.filter((l) => used.has(l.id))
   project.markers = sections.map((s) => makeMarker(s.label, s.start * 4, (s.start + s.bars) * 4))
+  const balance = balanceLanes(project, all, opts, sections)
 
   // ---- what was chosen ----
   const n = (k: Section['kind']) => sections.filter((s) => s.kind === k).length
@@ -1574,6 +1710,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (rules.kickEnd8) choices.push('kick variation every 8 bars')
   if (rules.clapRolls !== 'none') choices.push(`clap rolls every ${rules.clapRolls} bars`)
   if (rules.clapGhost != null) choices.push('ghost claps')
+  if (balance.measured) {
+    choices.push(balance.tracks ? `mix balanced as in ${balance.tracks} of your tracks` : 'mix balanced on house defaults')
+  }
+  if (built) choices.push(`${BUILDUP_NOTE[rules.buildup as typeof BUILDUPS[number]]} into drops (${built} bars)`)
+  if (crash && rules.buildupCrash !== 'none') choices.push(rules.buildupCrash === 'faster' ? 'crashes coming faster into drops' : 'crashes on the last four counts into drops')
   if (rules.loopGap) choices.push('loops stop before breaks')
   if (tpl) choices.unshift(`structure after ${tpl.source} (${tpl.changes.join(', ')})`)
   if (lanes.feel && feelSrc) {
@@ -1736,7 +1877,8 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   perc: ['ioPerc', 'perc2From'],
   top: ['dropTops', 'ioTopFirst', 'ioTopSecond', 'topsBreaks', 'topsBreakHz', 'dropBreath'],
   groove: ['grooveFrom', 'grooveSwap', 'switchHalfway'],
-  crash: ['phraseCrash', 'crash8', 'breakCrash', 'outroCrash'],
+  crash: ['phraseCrash', 'crash8', 'breakCrash', 'outroCrash', 'buildupCrash'],
+  buildup: ['buildup', 'buildupBars'],
   fills: ['phraseFill', 'dropFill', 'breakFill', 'outroFill'],
   fx: ['fx', 'dropRiser', 'breakSweep', 'fxLayers', 'dropSet'],
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
@@ -1764,7 +1906,8 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
   const role = lane && laneRole(lane.name)
   if (!lane || !role) return null
   const own = new Set(LANE_RULES[LAYER_OF[role] ?? role] ?? [])
-  const rules = Object.fromEntries(Object.entries(g.rules ?? {}).filter(([k]) => !own.has(k)))
+  if (role === 'buildup') return rerollBuildup(all, opts, g, seed)
+  const rules = Object.fromEntries(Object.entries(rulesOf(g)).filter(([k]) => !own.has(k)))
   const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => r !== role)) as Generation['picks']
   const sig = (cs: Clip[]) => JSON.stringify(cs.map(({ id: _i, laneId: _l, ...c }) => c))
   const before = g.project.clips.filter((c) => c.laneId === laneId)
@@ -1780,6 +1923,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     if (role === 'bass' && r.bass && g.bass && r.bass.midi.id === g.bass.midi.id && r.bass.preset.path === g.bass.preset.path) continue
     const project = structuredClone(g.project)
     project.clips = [...project.clips.filter((c) => c.laneId !== laneId), ...clips.map((c) => ({ ...c, laneId }))]
+    project.lanes.find((l) => l.id === laneId)!.levelDb = rl!.levelDb
     const nextPicks = { ...g.picks }
     if (r.picks[role]) nextPicks[role] = r.picks[role]
     const nextRules = { ...g.rules, ...Object.fromEntries(Object.entries(r.rules).filter(([k]) => own.has(k))) }
@@ -1895,7 +2039,7 @@ const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild
  */
 function rerollGroup(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number, roles: Set<Role>,
                      own: Set<string>, force: Rules, choice: string): Generation | null {
-  const rules = { ...Object.fromEntries(Object.entries(g.rules ?? {}).filter(([k]) => !own.has(k))), ...force }
+  const rules = { ...Object.fromEntries(Object.entries(rulesOf(g)).filter(([k]) => !own.has(k))), ...force }
   const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => !roles.has(r as Role))) as Generation['picks']
   const sig = (p: Project) => JSON.stringify(groupClips(p, roles).map(({ id: _i, laneId, ...c }) => [p.lanes.find((l) => l.id === laneId)!.name, c]))
   const bpm = g.project.bpm
@@ -1919,7 +2063,11 @@ function swapGroup(g: Generation, r: Generation, roles: Set<Role>, own: Set<stri
   const inGroup = (laneName: string) => roles.has(laneRole(laneName)!)
   // The track's own lanes keep their mix (volume, mute, …); a lane it didn't have comes from `r`.
   const project = structuredClone(g.project)
-  const lanes = r.project.lanes.filter((l) => inGroup(l.name)).map((l) => project.lanes.find((x) => x.name === l.name) ?? structuredClone(l))
+  // (Their level in the mix follows their new samples.)
+  const lanes = r.project.lanes.filter((l) => inGroup(l.name)).map((l) => {
+    const own = project.lanes.find((x) => x.name === l.name)
+    return own ? { ...own, levelDb: l.levelDb } : structuredClone(l)
+  })
   const clips = groupClips(r.project, roles).map((c) => ({ ...c, laneId: lanes.find((l) => l.name === r.project.lanes.find((x) => x.id === c.laneId)!.name)!.id }))
   project.lanes = project.lanes.filter((l) => !inGroup(l.name))
   for (const l of lanes) {
@@ -1950,7 +2098,7 @@ export function setStabRhythm(all: SampleListItem[], opts: GenerateOptions, g: G
   if (!g.rules.stabs) return null
   const bpm = g.project.bpm
   const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: null, keys: null }, g.seed, {
-    structure: g.sections, key: g.key, picks: g.picks, rules: { ...g.rules, stabRhythm: rhythm },
+    structure: g.sections, key: g.key, picks: g.picks, rules: { ...rulesOf(g), stabRhythm: rhythm },
   })
   // A patch keeps exactly the chord, octave and patch it had: only the steps change.
   const old = g.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab' && !!c.bass.notes?.length)
@@ -2001,17 +2149,45 @@ function sameRenders(g: Generation, project: Project): void {
  * was, so what doesn't follow from the rule comes out as it did.
  */
 export function setTrackRule(all: SampleListItem[], opts: GenerateOptions, g: Generation, rule: string, value: unknown, roles: Role[]): Generation {
+  return setTrackRules(all, opts, g, { [rule]: value }, roles)
+}
+
+/** Rules that follow when one of them is set: a build-up and a roll sample into drops don't go together. */
+const COUPLED: Record<string, string[]> = { dropFill: ['buildup'], buildup: ['dropFill'] }
+
+/** setTrackRule for several rules at once (`picks`: the samples kept, `avoid`: ones not to take again). */
+function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generation, values: Rules, roles: Role[],
+                       picks: Generation['picks'] = g.picks, avoid?: string[]): Generation {
   const bpm = g.project.bpm
-  const rules = { ...g.rules, [rule]: value }
-  const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, locks: { ...opts.locks, [rule]: value } }, g.seed, {
-    structure: g.sections, key: g.key, picks: g.picks, rules, replay: g.rngAt,
+  const rules = { ...rulesOf(g), ...values }
+  const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, locks: { ...opts.locks, ...values } }, g.seed, {
+    structure: g.sections, key: g.key, picks, rules, replay: g.rngAt, avoid,
   })
   // A part the remake can't play again (its module off since, its samples gone) stays as it is.
   const gone = (role: Role) => (role === 'bass' && g.bass && !r.bass) || (role === 'keys' && g.keys && !r.keys)
     || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs)
-  const next = swapGroup(g, r, new Set(roles.filter((x) => !gone(x))), new Set([rule]), g.picks, null)
+  const own = new Set(Object.keys(values).flatMap((k) => [k, ...COUPLED[k] ?? []]))
+  const next = swapGroup(g, r, new Set(roles.filter((x) => !gone(x))), own, picks, null)
   sameRenders(g, next.project)
-  return { ...next, rules: { ...next.rules, [rule]: value } }
+  return { ...next, rules: { ...next.rules, ...values } }
+}
+
+/** The lanes a build-up plays on or takes the place of. */
+export const BUILDUP_ROLES: Role[] = ['buildup', 'kick', 'clap', 'fills']
+
+/**
+ * The Build-up lane made again: another kind of build-up (and how many bars it runs) and another
+ * snare, made from where the track's random stream was, so the kick and clap lanes it takes the
+ * place of follow and the rest stays exactly as it is.
+ */
+function rerollBuildup(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
+  const rng = new Rng(seed)
+  const was = rulesOf(g).buildup
+  const values = { buildup: rng.pick(BUILDUPS.filter((b) => b !== was)), buildupBars: rng.pick([2, 4, 8]) }
+  const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => r !== 'buildup')) as Generation['picks']
+  const lane = g.project.lanes.find((l) => l.name === 'Build-up')
+  const r = setTrackRules(all, opts, g, values, BUILDUP_ROLES, picks, g.project.clips.filter((c) => c.laneId === lane?.id).map((c) => c.sample.relPath))
+  return r.rules.buildup === 'none' ? null : r
 }
 
 /**
@@ -2066,6 +2242,7 @@ export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Ge
     return c.type === 'audio' && s.kind === 'event' && !looped ? { ...next, length: Math.min(c.length, (x.bars ?? 1) * BEATS_PER_BAR) } : next
   })
   if (!swapped) return null
+  balanceLanes(project, all, opts, g.sections, new Set([laneId]))
   const picks = { ...g.picks }
   const was = picks[role] && swaps.get(picks[role]!.rel_path)
   if (was) picks[role] = was
@@ -2082,7 +2259,7 @@ export function rerollKeys(all: SampleListItem[], opts: GenerateOptions, g: Gene
   if (!opts.keys?.midis.length || !opts.keys.presets.length) return null
   const roles = new Set<Role>(['keys', ...STAB_ROLES])
   const own = new Set([...LANE_RULES.keys!, ...STAB_RULES])
-  const rules = { ...Object.fromEntries(Object.entries(g.rules ?? {}).filter(([k]) => !own.has(k))), stabs: false }
+  const rules = { ...Object.fromEntries(Object.entries(rulesOf(g)).filter(([k]) => !own.has(k))), stabs: false }
   const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => !roles.has(r as Role))) as Generation['picks']
   const bpm = g.project.bpm
   const edit = g.bass?.notes ? { notes: g.bass.notes, bars: bassBars(g.bass) } : undefined

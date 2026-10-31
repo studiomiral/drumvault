@@ -54,7 +54,7 @@ const SORTS: Record<string, string> = {
  * groove (v7), `shapeCol` the event shape (v9).
  */
 export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', grooveCol = 's.groove',
-                                 shapeCol = 's.shape'): { sql: string; params: (string | number)[] } {
+                                 shapeCol = 's.shape', energyCol = 's.energy_db'): { sql: string; params: (string | number)[] } {
   const where: string[] = []
   const params: (string | number)[] = []
   const inList = (col: string, values: (string | number)[]) => {
@@ -89,7 +89,7 @@ export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', groov
   const sql = `
     SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${bodyCol} AS body_bars, s.key_label, s.key_camelot,
            s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${grooveCol} AS groove,
-           ${shapeCol} AS shape
+           ${shapeCol} AS shape, ${energyCol} AS energy_db
     FROM samples s JOIN zips z ON z.id = s.zip_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY ${SORTS[f.sort ?? 'name'] ?? SORTS.name}`
@@ -185,8 +185,10 @@ export class LibraryReader {
   listHits(): HitItem[] {
     if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hits'").length) return []
     const kind = this.all<{ name: string }>('PRAGMA table_info(hits)').some((c) => c.name === 'kind') ? "COALESCE(kind, 'disco')" : "'disco'"
+    const energy = this.hasColumn('hits', 'energy_db') ? 'energy_db' : 'NULL AS energy_db'
     return this.all<Omit<HitItem, 'name'>>(
-      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels FROM hits ORDER BY id`)
+      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}
+       FROM hits ORDER BY id`)
       .map((r) => ({ ...r, pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
 
@@ -221,8 +223,13 @@ export class LibraryReader {
     return this.hasColumn('samples', 'shape') ? 's.shape' : 'NULL'
   }
 
+  /** `s.energy_db`, or NULL before schema v13. */
+  private energyCol(): string {
+    return this.hasColumn('samples', 'energy_db') ? 's.energy_db' : 'NULL'
+  }
+
   querySamples(filter: SampleFilter): SampleListItem[] {
-    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol())
+    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol(), this.energyCol())
     return this.all<SampleRow>(sql, ...params).map(toListItem)
   }
 
@@ -230,10 +237,12 @@ export class LibraryReader {
   arrangements(): TrackArrangement[] {
     if (!this.hasTable('arrangements')) return []
     const detail = this.hasColumn('arrangements', 'detail') ? 'a.detail' : 'NULL AS detail'
-    return this.all<Omit<TrackArrangement, 'parts' | 'detail'> & { parts: string; detail: string | null }>(
-      `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts, ${detail} FROM arrangements a JOIN zips z ON z.id = a.zip_id
+    const levels = this.hasColumn('arrangements', 'levels') ? 'a.levels' : 'NULL AS levels'
+    return this.all<Omit<TrackArrangement, 'parts' | 'detail' | 'levels'> & { parts: string; detail: string | null; levels: string | null }>(
+      `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts, ${detail}, ${levels} FROM arrangements a JOIN zips z ON z.id = a.zip_id
        ORDER BY a.zip_id`).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string>,
-      detail: r.detail ? JSON.parse(r.detail) as TrackArrangement['detail'] : null }))
+      detail: r.detail ? JSON.parse(r.detail) as TrackArrangement['detail'] : null,
+      levels: parsed<NonNullable<TrackArrangement['levels']>>(r.levels, (v) => typeof v.parts === 'object') }))
   }
 
   /** Loops without a measured groove, events without a shape, or tracks without an arrangement (older libraries). */
@@ -245,6 +254,10 @@ export class LibraryReader {
     const events = this.all<{ n: number }>(
       `SELECT COUNT(*) AS n FROM samples WHERE kind = 'event'${this.hasColumn('samples', 'shape') ? ' AND shape IS NULL' : ''}`)[0]?.n ?? 0
     if (events) return true
+    // Loudness (schema v13): every sample and hit.
+    if (!this.hasColumn('samples', 'energy_db')) return true
+    if ((this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples WHERE energy_db IS NULL')[0]?.n ?? 0) > 0) return true
+    if (this.hasTable('hits') && (this.all<{ n: number }>('SELECT COUNT(*) AS n FROM hits WHERE energy_db IS NULL')[0]?.n ?? 0) > 0) return true
     // Imports from before the library kept its own copy: kept while the zip or folder is still there.
     const lib = this.library
     if (lib && this.all<{ source_code: string; original_path: string | null }>(
@@ -252,8 +265,8 @@ export class LibraryReader {
       .some((z) => !isKept(lib, z.source_code) && !!z.original_path && existsSync(z.original_path))) return true
     const zips = `SELECT COUNT(*) AS n FROM zips z WHERE z.status IN ('done', 'needs_review')${
       this.hasColumn('zips', 'kind') ? " AND z.kind = 'stems'" : ''}`
-    // Arrangements measured before the rides were (schema v11) are measured again.
-    const measured = this.hasColumn('arrangements', 'detail') ? ' WHERE detail IS NOT NULL' : ' WHERE 0'
+    // Arrangements measured before the rides (schema v11) or the balance (v13) were are measured again.
+    const measured = this.hasColumn('arrangements', 'levels') ? ' WHERE detail IS NOT NULL AND levels IS NOT NULL' : ' WHERE 0'
     return (this.all<{ n: number }>(this.hasTable('arrangements')
       ? `${zips} AND z.id NOT IN (SELECT zip_id FROM arrangements${measured})` : zips)[0]?.n ?? 0) > 0
   }
@@ -276,7 +289,7 @@ export class LibraryReader {
       out.push(...this.all<SampleRow>(
         `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${body} AS body_bars, s.key_label, s.key_camelot,
                 s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${this.grooveCol()} AS groove,
-                ${this.shapeCol()} AS shape
+                ${this.shapeCol()} AS shape, ${this.energyCol()} AS energy_db
          FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.rel_path IN (${chunk.map(() => '?').join(', ')})`,
         ...chunk).map(toListItem))
     }

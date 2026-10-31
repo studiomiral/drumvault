@@ -4,7 +4,7 @@ const SECTIONS: { title: string; rows: [string, string][] }[] = [
   {
     title: 'Everywhere',
     rows: [['⌘1 – ⌘4', 'Process / Library / Generate / Arrange'], ['⌘5 / ⌘6', 'Grid / MIDI'], ['⌘,', 'Settings'], ['⌘O', 'Add zips'],
-      ['⌘E', 'Export stems'], ['⌘/', 'This overview']],
+      ['⌘E', 'Export stems'], ['⌘/', 'This overview'], ['⌥-click a slider', 'Back to its default (a volume to 0 dB, pan to the centre, …); double-click too']],
   },
   {
     title: 'Library',

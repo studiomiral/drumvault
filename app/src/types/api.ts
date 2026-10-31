@@ -85,6 +85,8 @@ export interface HitItem {
   pitch_fix: number
   duration_s: number
   channels: number
+  /** As SampleListItem.energy_db. */
+  energy_db?: number | null
 }
 
 export interface HitImportResult {
@@ -199,6 +201,11 @@ export interface SampleListItem {
   groove?: LoopGroove | null
   /** Events: how it plays (engine events.shape); null until measured. */
   shape?: EventShape | null
+  /**
+   * How loud it plays (schema v13; null until measured): K-weighted energy of its mono mix in dB,
+   * LUFS + 10·log10(seconds). Played for T seconds it is `energy_db − 10·log10(T)` LUFS loud.
+   */
+  energy_db?: number | null
 }
 
 /**
@@ -247,6 +254,12 @@ export interface TrackArrangement {
    * above, thinner, a high-pass). Null where the part is silent.
    */
   detail?: Record<string, { db: (number | null)[]; bright: (number | null)[] }> | null
+  /**
+   * The producer's balance (schema v13; absent until measured): each part's K-weighted loudness
+   * (LUFS of its mono mix) in its full bars. `normalized`: the stems were normalised one by one,
+   * so the balance isn't the producer's.
+   */
+  levels?: { parts: Record<string, number>; normalized: boolean } | null
 }
 
 export interface LibraryFacets {

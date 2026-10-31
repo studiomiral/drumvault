@@ -28,6 +28,11 @@ export interface Lane {
   height: number       // px
   /** Sidechain: the lane ducks under every kick hit by this much (0…1); none when undefined. */
   duck?: number
+  /**
+   * The lane's level in the generated mix (SCOPE.md §6.6): dB that bring its samples to their
+   * place in the balance, on top of `volumeDb` (the slider stays the producer's).
+   */
+  levelDb?: number
 }
 
 /**

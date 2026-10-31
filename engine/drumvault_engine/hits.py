@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from . import key as keymod, naming, normalize, oneshots as osmod, zipio
-from .audioutil import db_to_amp, load, resample, write_wav
+from .audioutil import db_to_amp, k_energy_db, load, resample, write_wav
 from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
@@ -145,7 +145,7 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             hid = db.insert_hit(kind=kind, file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
                                 key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                                 key_source=source, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
-                                channels=y.shape[1], peak_db=pk_db, created_at=now_iso())
+                                channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr), created_at=now_iso())
             imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 

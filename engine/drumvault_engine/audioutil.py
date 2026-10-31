@@ -69,6 +69,45 @@ def rms_db(x: np.ndarray) -> float:
     return amp_to_db(float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))))
 
 
+# K-weighting (ITU-R BS.1770, the weighting LUFS uses): a high shelf (+4 dB above ~1.5 kHz,
+# the head's effect) and a high-pass at ~38 Hz, as biquads for any sample rate.
+_K_SHELF = (4.0, 1 / np.sqrt(2), 1500.0)   # gain dB, Q, Hz
+_K_HIGHPASS = (0.5, 38.0)                  # Q, Hz
+
+
+def k_weight(mono: np.ndarray, sr: int) -> np.ndarray:
+    """`mono` K-weighted."""
+    from scipy.signal import lfilter
+
+    g, q, fc = _K_SHELF
+    a = 10 ** (g / 40)
+    w0 = 2 * np.pi * fc / sr
+    alpha = np.sin(w0) / (2 * q)
+    c = np.cos(w0)
+    b_shelf = [a * ((a + 1) + (a - 1) * c + 2 * np.sqrt(a) * alpha), -2 * a * ((a - 1) + (a + 1) * c),
+               a * ((a + 1) + (a - 1) * c - 2 * np.sqrt(a) * alpha)]
+    a_shelf = [(a + 1) - (a - 1) * c + 2 * np.sqrt(a) * alpha, 2 * ((a - 1) - (a + 1) * c),
+               (a + 1) - (a - 1) * c - 2 * np.sqrt(a) * alpha]
+    q, fc = _K_HIGHPASS
+    w0 = 2 * np.pi * fc / sr
+    alpha = np.sin(w0) / (2 * q)
+    c = np.cos(w0)
+    b_hp = [(1 + c) / 2, -(1 + c), (1 + c) / 2]
+    a_hp = [1 + alpha, -2 * c, 1 - alpha]
+    y = lfilter(b_shelf, a_shelf, mono.astype(np.float64))
+    return lfilter(b_hp, a_hp, y)
+
+
+def k_energy_db(x: np.ndarray, sr: int) -> float | None:
+    """K-weighted energy of `x` (its mono mix), in dB: LUFS + 10·log10(seconds). Played for T
+    seconds, a sound is `k_energy_db − 10·log10(T)` LUFS loud (ungated); None when silent."""
+    mono = x.mean(axis=1) if x.ndim == 2 else x
+    if not mono.size:
+        return None
+    e = float(np.sum(np.square(k_weight(mono, sr)))) / sr
+    return round(-0.691 + 10 * np.log10(e), 2) if e > EPS else None
+
+
 def causal_envelope(x: np.ndarray, window: int) -> np.ndarray:
     """Running max of |x| over the trailing `window` samples.
 

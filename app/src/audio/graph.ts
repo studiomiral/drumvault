@@ -63,7 +63,7 @@ export function resetDuck(nodes: LaneNodes, at: number): void {
 
 /** Lane volume/pan/mute (solo is applied by the caller via `audible`). */
 export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, at = 0): void {
-  nodes.gain.gain.setTargetAtTime(audible ? dbToGain(lane.volumeDb) : 0, at, 0.01)
+  nodes.gain.gain.setTargetAtTime(audible ? dbToGain(lane.volumeDb + (lane.levelDb ?? 0)) : 0, at, 0.01)
   nodes.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, lane.pan)), at, 0.01)
 }
 

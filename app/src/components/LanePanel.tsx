@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { audition } from '../audio/audition'
-import { choicesOfRole, optionKey, type Choice } from '../generate/choices'
+import { choicesOfRole, choiceValue, optionKey, type Choice } from '../generate/choices'
 import { laneRole, type Generation, type Role } from '../generate/generator'
 import { useApp } from '../store/app'
 import type { Panel } from '../store/arrange'
@@ -148,7 +148,7 @@ function LaneChoices({ g, roles, lockable }: { g: Generation; roles: Role[]; loc
  */
 export function ChoiceRow({ c, g, lockable, prefix }: { c: Choice; g: Generation; lockable: boolean; prefix?: boolean }) {
   const locks = useGenerate((s) => s.settings.locks)
-  const value = g.rules[c.rule] ?? null
+  const value = choiceValue(c, g)
   const options = c.options.some((o) => optionKey(o.value) === optionKey(value)) ? c.options : [...c.options, { value, label: String(value) }]
   const locked = c.rule in locks
   return (

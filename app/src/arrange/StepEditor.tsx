@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { audition } from '../audio/audition'
 import { playback } from '../audio/engine'
+import { Range } from '../components/Range'
 import { Button, cx, Segmented } from '../components/ui'
 import { BEATS_PER_BAR, contentShift, formatPosition, loopBeats, shiftContent, PRESETS, presetSteps, resizePattern, STEPS_PER_BAR, STEPS_PER_BEAT } from '../lib/project'
 import { useProject } from '../store/project'
@@ -29,18 +30,18 @@ function GainSlider({ clip }: { clip: Clip }) {
   return (
     <label className="flex items-center gap-2 text-[12px] text-muted">
       Gain
-      <input type="range" min={-30} max={6} step={0.5} value={clip.gainDb} className="w-28 accent-[#e2c35f]"
-             onChange={(e) => edit('Clip gain', (d) => {
-               d.clips.find((c) => c.id === clip.id)!.gainDb = Number(e.target.value)
-             }, { coalesce: `gain-${clip.id}` })}
-             onDoubleClick={() => edit('Clip gain', (d) => {
-               d.clips.find((c) => c.id === clip.id)!.gainDb = 0
-             })} />
+      <Range min={-30} max={6} step={0.5} value={clip.gainDb} reset={0} className="w-28 accent-[#e2c35f]" title="Clip gain (⌥-click or double-click: 0 dB)"
+             onValue={(v) => edit('Clip gain', (d) => {
+               d.clips.find((c) => c.id === clip.id)!.gainDb = v
+             }, { coalesce: `gain-${clip.id}` })} />
       <span className="w-12 tabular-nums">{clip.gainDb > 0 ? '+' : ''}{clip.gainDb.toFixed(1)} dB</span>
       <RideControl clip={clip} />
     </label>
   )
 }
+
+/** A new volume ride's end: this far under the clip gain. */
+const RIDE_DOWN_DB = 12
 
 /** Volume ride: the gain moving from the clip's gain at its start to a second one at its end. */
 function RideControl({ clip }: { clip: Clip }) {
@@ -54,12 +55,12 @@ function RideControl({ clip }: { clip: Clip }) {
     <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}
           title="Ride the volume across the clip: from the gain at its start to this at its end">
       <input type="checkbox" className="accent-[#e2c35f]" checked={clip.gainTo != null}
-             onChange={(e) => set('Volume ride', e.target.checked ? clip.gainDb - 12 : null)} />
+             onChange={(e) => set('Volume ride', e.target.checked ? clip.gainDb - RIDE_DOWN_DB : null)} />
       ride to
       {clip.gainTo != null && (
         <>
-          <input type="range" min={-30} max={6} step={0.5} value={clip.gainTo} className="w-20 accent-[#e2c35f]"
-                 onChange={(e) => set('Volume ride', Number(e.target.value), `ride-${clip.id}`)} />
+          <Range min={-30} max={6} step={0.5} value={clip.gainTo} reset={clip.gainDb - RIDE_DOWN_DB} className="w-20 accent-[#e2c35f]"
+                 onValue={(v) => set('Volume ride', v, `ride-${clip.id}`)} />
           <span className="w-12 tabular-nums">{clip.gainTo > 0 ? '+' : ''}{clip.gainTo.toFixed(1)} dB</span>
         </>
       )}
@@ -82,10 +83,12 @@ function FilterControl({ clip }: { clip: Clip }) {
     if (next) c.filter = next
     else delete c.filter
   }, { coalesce })
-  const slider = (hz: number, onHz: (hz: number) => void, key: string) => (
-    <input type="range" min={0} max={1} step={0.001} value={toSlider(hz)} className="w-24 accent-[#e2c35f]"
-           onChange={(e) => onHz(fromSlider(Number(e.target.value)))} data-key={key} />
+  const slider = (hz: number, reset: number, onHz: (hz: number) => void, key: string) => (
+    <Range min={0} max={1} step={0.001} value={toSlider(hz)} reset={toSlider(reset)} className="w-24 accent-[#e2c35f]"
+           onValue={(v) => onHz(fromSlider(v))} data-key={key} />
   )
+  const startHz = (type: ClipFilter['type']) => (type === 'lowpass' ? 800 : 300)
+  const sweepHz = (type: ClipFilter['type']) => (type === 'lowpass' ? F_MAX : F_MIN)
   return (
     <div className="flex items-center gap-2 text-[12px] text-muted">
       Filter
@@ -94,7 +97,7 @@ function FilterControl({ clip }: { clip: Clip }) {
               onChange={(e) => {
                 const type = e.target.value
                 if (type === 'off') set('Filter off', null)
-                else set('Clip filter', { type: type as ClipFilter['type'], from: type === 'lowpass' ? 800 : 300, to: null, q: 0.7 })
+                else set('Clip filter', { type: type as ClipFilter['type'], from: startHz(type as ClipFilter['type']), to: null, q: 0.7 })
               }}>
         <option value="off">Off</option>
         <option value="lowpass">Low-pass</option>
@@ -102,16 +105,16 @@ function FilterControl({ clip }: { clip: Clip }) {
       </select>
       {f && (
         <>
-          {slider(f.from, (hz) => set('Filter cutoff', { ...f, from: hz }, `ff-${clip.id}`), 'from')}
+          {slider(f.from, startHz(f.type), (hz) => set('Filter cutoff', { ...f, from: hz }, `ff-${clip.id}`), 'from')}
           <span className="w-14 tabular-nums">{fmtHz(f.from)}</span>
           <label className="flex items-center gap-1">
             <input type="checkbox" className="accent-[#e2c35f]" checked={f.to != null}
-                   onChange={(e) => set('Filter sweep', { ...f, to: e.target.checked ? (f.type === 'lowpass' ? F_MAX : F_MIN) : null })} />
+                   onChange={(e) => set('Filter sweep', { ...f, to: e.target.checked ? sweepHz(f.type) : null })} />
             sweep to
           </label>
           {f.to != null && (
             <>
-              {slider(f.to, (hz) => set('Filter sweep', { ...f, to: hz }, `ft-${clip.id}`), 'to')}
+              {slider(f.to, sweepHz(f.type), (hz) => set('Filter sweep', { ...f, to: hz }, `ft-${clip.id}`), 'to')}
               <span className="w-14 tabular-nums">{fmtHz(f.to)}</span>
             </>
           )}
@@ -120,6 +123,9 @@ function FilterControl({ clip }: { clip: Clip }) {
     </div>
   )
 }
+
+/** A new reverb build's send, at the clip's start and end. */
+const VERB_BUILD: ClipReverb = { from: 0, to: 0.6 }
 
 /** Reverb build: off, or the send from the clip's start to its end (rising late). */
 function ReverbControl({ clip }: { clip: Clip }) {
@@ -130,9 +136,8 @@ function ReverbControl({ clip }: { clip: Clip }) {
     if (next) c.verb = next
     else delete c.verb
   }, { coalesce })
-  const slider = (x: number, onX: (x: number) => void, title: string) => (
-    <input type="range" min={0} max={1} step={0.01} value={x} className="w-16 accent-[#e2c35f]" title={title}
-           onChange={(e) => onX(Number(e.target.value))} />
+  const slider = (x: number, reset: number, onX: (x: number) => void, title: string) => (
+    <Range min={0} max={1} step={0.01} value={x} reset={reset} className="w-16 accent-[#e2c35f]" title={title} onValue={onX} />
   )
   const pct = (x: number) => `${Math.round(x * 100)}%`
   return (
@@ -141,16 +146,16 @@ function ReverbControl({ clip }: { clip: Clip }) {
       Reverb
       <select className="h-6 rounded-md bg-[rgb(0_0_0/0.25)] px-1.5 text-text text-[12px] outline-none"
               value={v ? 'on' : 'off'}
-              onChange={(e) => set(e.target.value === 'on' ? 'Reverb build' : 'Reverb off', e.target.value === 'on' ? { from: 0, to: 0.6 } : null)}>
+              onChange={(e) => set(e.target.value === 'on' ? 'Reverb build' : 'Reverb off', e.target.value === 'on' ? { ...VERB_BUILD } : null)}>
         <option value="off">Off</option>
         <option value="on">Build</option>
       </select>
       {v && (
         <>
-          {slider(v.from, (from) => set('Reverb build', { ...v, from }, `vf-${clip.id}`), 'Send at the clip start')}
+          {slider(v.from, VERB_BUILD.from, (from) => set('Reverb build', { ...v, from }, `vf-${clip.id}`), 'Send at the clip start')}
           <span className="w-9 tabular-nums">{pct(v.from)}</span>
           →
-          {slider(v.to, (to) => set('Reverb build', { ...v, to }, `vt-${clip.id}`), 'Send at the clip end')}
+          {slider(v.to, VERB_BUILD.to, (to) => set('Reverb build', { ...v, to }, `vt-${clip.id}`), 'Send at the clip end')}
           <span className="w-9 tabular-nums">{pct(v.to)}</span>
         </>
       )}
