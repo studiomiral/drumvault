@@ -107,3 +107,39 @@ def test_key_and_pitch_corrections_and_removal(tmp_path):
     assert not path.exists() and not rows(s)
     with pytest.raises(hits.HitError):
         hits.set_hit_meta(s, hid, pitch_fix=1)
+
+
+def test_chord_stabs_import_into_their_own_folder(tmp_path):
+    s = settings(tmp_path)
+    src = tmp_path / "drop"
+    write(src / "Organ Stab Cm.wav", stab(C_MINOR, seconds=0.5))
+    write(src / "Brass Hit F.wav", stab(F_MAJOR))
+    r = hits.import_hits(s, [str(src / "Organ Stab Cm.wav")], kind="stab")
+    assert [x["kind"] for x in r["imported"]] == ["stab"]
+    hits.import_hits(s, [str(src / "Brass Hit F.wav")])
+    by = {x["file_name"]: x for x in rows(s)}
+    assert (by["Organ Stab Cm.wav"]["kind"], by["Organ Stab Cm.wav"]["key_label"]) == ("stab", "Cm")
+    assert by["Organ Stab Cm.wav"]["rel_path"].startswith("Chord Stabs/")
+    assert (by["Brass Hit F.wav"]["kind"], by["Brass Hit F.wav"]["rel_path"].split("/")[0]) == ("disco", "Disco Hits")
+    assert (Path(s.library_path) / by["Organ Stab Cm.wav"]["rel_path"]).exists()
+    # The same file on the other page is already in.
+    assert hits.import_hits(s, [str(src / "Organ Stab Cm.wav")])["skipped"] == 1
+    with pytest.raises(hits.HitError):
+        hits.import_hits(s, [str(src)], kind="pads")
+
+
+def test_hits_from_before_chord_stabs_are_disco_hits(tmp_path):
+    s = settings(tmp_path)
+    db = Path(s.library_path) / ".drumvault" / "library.sqlite"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE hits (id INTEGER PRIMARY KEY, file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, "
+                 "file_sha1 TEXT UNIQUE, key_label TEXT, key_camelot TEXT, key_source TEXT, pitch_fix INTEGER DEFAULT 0, "
+                 "duration_s REAL, sample_rate INTEGER, channels INTEGER, peak_db REAL, created_at TEXT)")
+    conn.execute("INSERT INTO hits (file_name, rel_path) VALUES ('Old.wav', 'Disco Hits/old.wav')")
+    conn.commit()
+    conn.close()
+    from drumvault_engine.db import LibraryDB
+    with LibraryDB(s.library_path):
+        pass
+    assert [x["kind"] for x in rows(s)] == ["disco"]

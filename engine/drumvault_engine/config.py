@@ -116,6 +116,19 @@ class Thresholds:
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
     bass_peak_dbfs: float = -1.0
+    # Chord stab patches (SCOPE.md §6.9): one note (C3) is rendered through the patch; partials at
+    # least stab_chord_peak_rel of the strongest (stab_chord_lo_hz–stab_chord_hi_hz, from
+    # stab_chord_from_s to stab_chord_to_s) that aren't overtones (within stab_chord_tol semitones)
+    # of the note, nor of a sub-octave sounding under it, mean it plays a chord from one key, when
+    # there are stab_chord_min_others of them.
+    stab_chord_test_note: int = 48
+    stab_chord_peak_rel: float = 0.4
+    stab_chord_tol: float = 0.35
+    stab_chord_lo_hz: float = 25.0
+    stab_chord_hi_hz: float = 1500.0
+    stab_chord_from_s: float = 0.05
+    stab_chord_to_s: float = 0.6
+    stab_chord_min_others: int = 2
     # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0
@@ -227,6 +240,11 @@ class Thresholds:
     arrangement_reference_pct: float = 90.0  # a part's "full" level: this percentile of its bars
     arrangement_quiet_rel_db: float = -20.0  # playing (quietly/filtered) within this of full...
     arrangement_full_rel_db: float = -6.0    # ...and full within this
+    # Rides (bar by bar, per part): loudness against the part's full level, and brightness, the
+    # power-weighted mean of log2(frequency) over these bands, against its median in full bars.
+    arrangement_bands: int = 24
+    arrangement_band_lo_hz: float = 40.0
+    arrangement_band_hi_hz: float = 16000.0
 
     # ---- loose samples (samples.py): Splice and other packs ----------------------
     sample_loop_fit_s: float = 0.03         # a loop's length within this of whole bars (else a tail is cut)

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 12
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS arrangements (
   zip_id INTEGER PRIMARY KEY REFERENCES zips(id) ON DELETE CASCADE,
   bpm REAL, bars INTEGER,
   parts TEXT,                       -- JSON {part: "0122…"} (0 silent, 1 quiet/filtered, 2 full)
+  detail TEXT,                      -- JSON {part: {db: [...], bright: [...]}} per bar: the producer's rides (v11)
   created_at TEXT
 );
 
@@ -94,9 +95,11 @@ CREATE TABLE IF NOT EXISTS midi_files (
   created_at TEXT
 );
 
--- Disco hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Disco Hits/.
+-- Disco hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Disco Hits/;
+-- chord stabs (v12) the same way, in <Library>/Chord Stabs/.
 CREATE TABLE IF NOT EXISTS hits (
   id INTEGER PRIMARY KEY,
+  kind TEXT DEFAULT 'disco',        -- "disco" (a Disco Hits page sample) | "stab" (Chord Stabs)
   file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, file_sha1 TEXT UNIQUE,
   key_label TEXT, key_camelot TEXT,
   key_source TEXT,                  -- "name" (in the file name) | "detected" (from the audio) | "manual"
@@ -165,6 +168,12 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE zips ADD COLUMN reviewed INTEGER DEFAULT 0")
         if "kind" not in zip_cols:  # v8: packs of loose samples
             self.conn.execute("ALTER TABLE zips ADD COLUMN kind TEXT DEFAULT 'stems'")
+        arr_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(arrangements)")}
+        if "detail" not in arr_cols:  # v11: rides, bar by bar (measured again by analyze_library)
+            self.conn.execute("ALTER TABLE arrangements ADD COLUMN detail TEXT")
+        hit_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(hits)")}
+        if "kind" not in hit_cols:  # v12: chord stabs beside disco hits
+            self.conn.execute("ALTER TABLE hits ADD COLUMN kind TEXT DEFAULT 'disco'")
 
     def close(self) -> None:
         self.conn.close()
@@ -346,12 +355,16 @@ class LibraryDB:
             self.conn.execute("DELETE FROM arrangements WHERE zip_id = ?", (zip_id,))
             if arrangement:
                 self.conn.execute(
-                    "INSERT INTO arrangements(zip_id, bpm, bars, parts, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (zip_id, arrangement["bpm"], arrangement["bars"], json.dumps(arrangement["parts"]), now_iso()))
+                    "INSERT INTO arrangements(zip_id, bpm, bars, parts, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (zip_id, arrangement["bpm"], arrangement["bars"], json.dumps(arrangement["parts"]),
+                     json.dumps(arrangement["detail"]) if arrangement.get("detail") is not None else None, now_iso()))
 
     def get_arrangement(self, zip_id: int) -> dict | None:
-        r = self.conn.execute("SELECT bpm, bars, parts FROM arrangements WHERE zip_id = ?", (zip_id,)).fetchone()
-        return {"bpm": r["bpm"], "bars": r["bars"], "parts": json.loads(r["parts"])} if r else None
+        r = self.conn.execute("SELECT bpm, bars, parts, detail FROM arrangements WHERE zip_id = ?", (zip_id,)).fetchone()
+        if not r:
+            return None
+        return {"bpm": r["bpm"], "bars": r["bars"], "parts": json.loads(r["parts"]),
+                "detail": json.loads(r["detail"]) if r["detail"] else None}
 
     def events_without_shape(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -365,7 +378,7 @@ class LibraryDB:
     def zips_without_arrangement(self) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM zips WHERE status IN ('done', 'needs_review') AND kind = 'stems' "
-            "AND id NOT IN (SELECT zip_id FROM arrangements)").fetchall()
+            "AND id NOT IN (SELECT zip_id FROM arrangements WHERE detail IS NOT NULL)").fetchall()
 
     def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()

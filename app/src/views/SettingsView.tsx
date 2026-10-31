@@ -4,8 +4,11 @@ import { Button, cx, Field, inputClass, PageTitle, SectionTitle } from '../compo
 import { ENGINE_DEFAULTS, resolveEngine, type ResolvedEngineOptions } from '../lib/defaults'
 import { CATEGORY_LABELS } from '../lib/format'
 import { attempt, serumPresetRoot, useApp } from '../store/app'
-import { keysSettings, loadKeys, saveKeysSettings, useKeys } from '../store/keys'
-import { bassSettings, loadBass, saveBassSettings, useBass } from '../store/bass'
+import { SERUM_MODULES } from '../components/SerumFolders'
+import { loadKeys, useKeys } from '../store/keys'
+import { loadBass, useBass } from '../store/bass'
+import { loadHits, useHits } from '../store/hits'
+import { loadStabPresets, useStabPresets } from '../store/stabs'
 import type { LibraryFacets } from '../types/api'
 import type { Category } from '../types/engine'
 
@@ -203,39 +206,24 @@ export function SettingsView() {
   )
 }
 
-/** The modules that draw patches from Serum 2's presets: each picks its own folders under it. */
-const SERUM_MODULES = [
-  { id: 'bass', label: 'Bass', what: 'basslines', settings: bassSettings, save: saveBassSettings, load: loadBass },
-  { id: 'keys', label: 'Keys', what: 'keys, piano and organ', settings: keysSettings, save: saveKeysSettings, load: loadKeys },
-] as const
-
 /**
  * Serum 2 (SCOPE.md §6.7): one presets folder for every module that plays Serum patches, and per
  * module the folders under it that make up its patch pool (saved at once, apart from the engine
  * settings).
  */
 function SerumSettingsSection() {
-  const { libraryVersion, toast } = useApp()
+  const { libraryVersion, toast, setView } = useApp()
   const rootNow = serumPresetRoot()
-  const pools = { bass: useBass((s) => s.presets.length), keys: useKeys((s) => s.presets.length) }
-  const parts = { bass: useBass((s) => s.basslines.length), keys: useKeys((s) => s.parts.length) }
-  const [root, setRoot] = useState(rootNow)
-  const [folders, setFolders] = useState<{ folder: string; count: number }[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    setFolders(null)
-    api.serumPresets(rootNow, null).then((r) => alive && (setFolders(r.folders), setError(null)),
-      (e) => alive && setError((e as Error).message))
-    return () => {
-      alive = false
-    }
-  }, [rootNow])
+  const pools = { bass: useBass((s) => s.presets.length), keys: useKeys((s) => s.presets.length), stabs: useStabPresets((s) => s.presets.length) }
+  const stabSamples = useHits((s) => s.hits.filter((h) => h.kind === 'stab').length)
+  const parts = { bass: useBass((s) => s.basslines.length), keys: useKeys((s) => s.parts.length), stabs: stabSamples }
   useEffect(() => {
     void loadBass()
     void loadKeys()
+    void loadStabPresets()
+    void loadHits()
   }, [libraryVersion])
+  const [root, setRoot] = useState(rootNow)
 
   const changeRoot = async (next: string) => {
     if (!next || next === rootNow) return
@@ -250,22 +238,11 @@ function SerumSettingsSection() {
     const err = await api.openFolder(rootNow)
     if (err) toast('error', `Can't open ${rootNow}: ${err}`)
   }
-  const toggle = async (m: (typeof SERUM_MODULES)[number], folder: string) => {
-    const cur = m.settings().folders
-    const next = cur.includes(folder) ? cur.filter((f) => f !== folder)
-      // A folder replaces its own sub-folders (they're included).
-      : [...cur.filter((f) => !f.startsWith(`${folder}/`)), folder]
-    await m.save({ folders: next })
-    await m.load()
-  }
-  const chosen = Object.fromEntries(SERUM_MODULES.map((m) => [m.id, new Set(m.settings().folders)])) as Record<string, Set<string>>
-  const covered = (id: string, f: string) => [...chosen[id]].some((c) => f.startsWith(`${c}/`))
-  const cols = `minmax(0,1fr) 56px ${SERUM_MODULES.map(() => '64px').join(' ')}`
 
   return (
     <section>
       <SectionTitle>Serum 2</SectionTitle>
-      <Field label="Presets folder" hint="Serum 2's .SerumPreset files, shared by Bass, Keys and what comes">
+      <Field label="Presets folder" hint="Serum 2's .SerumPreset files, shared by Bass, Keys and Chord Stabs">
         <span className="flex items-center gap-2">
           <input className={cx(inputClass, 'w-[420px]')} value={root} onChange={(e) => setRoot(e.target.value)}
                  onBlur={() => void changeRoot(root.trim())} />
@@ -273,51 +250,14 @@ function SerumSettingsSection() {
         </span>
       </Field>
       {SERUM_MODULES.map((m) => (
-        <Field key={m.id} label={m.label} hint="add MIDI on the MIDI page">
-          <span className="text-[12.5px]">
-            {parts[m.id]} part{parts[m.id] === 1 ? '' : 's'} to learn from · {pools[m.id]} patches in the pool
+        <Field key={m.id} label={m.label} hint={m.id === 'stabs' ? 'samples and patch folders on the Chord Stabs page' : `MIDI and patch folders under ${m.label === 'Keys' ? 'Keys & chords' : 'Bass'} on the MIDI page`}>
+          <span className="text-[12.5px] flex items-center gap-2">
+            {m.id === 'stabs' ? `${parts[m.id]} stab sample${parts[m.id] === 1 ? '' : 's'}` : `${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from`}
+            {' · '}{pools[m.id]} patches in the pool
+            <Button variant="ghost" onClick={() => setView(m.id === 'stabs' ? 'stabs' : 'midi')}>Pick folders</Button>
           </span>
         </Field>
       ))}
-      <div className="mt-2">
-        <div className="text-[12px] text-muted mb-1.5">
-          Patch pools: tick the folders each module draws its patches from ({SERUM_MODULES.map((m) => `${m.label}: ${m.what}`).join('; ')}).
-          A folder counts with all its sub-folders. Star patches in Generate to hear them more often.
-        </div>
-        {error ? <p className="text-bad text-[12px]">{error}</p> : !folders ? <p className="text-faint text-[12px]">Reading presets…</p>
-          : !folders.length ? <p className="text-faint text-[12px]">No Serum 2 presets in this folder.</p> : (
-          <div className="rounded-lg border border-line bg-panel-2">
-            <div className="grid items-center h-7 px-3 text-[11px] font-semibold uppercase tracking-wider text-faint border-b border-line"
-                 style={{ gridTemplateColumns: cols }}>
-              <span>Folder</span>
-              <span className="text-right pr-3">Presets</span>
-              {SERUM_MODULES.map((m) => <span key={m.id} className="text-center">{m.label}</span>)}
-            </div>
-            <div className="max-h-80 overflow-y-auto py-1">
-              {folders.map(({ folder, count }) => {
-                const depth = folder.split('/').length - 1
-                return (
-                  <div key={folder} className="grid items-center h-7 px-3 text-[12.5px] hover:bg-raised" style={{ gridTemplateColumns: cols }}>
-                    <span className="truncate" style={{ paddingLeft: depth * 18 }} title={folder}>{folder.split('/').pop()}</span>
-                    <span className="text-right pr-3 text-faint tabular-nums">{count}</span>
-                    {SERUM_MODULES.map((m) => {
-                      const under = covered(m.id, folder)
-                      return (
-                        <span key={m.id} className="flex justify-center">
-                          <input type="checkbox" className={cx('accent-[#e2c35f]', under && 'opacity-60')}
-                                 checked={chosen[m.id].has(folder) || under} disabled={under}
-                                 title={under ? `In ${m.label}'s pool with the folder above it` : `${m.label} draws patches from ${folder}`}
-                                 onChange={() => void toggle(m, folder)} />
-                        </span>
-                      )
-                    })}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-      </div>
     </section>
   )
 }

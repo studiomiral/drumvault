@@ -166,11 +166,14 @@ class SerumHost:
                      base.xml, count=1, flags=re.S).encode()
         return base.prefix + struct.pack("<I", len(xml) + 1) + xml + b"\0"
 
-    def render_loop(self, preset: Path | str, notes: list[Note], bpm: float, bars: int, sr: int) -> np.ndarray:
+    def render_loop(self, preset: Path | str, notes: list[Note], bpm: float, bars: int, sr: int,
+                    sequencers: bool = True) -> np.ndarray:
         """`bars` of the notes as a seamless loop, (n, 2) float32.
 
         Two cycles are rendered and the second is kept: it starts with the tails and
-        modulation of the cycle before it, exactly as when the loop repeats.
+        modulation of the cycle before it, exactly as when the loop repeats. Without
+        `sequencers`, the preset's arpeggiator and clip player are off: it plays the notes
+        as they are (they'd play their own notes on their own grid, at a tempo Serum guesses).
         """
         from mido import Message
         beat = 60.0 / bpm
@@ -195,6 +198,9 @@ class SerumHost:
             assert self._base is not None
             p.raw_state = self._base.init
             p.raw_state = self.state_for_preset(preset)
+            if not sequencers:
+                p.arp_enable = False
+                p.clip_player_enable = False
             audio = p(msgs, duration=2 * n / sr, sample_rate=sr, num_channels=2, reset=False)
         audio = np.asarray(audio, dtype=np.float32)
         if audio.shape[0] == 2 and audio.shape[1] != 2:
@@ -215,6 +221,28 @@ def host(plugin_path: str, plugin_name: str) -> SerumHost:
         if _host is None or _host.plugin_path != plugin_path or _host.plugin_name != plugin_name:
             _host = SerumHost(plugin_path, plugin_name)
         return _host
+
+
+# The key a preset's MIDI clip is written for: a clip plays as written from it, moved with the key pressed.
+CLIP_REFERENCE_NOTE = 60
+
+
+def clip_chord(preset: Path | str) -> list[int] | None:
+    """The first chord of a preset's clip player clip (the clip it plays), as semitones from C4
+    (the key it's written for), when the clip player is on and the clip has notes; else None."""
+    _, payload = read_xfer(Path(preset).read_bytes())
+    d = SerumHost._decode(payload)
+    obj = lambda x: x if isinstance(x, dict) else {}  # noqa: E731 - presets keep some sections as other types
+    if not obj(obj(d.get("ClipPlayer0")).get("plainParams")).get("kParamEnabled"):
+        return None
+    clips = [k for k in d if re.fullmatch(r"MidiClip\d+", k) and isinstance(obj(obj(d[k]).get("clip")).get("notes"), list)
+             and obj(obj(d[k]).get("clip"))["notes"]]
+    if not clips:
+        return None
+    sel = f"MidiClip{int(obj(d.get('ClipPlayer')).get('kUIParamSelectedClip') or 0)}"
+    notes = d[sel if sel in clips else sorted(clips, key=lambda k: int(k[8:]))[0]]["clip"]["notes"]
+    first = min(n["timeStamp"] for n in notes)
+    return sorted({int(n["noteNum"]) - CLIP_REFERENCE_NOTE for n in notes if abs(n["timeStamp"] - first) < 1e-6})
 
 
 def list_presets(root: Path | str, folders: list[str] | None) -> list[dict]:

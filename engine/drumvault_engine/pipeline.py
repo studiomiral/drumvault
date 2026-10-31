@@ -937,11 +937,13 @@ def delete_midi(settings: Settings, midi_ids: list[int]) -> dict:
 # 2: Serum goes back to its init patch before each preset (before, settings a preset doesn't
 # list carried over from the preset rendered before it).
 BASS_RENDER_VERSION = 2
+# Chord stab parts (their own folder): 3: the preset's arp and clip player off.
+STAB_RENDER_VERSION = 3
 
 
-def _drop_stale_bass_renders(folder: Path) -> None:
+def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -> None:
     """Bass renders are a cache: the ones from an older render version are deleted, once."""
-    stamp = folder / f".render-v{BASS_RENDER_VERSION}"
+    stamp = folder / f".render-v{version}"
     if stamp.exists():
         return
     if folder.exists():
@@ -963,10 +965,11 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
-    _drop_stale_bass_renders(out.parent)
+    stab = out_rel.startswith(".drumvault/stabs/")
+    _drop_stale_bass_renders(out.parent, STAB_RENDER_VERSION if stab else BASS_RENDER_VERSION)
     row = None
     if midi_id >= 1:
         with LibraryDB(lib) as db:
@@ -989,7 +992,10 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
         parts = midimod.apply_groove(parts, groove)
     sr = settings.output_sample_rate
     try:
-        data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(src, parts, bpm, loop_bars, sr)
+        # A chord stab part plays exactly the step sequencer's notes: the preset's own arp and
+        # clip player (their own notes, on their own grid) stay off.
+        data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
+            src, parts, bpm, loop_bars, sr, sequencers=not stab)
     except serum.SerumError as e:
         raise PipelineError("serum", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) > 1e-5:
@@ -1051,6 +1057,84 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
 def serum_presets(settings: Settings, root: str, folders: list[str] | None) -> dict:
     from . import serum
     return {"folders": serum.preset_folders(root), "presets": serum.list_presets(root, folders) if folders else []}
+
+
+# Overtones of a note, in semitones above it (its first 16 partials).
+_OVERTONES = 12 * np.log2(np.arange(1, 17))
+
+
+def plays_chord(data: np.ndarray, sr: int, note: int, settings: Settings) -> bool:
+    """Whether one held `note` sounds as a chord: strong partials that aren't overtones of the
+    note, nor of an octave below it that sounds too (a sub oscillator)."""
+    th = settings.thresholds
+    x = (data.mean(axis=1) if data.ndim > 1 else data)[int(th.stab_chord_from_s * sr): int(th.stab_chord_to_s * sr)]
+    if len(x) < 1024 or not np.any(x):
+        return False
+    mag = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    hz = np.fft.rfftfreq(len(x), 1 / sr)
+    band = (hz >= th.stab_chord_lo_hz) & (hz <= th.stab_chord_hi_hz)
+    peak = (mag[1:-1] > mag[:-2]) & (mag[1:-1] >= mag[2:])
+    idx = np.flatnonzero(np.concatenate([[False], peak, [False]]) & band)
+    if not idx.size:
+        return False
+    strong = idx[mag[idx] >= th.stab_chord_peak_rel * mag[idx].max()]
+    f0 = 440.0 * 2 ** ((note - 69) / 12)
+    at = 12 * np.log2(hz[strong] / f0)  # semitones from the note
+    near = lambda x, y: abs(x - y) <= th.stab_chord_tol  # noqa: E731
+    bases = [0.0] + [b for b in (-12.0, -24.0, -36.0) if any(near(o, b) for o in at)]
+
+    def others(base: float) -> int:
+        return len({round(o - base) for o in at if not any(near(o - base, h) for h in _OVERTONES)})
+
+    return min(others(b) for b in bases) >= th.stab_chord_min_others
+
+
+def stab_chords(settings: Settings, presets: list[str]) -> dict:
+    """Per stab patch: the chord its clip player plays (`voicings`: semitones from the key it's
+    written for, C4; Generate plays it on the step sequencer's steps, the clip player off), and
+    whether it plays a chord from one key anyway (`chords`: its oscillators stack one; then it
+    gets the root alone), measured as stab parts play it (arp and clip player off). Once per preset
+    file (cached in <Library>/.drumvault/stabs/chords.json)."""
+    from . import serum
+    from .midi import Note
+    th = settings.thresholds
+    cache_file = Path(settings.library_path) / ".drumvault" / "stabs" / "chords.json"
+    try:
+        cache = json.loads(cache_file.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    out: dict[str, bool] = {}
+    voicings: dict[str, list[int] | None] = {}
+    changed = False
+    for p in presets:
+        src = Path(p)
+        if not src.exists():
+            continue
+        st = src.stat()
+        stamp = f"{STAB_RENDER_VERSION}:clip:{st.st_mtime_ns}:{st.st_size}"
+        hit = cache.get(p)
+        if hit and hit.get("stamp") == stamp:
+            out[p] = bool(hit["chord"])
+            voicings[p] = hit.get("voicing")
+            continue
+        try:
+            voicings[p] = serum.clip_chord(src)
+        except Exception:  # noqa: BLE001 - a preset that doesn't read just has no clip chord
+            log.warning("no clip chord read from %s", src, exc_info=True)
+            voicings[p] = None
+        sr = settings.output_sample_rate
+        try:
+            data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
+                src, [Note(0, 4, th.stab_chord_test_note, 112)], 124.0, 2, sr, sequencers=False)
+        except serum.SerumError as e:
+            raise PipelineError("serum", str(e)) from e
+        out[p] = plays_chord(data, sr, th.stab_chord_test_note, settings)
+        cache[p] = {"stamp": stamp, "chord": out[p], "voicing": voicings[p]}
+        changed = True
+    if changed:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(cache, indent=1))
+    return {"chords": out, "voicings": voicings}
 
 
 def trash_files(lib: Path, removed_id: int) -> tuple[Path, Path]:
@@ -1166,7 +1250,8 @@ def grid_preview(settings: Settings, zip_id: int) -> GridPreview:
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
-    each zip's arrangement (from its stems, on its stored grid). Nothing else changes."""
+    each zip's arrangement (from its stems, on its stored grid; again for those measured before
+    the rides were). Nothing else changes."""
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)

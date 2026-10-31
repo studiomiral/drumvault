@@ -2,38 +2,51 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import { openGenerated } from '../arrange/persistence'
-import { IconPlay, IconSparkle, IconStar, IconStop } from '../components/icons'
-import { Button, cx, Empty, inputClass, PageTitle, SectionTitle } from '../components/ui'
-import { Module } from '../components/Module'
+import { IconLock, IconPlay, IconSparkle, IconStar, IconStop, IconX } from '../components/icons'
+import { Button, cx, Empty, PageTitle, SectionTitle } from '../components/ui'
 import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
-import { KeysPanel } from '../components/KeysPanel'
-import { VerbPanel } from '../components/VerbPanel'
-import { DiscoPanel } from '../components/DiscoPanel'
-import { bassBars, KEEPABLE, LANES, laneRole, transposeTo, type Generation, type Role } from '../generate/generator'
-import { isGenerated } from '../generate/bassline'
-import { PianoRoll, type RollNote } from '../components/PianoRoll'
-import { onBassRendering } from '../audio/tempo'
-import { loadBass, toggleFavoritePreset, useBass } from '../store/bass'
+import { ChoiceRow, LanePanel } from '../components/LanePanel'
+import { panelOf, type Panel } from '../store/arrange'
+import { CHOICE_GROUPS, choicesFor } from '../generate/choices'
+import { LANES, laneRole, type Generation } from '../generate/generator'
 import { markerColor } from '../lib/project'
 import { laneAudible } from '../audio/graph'
-import { attempt, useApp } from '../store/app'
+import { useApp } from '../store/app'
 import {
-  attachPlayback, current, invalidate, loadSamples, newBassline, next, playSection, previous, rerollLane, saveTempo, setBassOptions,
-  setGenerationBass, setLaneVolume, shiftOctave, toggleLane, useGenerate, type KeepToggles,
+  attachPlayback, changeTrackKey, current, invalidate, laneKept, loadSamples, LOCKABLE, metaOf, next, openShortlisted, playSection, previous,
+  removeShortlisted, rerollLane, saveTempo, setLaneVolume, shortlistId, toggleLane, toggleLaneKeep, toggleStar, useGenerate,
 } from '../store/generate'
-import { PatchOctave } from '../components/PatchOctave'
+import { ALL_KEYS } from '../lib/camelot'
 import type { ZipListItem } from '../types/api'
 
-const ROLE_LABEL: Partial<Record<Role, string>> = Object.fromEntries(LANES.map((l) => [l.role, l.name]))
+const PANEL_KEY = 'drumvault.generate.panel'
+
+function savedPanel(): Panel {
+  try {
+    return (JSON.parse(localStorage.getItem(PANEL_KEY) ?? 'null') as Panel | null) ?? { module: 'bass' }
+  } catch {
+    return { module: 'bass' }
+  }
+}
 
 /** Create → Generate (SCOPE.md §6.6): cycle through generated arrangements, send one to Arrange. */
 export function GenerateView() {
   const { libraryVersion, setView } = useApp()
-  const { samples, history, index, settings, keep, set } = useGenerate()
+  const { samples, history, index, settings, shortlist } = useGenerate()
   const g = history[index] ?? null
   const [playing, setPlaying] = useState(playback.playing)
   const [loading, setLoading] = useState(playback.loading)
   const [sending, setSending] = useState(false)
+  const [panel, setPanelState] = useState<Panel>(savedPanel)
+  const setPanel = (p: Panel) => {
+    setPanelState(p)
+    try {
+      localStorage.setItem(PANEL_KEY, JSON.stringify(p))
+    } catch {
+      // not remembered
+    }
+  }
+  const star = shortlistId(g, shortlist)
 
   useEffect(() => attachPlayback(), [])
   useEffect(() => playback.subscribe(() => {
@@ -49,7 +62,8 @@ export function GenerateView() {
     if (!cur || sending) return
     setSending(true)
     try {
-      await openGenerated(cur.project)
+      // The project keeps its generation: its lanes keep their modules in Arrange.
+      await openGenerated({ ...cur.project, generation: metaOf(cur) })
       setView('arrange')
     } finally {
       setSending(false)
@@ -73,6 +87,9 @@ export function GenerateView() {
       } else if (e.key === 'Enter') {
         e.preventDefault()
         void send()
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault()
+        toggleStar()
       } else if (/^[1-9]$/.test(e.key)) {
         playSection(Number(e.key) - 1)
       }
@@ -80,11 +97,6 @@ export function GenerateView() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
-
-  const setKeep = (patch: Partial<KeepToggles>) => {
-    set({ keep: { ...keep, ...patch } })
-    invalidate()
-  }
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -112,27 +124,29 @@ export function GenerateView() {
             <span className="text-muted text-[12.5px] ml-1">
               {g ? <>Generation <span className="text-text font-medium">{index + 1}</span> of {history.length}</> : 'Press G to generate'}
             </span>
+            <button onClick={toggleStar} disabled={!g} title={star ? 'On the shortlist (S): click to take it off' : 'Star (S): keep it on the shortlist, saved in the library'}
+                    className={cx('h-9 w-9 rounded-full flex items-center justify-center transition-colors disabled:opacity-40',
+                      star ? 'text-accent bg-accent/15' : 'surface-raised text-muted hover:text-text')}>
+              <IconStar className="w-4 h-4" filled={!!star} />
+            </button>
             <div className="flex-1" />
-            <span className="text-faint text-[11.5px]">G / → next · ← back · Space play · 1–9 sections · Enter send</span>
+            <span className="text-faint text-[11.5px]">G / → next · ← back · Space play · S star · 1–9 sections · Enter send</span>
             <Button variant="primary" className="h-9 px-4 text-[13px]" onClick={() => void send()} disabled={!g || sending}>
               Send to Arrange ⏎
             </Button>
           </section>
 
+          {shortlist.length > 0 && <Shortlist />}
           {g ? (
-            <>
-              <Overview g={g} />
-              <div className="grid grid-cols-1 min-[1280px]:grid-cols-2 gap-5 items-start">
-                <BassPanel g={g} />
-                <KeysPanel g={g} />
-                <VerbPanel />
-                <DiscoPanel g={g} />
-              </div>
-              <div className="grid grid-cols-[1fr_340px] gap-5">
+            <div className="grid grid-cols-1 min-[1280px]:grid-cols-[minmax(0,1fr)_460px] gap-5 items-start">
+              <div className="space-y-5 min-w-0">
+                <Overview g={g} panel={panel} onPanel={setPanel} />
                 <Details g={g} />
-                <KeepPanel g={g} keep={keep} setKeep={setKeep} />
               </div>
-            </>
+              <div className="min-[1280px]:sticky min-[1280px]:top-0">
+                <LanePanel g={g} panel={panel} onPanel={setPanel} where="generate" />
+              </div>
+            </div>
           ) : (
             <section className="rounded-2xl border border-dashed border-[#3e3f44] h-64 flex flex-col items-center justify-center text-center text-muted">
               <div className="font-display text-[22px] text-text">A new track skeleton, every press</div>
@@ -267,17 +281,23 @@ function Options() {
   )
 }
 
-/** The arrangement at a glance: sections (click to play from there), lanes, playhead. */
-function Overview({ g }: { g: Generation }) {
+/**
+ * The arrangement at a glance: sections (click to play from there), lanes, playhead. Each lane:
+ * its volume, a lock that keeps it on the next press of G, mute, solo, made again; its name opens
+ * it in the lane panel.
+ */
+function Overview({ g, panel, onPanel }: { g: Generation; panel: Panel; onPanel: (p: Panel) => void }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(900)
   const LABEL_W = 214
-  const RIGHT_W = 84
+  const RIGHT_W = 110
   const BAND = 30
   const ROW = 26
   useGenerate((s) => s.settings.mix)  // redraw the sliders when a volume changes
   const toggles = useGenerate((s) => s.lanes)
+  const keep = useGenerate((s) => s.keep)
+  const isOpen = (name: string) => JSON.stringify(panelOf(name)) === JSON.stringify(panel)
   const dragging = useRef(false)
   const h = BAND + g.project.lanes.length * ROW + 8
   const totalBeats = g.project.lengthBars * 4
@@ -378,9 +398,11 @@ function Overview({ g }: { g: Generation }) {
       {g.project.lanes.map((lane, li) => {
         const role = laneRole(lane.name)
         return (
-          <div key={lane.id} className="absolute left-0 flex items-center gap-2 pl-3 pr-3 text-[11.5px]"
+          <div key={lane.id} className="absolute left-0 flex items-center gap-2 pl-1.5 pr-3 text-[11.5px]"
                style={{ top: BAND + li * ROW + 4, height: ROW - 4, width: LABEL_W }}>
-            <span className="w-[52px] truncate text-muted" title={lane.name}>{lane.name}</span>
+            <button className={cx('w-[64px] h-full px-1.5 rounded-md truncate text-left transition-colors',
+                      isOpen(lane.name) ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text hover:bg-raised')}
+                    title={`Open ${lane.name} in the lane panel`} onClick={() => onPanel(panelOf(lane.name))}>{lane.name}</button>
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb}
                        reset={LANES.find((l) => l.role === role)?.volumeDb ?? 0} color={lane.color} dragging={dragging}
                        title={`Volume ${fmtDb(lane.volumeDb)} (double-click: starting level)`}
@@ -389,10 +411,20 @@ function Overview({ g }: { g: Generation }) {
           </div>
         )
       })}
-      {/* Mute, solo and a new sound for just this lane. */}
-      {g.project.lanes.map((lane, li) => (
+      {/* Keep, mute, solo and a new sound for just this lane. */}
+      {g.project.lanes.map((lane, li) => {
+        const role = laneRole(lane.name)
+        const kept = role && laneKept(role, keep)
+        return (
         <div key={`r-${lane.id}`} className="absolute right-0 flex items-center justify-end gap-1 pr-3"
              style={{ top: BAND + li * ROW + 4, height: ROW - 4, width: RIGHT_W }}>
+          {role && LOCKABLE.includes(role) && (
+            <button title={kept ? `Kept: the next press of G keeps ${lane.name}` : `Keep ${lane.name} on the next press of G`}
+                    onClick={() => toggleLaneKeep(role)}
+                    className={cx('w-5 h-5 rounded flex items-center justify-center', kept ? 'bg-accent/20 text-accent' : 'text-faint hover:text-text hover:bg-raised')}>
+              <IconLock className="w-3.5 h-3.5" open={!kept} />
+            </button>
+          )}
           <button title="Mute" onClick={() => toggleLane(lane.name, 'mute')}
                   className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.mute ? 'bg-warn text-on-accent' : 'bg-raised text-muted hover:text-text')}>M</button>
           <button title="Solo" onClick={() => toggleLane(lane.name, 'solo')}
@@ -405,24 +437,51 @@ function Overview({ g }: { g: Generation }) {
             <IconSparkle className="w-3.5 h-3.5" />
           </button>
         </div>
-      ))}
+        )
+      })}
     </section>
   )
 }
 
+/** Keep the structure or the key on the next press of G. */
+function KeepLock({ on, what, onClick }: { on: boolean; what: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} title={on ? `Kept: the next press of G keeps the ${what}` : `Keep the ${what} on the next press of G`}
+            className={cx('w-6 h-6 rounded-md flex items-center justify-center', on ? 'bg-accent/15 text-accent' : 'text-faint hover:text-text hover:bg-raised')}>
+      <IconLock className="w-3.5 h-3.5" open={!on} />
+    </button>
+  )
+}
+
+/** The track: length, key, structure, its choices (to change, or lock for every next one), its sources. */
 function Details({ g }: { g: Generation }) {
+  const { keep, set } = useGenerate()
+  const setKeep = (patch: Partial<typeof keep>) => {
+    set({ keep: { ...keep, ...patch } })
+    invalidate()
+  }
   const bpm = g.project.bpm
   const secs = Math.round((g.project.lengthBars * 4 * 60) / bpm)
+  const choices = choicesFor(g)
   return (
     <section className="rounded-2xl border border-line bg-panel-2 px-5 py-4 space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <span className="font-display text-[22px]">{Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</span>
         <span className="text-muted">{g.project.lengthBars} bars · {bpm} BPM</span>
-        {g.key && <span className="rounded-md px-2 h-[22px] inline-flex items-center bg-pastel-yellow text-on-pastel text-[12px] font-medium">Key {g.key}</span>}
+        <label className="rounded-md pl-2 h-[22px] inline-flex items-center gap-1 bg-pastel-yellow text-on-pastel text-[12px] font-medium"
+               title="Another key for this track: bass and keys move, disco hits are pitched, FX that don't fit are swapped; the drums stay (← goes back)">
+          Key
+          <select className="bg-transparent font-medium outline-none cursor-pointer pr-1" value={g.key ?? ''}
+                  onChange={(e) => e.target.value && changeTrackKey(e.target.value)}>
+            {!g.key && <option value="">none</option>}
+            {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
+          </select>
+        </label>
+        <KeepLock on={keep.key} what="key" onClick={() => setKeep({ key: !keep.key })} />
         <span className="text-faint text-[11.5px] ml-auto">seed {g.seed}</span>
       </div>
       <div>
-        <SectionTitle>Structure</SectionTitle>
+        <SectionTitle right={<KeepLock on={keep.structure} what="structure" onClick={() => setKeep({ structure: !keep.structure })} />}>Structure</SectionTitle>
         <div className="flex flex-wrap gap-1.5">
           {g.sections.map((s, i) => (
             <button key={i} onClick={() => playSection(i)} title={`Play from ${s.label} (${i + 1})`}
@@ -435,6 +494,23 @@ function Details({ g }: { g: Generation }) {
       </div>
       <div>
         <SectionTitle>Choices</SectionTitle>
+        <p className="text-faint text-[11.5px] -mt-1 mb-3">Change one to hear the track with it (the lanes it shapes are made again, ← goes back); lock it for every next track.</p>
+        <div className="grid grid-cols-1 min-[1500px]:grid-cols-2 gap-x-8 gap-y-4">
+          {CHOICE_GROUPS.map((group) => {
+            const list = choices.filter((c) => c.group === group)
+            return list.length > 0 && (
+              <div key={group}>
+                <div className="text-[11.5px] font-medium text-text mb-1.5">{group}</div>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1.5 items-center">
+                  {list.map((c) => <ChoiceRow key={c.rule} c={c} g={g} lockable />)}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div>
+        <SectionTitle>Also</SectionTitle>
         <div className="flex flex-wrap gap-1.5">
           {g.choices.map((c) => (
             <span key={c} className="h-6 px-2 rounded-md text-[11.5px] bg-pastel-lavender text-on-pastel inline-flex items-center">{c}</span>
@@ -446,184 +522,32 @@ function Details({ g }: { g: Generation }) {
   )
 }
 
-const NO_FAVORITES: string[] = []
-
-/** Bass (SCOPE.md §6.7): the generation's bassline through a Serum 2 patch, browsable in place. */
-function BassPanel({ g }: { g: Generation }) {
-  const { basslines, presets, loaded, error } = useBass()
-  const opts = useGenerate((s) => s.settings.bass)
-  const keep = useGenerate((s) => s.keep)
-  useGenerate((s) => s.history)  // re-render after a bass change
-  // Default outside the selector: a new [] on every read makes the store re-render forever.
-  const favorites = useApp((s) => s.settings?.bass?.favorites) ?? NO_FAVORITES
-  const setView = useApp((s) => s.setView)
-  const [rendering, setRendering] = useState(false)
-  useEffect(() => onBassRendering(setRendering), [])
-  const [editing, setEditing] = useState(false)
-  const [saveName, setSaveName] = useState('')
-  const dragging = useRef(false)
-  const b = g.bass
-  const step = <T,>(list: T[], cur: T | undefined, d: number, same: (a: T, b: T) => boolean) => {
-    const i = cur ? list.findIndex((x) => same(x, cur)) : -1
-    return list[(((i + d) % list.length) + list.length) % list.length]
-  }
-  const random = <T,>(list: T[], cur: T | undefined) => {
-    const others = list.filter((x) => x !== cur)
-    return others.length ? others[Math.floor(Math.random() * others.length)] : cur
-  }
-  const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
-  const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.'
-    : !presets.length ? 'No Serum 2 patches yet: tick folders for Bass under Settings → Serum 2.' : null
-
-  const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
-  const summary = !opts.enabled ? 'Off: G generates without bass'
-    : missing ?? (b ? <>
-        <span className="text-text">{b.midi.name}</span> · {bassBars(b)} bar{bassBars(b) === 1 ? '' : 's'} · {b.preset.name}
-        {kept && <span className="text-accent"> · keeping the {kept}</span>}
-      </> : 'On: the next generation gets a bass')
-
+/** Starred generations (S), saved in the library: click one to hear it again. */
+function Shortlist() {
+  const { shortlist, history, index } = useGenerate()
+  const on = shortlistId(history[index] ?? null, shortlist)
   return (
-    <Module id="bass" title="Bass" enabled={opts.enabled} onEnabled={(on) => setBassOptions({ enabled: on })}
-            enabledTitle={opts.enabled ? 'On: G writes a bass for every new generation' : 'Off: new generations have no bass'}
-            summary={summary}
-            status={<>
-              {rendering && <span className="text-[11.5px] text-accent">Rendering with Serum 2…</span>}
-              {error && <span className="text-[11.5px] text-bad" title={error}>Engine: {error.slice(0, 80)}</span>}
-            </>}>
-      {!loaded ? <p className="text-muted text-[12.5px]">Loading basslines and patches…</p>
-        : missing ? (
-          <p className="text-muted text-[12.5px]">{missing}{' '}
-            {!basslines.length && <Button variant="ghost" onClick={() => setView('midi')}>Open MIDI</Button>}
-            {!presets.length && basslines.length > 0 && <Button variant="ghost" onClick={() => setView('settings')}>Open Settings</Button>}
-          </p>
-        ) : !b ? (
-          <p className="text-muted text-[12.5px]">{opts.enabled ? 'Press G for a generation with bass.' : 'Bass is off for new generations.'}</p>
-        ) : (
-          <div className="grid grid-cols-[86px_1fr] gap-y-2 items-center text-[12.5px]">
-            <span className="text-muted">Patch</span>
-            <span className="flex flex-wrap items-center gap-1.5 min-w-0">
-              <button className={btn} title="Previous patch" onClick={() => setGenerationBass({ preset: step(presets, b.preset, -1, (x, y) => x.path === y.path) })}>‹</button>
-              <span className="truncate font-medium" title={b.preset.path}>{b.preset.name}</span>
-              <span className="text-faint truncate text-[11.5px]">{b.preset.folder}</span>
-              <button className={btn} title="Next patch" onClick={() => setGenerationBass({ preset: step(presets, b.preset, 1, (x, y) => x.path === y.path) })}>›</button>
-              <button className={btn} title="A random patch" onClick={() => setGenerationBass({ preset: random(presets, b.preset) })}>Random</button>
-              <button className={cx(btn, favorites.includes(b.preset.path) && 'text-accent')} title="Star: picked more often"
-                      onClick={() => toggleFavoritePreset(b.preset.path)}>
-                <IconStar className="w-3.5 h-3.5" filled={favorites.includes(b.preset.path)} />
-              </button>
-              <span className="text-faint text-[11.5px] ml-1">{presets.length} patches</span>
-            </span>
-            <span className="text-muted">Bassline</span>
-            <span className="flex flex-wrap items-center gap-1.5 min-w-0">
-              <button className={btn} title="Write a new bassline, learned from your MIDI basslines" onClick={() => newBassline()}>New bassline</button>
-              {([null, 1, 2, 4] as const).map((n) => (
-                <button key={n ?? 'any'} className={cx(btn, opts.bars === n && 'bg-accent/20 text-accent')}
-                        title={n ? `New basslines are ${n} bar${n === 1 ? '' : 's'} long (and write one now)` : 'New basslines as long as your MIDI basslines tend to be'}
-                        onClick={() => { setBassOptions({ bars: n }); newBassline(n) }}>{n ?? 'Any'}</button>
-              ))}
-              <span className="truncate font-medium ml-1">{b.midi.name}</span>
-              <span className="text-faint text-[11.5px] whitespace-nowrap">{b.midi.key_label ?? 'no key'} · {b.midi.bars} bar{b.midi.bars === 1 ? '' : 's'}</span>
-              <span className="text-faint text-[11.5px] ml-1 whitespace-nowrap">learned from {basslines.length} bassline{basslines.length === 1 ? '' : 's'}</span>
-            </span>
-            <span className="text-muted">Transpose</span>
-            <span className="flex items-center gap-1.5">
-              <button className={btn} onClick={() => setGenerationBass({ transpose: Math.max(-24, b.transpose - 1) })}>−</button>
-              <span className="w-16 text-center tabular-nums">{b.transpose > 0 ? '+' : ''}{b.transpose} st</span>
-              <button className={btn} onClick={() => setGenerationBass({ transpose: Math.min(24, b.transpose + 1) })}>+</button>
-              <button className={btn} title="An octave down: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', -12)}>−12</button>
-              <button className={btn} title="An octave up: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', 12)}>+12</button>
-              <PatchOctave role="bass" path={b.preset.path} />
-              <span className="text-faint text-[11.5px] ml-1">
-                {g.key ? `into ${g.key} (${transposeTo(b.midi.key_label, g.key) >= 0 ? '+' : ''}${transposeTo(b.midi.key_label, g.key)} st from ${b.midi.key_label ?? '?'})` : 'no track key'}
-              </span>
-            </span>
-            <span className="text-muted">Notes</span>
-            <span className="flex items-center gap-1.5">
-              <button className={cx(btn, editing && 'bg-accent/20 text-accent')} onClick={() => {
-                setEditing(!editing)
-                setSaveName(`${b.midi.name} edit`)
-              }}>{editing ? 'Close piano roll' : 'Edit notes'}</button>
-              {b.notes && <span className="text-accent text-[11.5px]">edited for this track</span>}
-              {b.notes && <button className={btn} title={isGenerated(b.midi) ? 'Back to the line as it was written' : 'Back to the imported MIDI'}
-                                  onClick={() => setGenerationBass({ notes: undefined, bars: undefined })}>Revert</button>}
-            </span>
-            {editing && (
-              <div className="col-span-2 mt-1 space-y-2">
-                <PianoRoll notes={(b.notes ?? b.midi.notes).map(([s, l, p, v]) => [s, l, p + b.transpose, v] as RollNote)}
-                           bars={bassBars(b)} playhead={() => bassPlayhead(g)}
-                           onChange={(notes, bars) => setGenerationBass({ notes: notes.map(([s, l, p, v]) => [s, l, p - b.transpose, v] as RollNote), bars })} />
-                <div className="flex flex-wrap items-center gap-2 text-[12px]">
-                  <span className="text-faint">Edits apply to this track only.</span>
-                  <span className="flex-1" />
-                  <input className={cx(inputClass, 'w-48 h-7 text-[12px]')} value={saveName} onChange={(e) => setSaveName(e.target.value)} />
-                  <Button onClick={() => void saveBassline(g, saveName)} title="Add the loop to your MIDI library, for future generations">
-                    Save as new bassline
-                  </Button>
-                </div>
-              </div>
-            )}
-            <span className="text-muted">Sidechain</span>
-            <span className="flex items-center gap-2 max-w-[360px]">
-              <BarSlider className="flex-1" min={0} max={1} step={0.05} value={opts.sidechain} reset={0.6} color="#fda4af"
-                         dragging={dragging} title="How far the bass ducks under every kick (double-click: 60%)"
-                         onChange={(v) => setBassOptions({ sidechain: v })} />
-              <span className="w-10 text-right tabular-nums text-muted">{Math.round(opts.sidechain * 100)}%</span>
-            </span>
-          </div>
-        )}
-    </Module>
-  )
-}
-
-/** Playhead inside the bass loop, when it is in a bass clip of this generation. */
-function bassPlayhead(g: Generation): number | null {
-  if (!playback.playing || !g.bass) return null
-  const pos = playback.position()
-  const c = g.project.clips.find((k) => k.type === 'audio' && k.bass && k.bass.role !== 'keys' && pos >= k.start && pos < k.start + k.length)
-  if (!c || c.type !== 'audio') return null
-  const L = bassBars(g.bass) * 4
-  return (((pos - c.start + c.trimBeats) % L) + L) % L
-}
-
-/** Save the generation's (edited) bassline to the MIDI library and use it from now on. */
-async function saveBassline(g: Generation, name: string): Promise<void> {
-  const b = g.bass
-  if (!b) return
-  const label = name.trim() || 'Bassline'
-  const id = await attempt(() => api.saveMidi({ name: label, notes: b.notes ?? b.midi.notes, bars: bassBars(b), keyLabel: b.midi.key_label }))
-  if (id == null) return
-  await loadBass()
-  const saved = useBass.getState().basslines.find((m) => m.id === id)
-  if (saved) setGenerationBass({ midi: saved, notes: undefined, bars: undefined })
-  useApp.getState().toast('info', `Saved "${label}" to your basslines.`)
-}
-
-/** What survives the next press of G. */
-function KeepPanel({ g, keep, setKeep }: { g: Generation; keep: KeepToggles; setKeep: (p: Partial<KeepToggles>) => void }) {
-  const toggle = (on: boolean, label: string, onClick: () => void, detail?: string) => (
-    <button onClick={onClick}
-            className={cx('w-full h-9 px-3 rounded-lg flex items-center gap-2 text-left text-[12.5px] transition-colors',
-              on ? 'bg-accent/15 text-accent shadow-[0_0_0_1px_rgb(226_195_95/0.35)]' : 'bg-raised text-muted hover:text-text')}>
-      <span className={cx('w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center text-[10px]',
-        on ? 'border-accent bg-accent text-on-accent' : 'border-[#55565b]')}>{on ? '✓' : ''}</span>
-      <span className="flex-1">{label}</span>
-      {detail && <span className="text-faint text-[11px] truncate max-w-[150px]">{detail}</span>}
-    </button>
-  )
-  return (
-    <section className="rounded-2xl border border-line bg-panel-2 px-4 py-4 space-y-1.5">
-      <SectionTitle>Keep when generating</SectionTitle>
-      {toggle(keep.structure, 'Structure', () => setKeep({ structure: !keep.structure }), `${g.sections.length} sections`)}
-      {toggle(keep.key, 'Key', () => setKeep({ key: !keep.key }), g.key ?? 'no key')}
-      {g.bass && toggle(keep.bassline, 'Bassline', () => setKeep({ bassline: !keep.bassline }), g.bass.midi.name)}
-      {g.keys && toggle(keep.keysPart, 'Keys part', () => setKeep({ keysPart: !keep.keysPart }), g.keys.midi.name)}
-      {g.keys && toggle(keep.keysPatch, 'Keys patch', () => setKeep({ keysPatch: !keep.keysPatch }), g.keys.preset.name)}
-      {g.bass && toggle(keep.patch, 'Bass patch', () => setKeep({ patch: !keep.patch }), g.bass.preset.name)}
-      {KEEPABLE.filter((r) => g.picks[r]).map((role) => {
-        const on = keep.lanes.includes(role)
-        return toggle(on, ROLE_LABEL[role] ?? role,
-          () => setKeep({ lanes: on ? keep.lanes.filter((r) => r !== role) : [...keep.lanes, role] }),
-          g.picks[role]?.source_code)
+    <section className="flex items-center gap-2 overflow-x-auto pb-1">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-faint shrink-0 mr-1">Shortlist</span>
+      {shortlist.map((item, i) => {
+        const { g } = item
+        const secs = Math.round((g.project.lengthBars * 4 * 60) / g.project.bpm)
+        return (
+          <span key={item.id} className={cx('h-8 pl-2.5 pr-1 rounded-lg text-[12px] inline-flex items-center gap-1.5 shrink-0',
+            on === item.id ? 'bg-accent-soft text-accent' : 'bg-raised text-muted')}>
+            <button className="inline-flex items-center gap-1.5 hover:text-text" onClick={() => openShortlisted(item.id)}
+                    title={`Starred ${new Date(item.savedAt).toLocaleString()}: ${g.zips.join(' · ')}`}>
+              <IconStar className="w-3.5 h-3.5" filled />
+              <span className="font-medium">{i + 1}</span>
+              <span>{Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</span>
+              <span className="text-faint">{g.key ?? 'no key'} · {g.project.bpm}</span>
+            </button>
+            <button className="w-5 h-5 rounded flex items-center justify-center text-faint hover:text-bad" title="Take it off the shortlist"
+                    onClick={() => window.confirm('Take this generation off the shortlist?') && removeShortlisted(item.id)}>
+              <IconX className="w-3 h-3" />
+            </button>
+          </span>
+        )
       })}
     </section>
   )

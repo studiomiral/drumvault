@@ -18,7 +18,8 @@ function libraryBpm(): number {
 
 /** Refresh sample ids/lengths from the library by path; report samples that are gone. */
 export async function resolveSamples(project: Project): Promise<Project> {
-  const paths = [...new Set(project.clips.map((c) => c.sample.relPath))]
+  // Bass and keys clips play a Serum render, not a library sample: it's made again when it's gone.
+  const paths = [...new Set(project.clips.filter((c) => !(c.type === 'audio' && c.bass)).map((c) => c.sample.relPath))]
   const rows = paths.length ? await api.samplesByPath(paths) : []
   const byPath = new Map(rows.map((r) => [r.rel_path, r]))
   // Disco hits aren't library samples: they're there while the Disco Hits page has them.

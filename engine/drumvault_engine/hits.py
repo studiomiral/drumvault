@@ -1,7 +1,7 @@
-"""Disco hits (SCOPE.md §6.8): one-shot stabs, brass hits and the like for Generate.
+"""Disco hits (SCOPE.md §6.8) and chord stabs (§6.9): one-shots for Generate.
 
-Each file dropped on the Disco Hits page is one hit: trimmed from its attack to the end of its
-tail, peak-normalised and written to <Library>/Disco Hits/. Its key comes from its name ("Brass
+Each file dropped on the Disco Hits or Chord Stabs page is one hit: trimmed from its attack to the
+end of its tail, peak-normalised and written to <Library>/Disco Hits/ (or Chord Stabs/). Its key comes from its name ("Brass
 Stab Cm", "Disco_Hit_F#_maj", a bare "…_A_…"), else from its sound. Generate moves a hit into the
 track key (to the relative key across major and minor) plus its `pitch_fix`, the correction set
 in Generate when the key was read wrong.
@@ -23,7 +23,8 @@ from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDER = "Disco Hits"
+FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs"}
+KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
 
@@ -101,8 +102,12 @@ def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[s
     return detected.label, "detected" if detected.label else None
 
 
-def import_hits(settings: Settings, paths: list[str]) -> dict:
-    """Add disco hits from files, folders and zips. Files already imported are skipped."""
+def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
+    """Add disco hits (or chord stabs) from files, folders and zips. Files already imported (on
+    either page) are skipped."""
+    if kind not in FOLDERS:
+        raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
+    folder = FOLDERS[kind]
     if not settings.library_path:
         raise HitError("no_library", "No library folder configured")
     lib = Path(settings.library_path)
@@ -132,16 +137,16 @@ def import_hits(settings: Settings, paths: list[str]) -> dict:
             y = resample(hit, audio.sr, out_sr)
             y, pk_db, _ = normalize.peak_normalize(y, settings.thresholds.hit_peak_dbfs)
             base = naming.slugify(Path(name).stem, 60) or "hit"
-            rel, k = f"{FOLDER}/{base}.wav", 1
+            rel, k = f"{folder}/{base}.wav", 1
             while db.hit_path_taken(rel) or (lib / rel).exists():
                 k += 1
-                rel = f"{FOLDER}/{base}-{k}.wav"
+                rel = f"{folder}/{base}-{k}.wav"
             write_wav(lib / rel, y, out_sr, settings.output_format)
-            hid = db.insert_hit(file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
+            hid = db.insert_hit(kind=kind, file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
                                 key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                                 key_source=source, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                                 channels=y.shape[1], peak_db=pk_db, created_at=now_iso())
-            imported.append({"id": hid, "file_name": name, "key_label": label, "key_source": source})
+            imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 
 

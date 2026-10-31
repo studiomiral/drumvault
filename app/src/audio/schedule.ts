@@ -22,6 +22,8 @@ export interface ScheduledEvent {
   rate?: number
   /** Linear gain (clip gain × step velocity). */
   gain: number
+  /** A volume ride: the gain at the event's end, as a factor of `gain` (it moves there evenly in dB). */
+  gainEnd?: number
   /** Clip filter, with its cutoff at the event's start and end (Hz). */
   filter?: { type: BiquadFilterType; q: number; f0: number; f1: number }
   /** Reverb send (0…1) at evenly spaced points from the event's start to its end (one value: all through). */
@@ -67,6 +69,14 @@ export function tempoPath(relPath: string, bpm: number): string {
 }
 
 /** FNV-1a, hex: a short stable id for a preset path in render file names. */
+/** Where a part's renders go: bass, keys and stab parts each their own folder. */
+const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : 'bass')
+
+/** The start of every render of `preset` as a chord stab part (to tell a preset used in a track by its files). */
+export function stabRenderPrefix(preset: string): string {
+  return `.drumvault/stabs/${shortHash(preset)}-`
+}
+
 function shortHash(s: string): string {
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {
@@ -80,7 +90,7 @@ function shortHash(s: string): string {
 export function bassPath(b: BassRender, bpm: number): string {
   const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
   const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
-  return `.drumvault/${b.role === 'keys' ? 'keys' : 'bass'}/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
 }
 
 /** The file a clip plays at the project tempo. */
@@ -179,6 +189,20 @@ export function verbSend(clip: Clip, bpm: number, sec: number): number {
 /** Points per 16th of an event's send curve (ramped linearly between them), at most this many. */
 const VERB_POINTS = 33
 
+/** dB a clip's volume ride adds at project time `sec`, on top of its gain at the start. */
+export function rideDb(clip: Clip, bpm: number, sec: number): number {
+  if (clip.gainTo == null) return 0
+  const t = clamp01((sec - beatToSec(clip.start, bpm)) / beatToSec(clip.length, bpm))
+  return (clip.gainTo - clip.gainDb) * t
+}
+
+function withRide(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
+  if (clip.gainTo == null || clip.gainTo === clip.gainDb) return ev
+  const g = ev.gain * dbToGain(rideDb(clip, bpm, ev.start))
+  if (ev.duration == null) return { ...ev, gain: g }  // a hit: the ride where it lands
+  return { ...ev, gain: g, gainEnd: dbToGain(rideDb(clip, bpm, ev.start + ev.duration) - rideDb(clip, bpm, ev.start)) }
+}
+
 function withVerb(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
   if (!clip.verb) return ev
   if (ev.duration == null) return { ...ev, verb: [verbSend(clip, bpm, ev.start)] }  // a hit: one send
@@ -192,13 +216,13 @@ function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, off
   const rate = opts.rate ?? 1
   const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}) }
   if (start >= from - EPS && start < to - EPS) {
-    out.push(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm))
+    out.push(withRide(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
-    out.push(withVerb(withFade(withFilter({
+    out.push(withRide(withVerb(withFade(withFilter({
       laneId: clip.laneId, clipId: clip.id, relPath, start: from, offset: offset + late * rate,
       duration: duration == null ? null : duration - late, gain, ...extra,
-    }, clip, bpm), clip, bpm), clip, bpm))
+    }, clip, bpm), clip, bpm), clip, bpm), clip, bpm))
   }
 }
 

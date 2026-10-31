@@ -30,12 +30,13 @@ export function hitPitch(h: Pick<HitItem, 'key_label' | 'pitch_fix'>, key: strin
   return Math.max(-HIT_PITCH_RANGE, Math.min(HIT_PITCH_RANGE, hitTranspose(h, key) + (h.pitch_fix ?? 0)))
 }
 
-/** A hit as a one-shot sample for the generator. */
+/** A hit (or a chord stab) as a one-shot sample for the generator. */
 export function hitSample(h: HitItem): SampleListItem {
+  const stab = h.kind === 'stab'
   return {
-    id: hitSampleId(h.id), rel_path: h.rel_path, name: h.name, kind: 'oneshot', category: 'disco_hit',
+    id: hitSampleId(h.id), rel_path: h.rel_path, name: h.name, kind: 'oneshot', category: stab ? 'chord_stab' : 'disco_hit',
     bpm: null, bars: null, body_bars: null, key_label: h.key_label, key_camelot: h.key_camelot,
     duration_s: h.duration_s, channels: h.channels, favorite: 0, rating: null, tags: null,
-    zip_id: -1, source_code: 'Disco Hits',
+    zip_id: -1, source_code: stab ? 'Chord Stabs' : 'Disco Hits',
   }
 }

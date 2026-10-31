@@ -6,7 +6,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   top: 'Top', groove: 'Groove', drums: 'Full drums', fill: 'Drum fill', roll: 'Snare roll',
   fx_riser: 'Riser', fx_downlifter: 'Downlifter', fx_impact: 'Impact', fx_sweep: 'Sweep',
   fx_atmos: 'Atmos', fx: 'FX (other)', melodic: 'Melodic (key only)',
-  full_mix: 'Full mix (key only)', ignore: 'Ignore', disco_hit: 'Disco hit',
+  full_mix: 'Full mix (key only)', ignore: 'Ignore', disco_hit: 'Disco hit', chord_stab: 'Chord stab',
 }
 
 export const STEM_CATEGORIES: Category[] = [

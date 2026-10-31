@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { api } from '../api'
 import { IconDrop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
+import { SerumFolders } from '../components/SerumFolders'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
 import { loadKeys } from '../store/keys'
@@ -150,6 +151,8 @@ export function MidiView() {
             </span>
           </span>
         </button>
+
+        <SerumFolders key={section} module={section} />
 
         {bassModel && <Learned model={bassModel} />}
         {keysModel && <KeysLearned model={keysModel} items={ofSection} />}

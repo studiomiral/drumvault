@@ -120,6 +120,26 @@ export function which(name: string, path = augmentedPath()): string | null {
 // Arrange projects: <Library>/.drumvault/projects/<name>.dvproj
 // ---------------------------------------------------------------------------
 
+/** Generate's shortlist: the starred generations (JSON), in the library. */
+function shortlistPath(library: string): string {
+  return join(library, '.drumvault', 'shortlist.json')
+}
+
+export async function readShortlist(library: string): Promise<string | null> {
+  try {
+    return await readFile(shortlistPath(library), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+export async function writeShortlist(library: string, text: string): Promise<void> {
+  const path = shortlistPath(library)
+  await mkdir(join(library, '.drumvault'), { recursive: true })
+  await writeFile(`${path}.tmp`, text)
+  await rename(`${path}.tmp`, path)
+}
+
 export function projectsDir(library: string): string {
   return join(library, '.drumvault', 'projects')
 }

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 Category = Literal[
     "kick", "clap", "snare", "hat", "hat_closed", "hat_open", "ride", "cymbal", "shaker",
     "perc", "top", "groove", "drums", "fill", "roll", "fx_riser", "fx_downlifter", "fx_impact",
-    "fx_sweep", "fx_atmos", "fx", "melodic", "full_mix", "ignore", "disco_hit",
+    "fx_sweep", "fx_atmos", "fx", "melodic", "full_mix", "ignore", "disco_hit", "chord_stab",
 ]
 ZipStatus = Literal["queued", "processing", "done", "needs_review", "error", "skipped", "cancelled"]
 SampleKind = Literal["oneshot", "loop", "event"]
@@ -105,7 +105,7 @@ class Overrides(BaseModel):
 
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
-                 "render_bass", "serum_presets", "save_midi", "set_midi_meta",
+                 "render_bass", "serum_presets", "stab_chords", "save_midi", "set_midi_meta",
                  "delete_midi", "import_hits", "set_hit_meta", "delete_hits", "shutdown"]
 
 
@@ -231,8 +231,9 @@ class SaveMidiParams(BaseModel):
 
 
 class ImportHitsParams(BaseModel):
-    """Add disco hits (SCOPE.md §6.8) from audio files, folders and zips."""
+    """Add disco hits (SCOPE.md §6.8) or chord stabs (§6.9) from audio files, folders and zips."""
     paths: list[str]
+    kind: Literal["disco", "stab"] = "disco"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -247,6 +248,12 @@ class SetHitMetaParams(BaseModel):
 
 class DeleteHitsParams(BaseModel):
     hit_ids: list[int]
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class StabChordsParams(BaseModel):
+    """Which chord stab patches play a chord from one key (SCOPE.md §6.9)."""
+    presets: list[str]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

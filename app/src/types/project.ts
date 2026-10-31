@@ -1,6 +1,7 @@
 // Arrange project (.dvproj, JSON). All positions are in beats (4/4, project BPM = library BPM).
 
 import type { Category, SampleKind } from './engine'
+import type { Generation } from '../generate/generator'
 
 export interface SampleRef {
   /** Library-relative path: the stable identity of a sample across reprocessing. */
@@ -56,6 +57,8 @@ interface ClipBase {
   start: number        // beats
   length: number       // beats
   gainDb: number
+  /** A volume ride: the gain moves (in dB, evenly) from `gainDb` at the clip's start to this at its end. */
+  gainTo?: number
   sample: SampleRef
   filter?: ClipFilter
   verb?: ClipReverb
@@ -71,8 +74,8 @@ interface ClipBase {
 
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
-  /** Absent on older bass projects. Keys share the Serum render pipeline. */
-  role?: 'bass' | 'keys'
+  /** Absent on older bass projects. Keys and Serum chord stabs (§6.9) share the render pipeline. */
+  role?: 'bass' | 'keys' | 'stab'
   keyLabel?: string | null
   /** Absolute path of the .SerumPreset. */
   preset: string
@@ -89,6 +92,8 @@ export interface BassRender {
   bars?: number
   /** The track's groove: per 16th step, how late (in 16ths) notes starting there play. */
   groove?: number[]
+  /** A chord stab part: the patch's own chord (semitones from the root), or its root alone (a patch that plays a chord from one key). */
+  stab?: { voicing?: number[]; oneKey?: boolean }
 }
 
 /** A loop on the bar grid; extending it repeats the loop. */
@@ -151,7 +156,15 @@ export interface Project {
   metronome: boolean
   createdAt: string
   updatedAt: string
+  /**
+   * A project sent from Generate: the track it was made as (structure, key, rules, picks, bass
+   * and keys), so its lanes keep their modules in Arrange: a new sound, the lane made again.
+   */
+  generation?: GenerationMeta
 }
+
+/** What a generated project remembers of its generation (everything but the project itself). */
+export type GenerationMeta = Omit<Generation, 'project'>
 
 export interface ProjectFileInfo {
   file: string         // file name inside the projects folder

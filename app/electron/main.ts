@@ -11,7 +11,7 @@ import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/ty
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
-  augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings,
+  augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist,
   readProjectFile, saveSettings, which, writeProjectFile,
 } from './fs'
 import { JobTracker } from './jobs'
@@ -308,15 +308,15 @@ function registerIpc(): void {
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
-  ipcMain.handle('hits:import', async (_e, paths: string[]) => {
+  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' = 'disco') => {
     if (!sidecar) throw new Error('Engine is not running')
-    const r = await sidecar.request('import_hits', { paths, settings: engineSettings() }, 600_000)
+    const r = await sidecar.request('import_hits', { paths, kind, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
   })
-  ipcMain.handle('dialog:hits', async () => {
+  ipcMain.handle('dialog:hits', async (_e, title = 'Add disco hits') => {
     const r = await dialog.showOpenDialog(win!, {
-      title: 'Add disco hits', buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
+      title, buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
       filters: [{ name: 'Audio files and zips', extensions: ['wav', 'aif', 'aiff', 'flac', 'zip'] }],
     })
     return r.canceled ? [] : r.filePaths
@@ -340,6 +340,11 @@ function registerIpc(): void {
   ipcMain.handle('serum:presets', async (_e, root: string, folders: string[] | null) => {
     if (!sidecar) throw new Error('Engine is not running')
     return sidecar.request('serum_presets', { root, folders, settings: engineSettings() }, 120_000)
+  })
+  ipcMain.handle('serum:stabChords', async (_e, presets: string[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    // Renders a note through every patch not measured yet (the first loads Serum 2).
+    return sidecar.request('stab_chords', { presets, settings: engineSettings() }, 600_000)
   })
   ipcMain.handle('bass:render', async (_e, p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: number[][]; bars?: number; groove?: number[] }) => {
@@ -373,6 +378,8 @@ function registerIpc(): void {
   ipcMain.handle('lib:facets', () => reader.facets())
   ipcMain.handle('lib:peaks', (_e, id: number, points: number) => reader.peaks(id, points))
   ipcMain.handle('lib:byPath', (_e, relPaths: string[]) => reader.samplesByPath(relPaths))
+  ipcMain.handle('shortlist:read', () => readShortlist(lib()))
+  ipcMain.handle('shortlist:write', (_e, text: string) => writeShortlist(lib(), text))
   ipcMain.handle('projects:list', () => listProjects(lib()))
   ipcMain.handle('projects:read', (_e, file: string) => readProjectFile(lib(), file))
   ipcMain.handle('projects:write', (_e, prev: string | null, name: string, text: string) =>
@@ -508,6 +515,7 @@ function buildMenu(): void {
         { label: 'Grid', accelerator: 'CmdOrCtrl+5', click: () => send('menu', 'view:grid') },
         { label: 'MIDI', accelerator: 'CmdOrCtrl+6', click: () => send('menu', 'view:midi') },
         { label: 'Disco Hits', accelerator: 'CmdOrCtrl+7', click: () => send('menu', 'view:hits') },
+        { label: 'Chord Stabs', click: () => send('menu', 'view:stabs') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

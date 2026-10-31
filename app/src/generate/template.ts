@@ -8,6 +8,7 @@ import type { Rng } from './rng'
 import {
   fit, layout, LIMITS, PHRASE, pickBuildStyle, pickKickMode, type KickMode, type Section, type SectionKind,
 } from './structure'
+import { bassHighpassHz, lowpassHz, mixHighpassOf, partBright, TOPS_BREAK_MAX_HZ, TOPS_BREAK_MIN_HZ } from './rides'
 
 /** Parts that make a phrase's energy (fills, FX and crashes are moments, not energy). */
 const ENERGY_PARTS = ['kick', 'clap', 'hats', 'perc', 'top', 'ride', 'bass', 'music']
@@ -159,6 +160,20 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
   const drops = where('drop')
   const brks = where('break')
   if (has('hats') && brks.length) rules.hatsInBreaks = across('hats', brks) >= PLAYS
+  // Hats in the intro and the outro: none, the half next to the drops, or all through.
+  const ioHats = (xs: { from: number; to: number }[]) => {
+    const v = across('hats', xs)
+    return v < 0.2 ? 'none' : v < 0.75 ? 'half' : 'all'
+  }
+  const outro = where('outro')
+  if (has('hats') && intro.length) rules.introHats = ioHats(intro)
+  if (has('hats') && outro.length) rules.outroHats = ioHats(outro)
+  // Top loops through breakdowns: low-passed (as dark as measured), open, or out.
+  if (has('top') && brks.length) {
+    const dark = partBright(a, 'top', brks)
+    rules.topsBreaks = across('top', brks) < PLAYS ? 'none' : dark != null && dark > -0.35 ? 'open' : 'filtered'
+    if (dark != null && dark <= -0.35) rules.topsBreakHz = Math.max(TOPS_BREAK_MIN_HZ, Math.min(TOPS_BREAK_MAX_HZ, lowpassHz(dark)))
+  }
   if (has('clap')) rules.ioClaps = across('clap', intro) >= 0.25
   if (has('perc')) rules.ioPerc = across('perc', intro) >= 0.25
   if (has('top') && intro.length) {
@@ -175,6 +190,9 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
       const any = share(a, 'bass', b.from, b.to)
       rules.bassBuild = any < 0.25 ? 'none' : full < any - 0.3 ? 'sweep' : 'filtered'
     }
+    // Outside drops the bass is high-passed: how far, from how much brighter it measures there.
+    const thin = partBright(a, 'bass', s.filter((x) => x.kind !== 'drop'))
+    if (thin != null && thin > 0) rules.bassHp = bassHighpassHz(thin)
   }
   if (has('ride') && drops.length) {
     const d0 = drops[0]
@@ -189,6 +207,15 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
   if (into.length) {
     const outs = into.filter((d) => share(a, 'kick', d.from - 1, d.from, 2) === 0 && share(a, 'kick', d.from - 4, d.from - 1, 2) > 0)
     rules.dropKickOut = outs.length / into.length >= PLAYS
+    // A breath in the bar before drops: the parts playing two bars before that stop for it.
+    const stops = (parts: string[]) => {
+      const xs = into.flatMap((d) => parts.filter((p) => d.from >= 2 && share(a, p, d.from - 2, d.from - 1) > 0)
+        .map((p) => share(a, p, d.from - 1, d.from) === 0))
+      return xs.length ? xs.filter(Boolean).length / xs.length : null
+    }
+    const tops = stops(['top'])
+    const drums = stops(['clap', 'perc', 'hats'])
+    if (tops != null) rules.dropBreath = tops < PLAYS ? null : drums != null && drums >= PLAYS ? 'all' : 'tops'
   }
   // Crashes and fills at the 8- and 16-bar marks of drops.
   const marks = (step: number, odd: boolean) => drops.flatMap((d) => {
@@ -207,6 +234,9 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
     if (m16.length) rules.phraseFill = m16.filter((b) => share(a, 'fills', b - 1, b) > 0).length / m16.length >= PLAYS
     if (into.length && !(into.some((d) => share(a, 'fills', d.from - 1, d.from) > 0))) rules.dropFill = null
   }
+  // The whole mix high-passed in the bars before drops (measured rides).
+  const hp = mixHighpassOf(a, into)
+  if (hp) rules.mixHp = hp
   if (has('fx')) {
     const busy = share(a, 'fx', 0, a.bars)
     rules.fx = busy < 0.12 ? 'sparse' : busy < 0.3 ? 'normal' : 'busy'
@@ -244,7 +274,7 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
   if (lb && s.some((x) => x !== lb && x.kind === 'break' && x.bars >= lb.bars)) delete lb.long
   s.filter((x) => x.kind === 'drop').at(-1)!.peak = true
   const total = s.reduce((n, x) => n + x.bars, 0)
-  const raw: Raw[] = s.map(({ from: _f, to: _t, ...x }) => x)
+  const raw: Raw[] = s.map(({ from, to, ...x }) => ({ ...x, src: { code: a.source_code, from, to } }))
   if (total < minBars || total > maxBars) fit(rng, raw, total < minBars ? minBars : maxBars)
   return { source: a.source_code, sections: layout(raw), rules, changes }
 }

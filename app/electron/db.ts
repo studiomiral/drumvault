@@ -181,11 +181,12 @@ export class LibraryReader {
       .map((r) => ({ ...r, name: r.file_name.replace(/\.midi?$/i, ''), notes: JSON.parse(r.notes) }))
   }
 
-  /** Disco hits (schema v10), oldest first. */
+  /** Disco hits (schema v10) and chord stabs (v12), oldest first. */
   listHits(): HitItem[] {
     if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hits'").length) return []
+    const kind = this.all<{ name: string }>('PRAGMA table_info(hits)').some((c) => c.name === 'kind') ? "COALESCE(kind, 'disco')" : "'disco'"
     return this.all<Omit<HitItem, 'name'>>(
-      `SELECT id, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels FROM hits ORDER BY id`)
+      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels FROM hits ORDER BY id`)
       .map((r) => ({ ...r, pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
 
@@ -228,9 +229,11 @@ export class LibraryReader {
   /** Every track's arrangement (schema v7), for Generate's structure templates. */
   arrangements(): TrackArrangement[] {
     if (!this.hasTable('arrangements')) return []
-    return this.all<Omit<TrackArrangement, 'parts'> & { parts: string }>(
-      `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts FROM arrangements a JOIN zips z ON z.id = a.zip_id
-       ORDER BY a.zip_id`).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string> }))
+    const detail = this.hasColumn('arrangements', 'detail') ? 'a.detail' : 'NULL AS detail'
+    return this.all<Omit<TrackArrangement, 'parts' | 'detail'> & { parts: string; detail: string | null }>(
+      `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts, ${detail} FROM arrangements a JOIN zips z ON z.id = a.zip_id
+       ORDER BY a.zip_id`).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string>,
+      detail: r.detail ? JSON.parse(r.detail) as TrackArrangement['detail'] : null }))
   }
 
   /** Loops without a measured groove, events without a shape, or tracks without an arrangement (older libraries). */
@@ -249,8 +252,10 @@ export class LibraryReader {
       .some((z) => !isKept(lib, z.source_code) && !!z.original_path && existsSync(z.original_path))) return true
     const zips = `SELECT COUNT(*) AS n FROM zips z WHERE z.status IN ('done', 'needs_review')${
       this.hasColumn('zips', 'kind') ? " AND z.kind = 'stems'" : ''}`
+    // Arrangements measured before the rides were (schema v11) are measured again.
+    const measured = this.hasColumn('arrangements', 'detail') ? ' WHERE detail IS NOT NULL' : ' WHERE 0'
     return (this.all<{ n: number }>(this.hasTable('arrangements')
-      ? `${zips} AND z.id NOT IN (SELECT zip_id FROM arrangements)` : zips)[0]?.n ?? 0) > 0
+      ? `${zips} AND z.id NOT IN (SELECT zip_id FROM arrangements${measured})` : zips)[0]?.n ?? 0) > 0
   }
 
   private hasTable(name: string): boolean {

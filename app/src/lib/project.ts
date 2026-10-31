@@ -192,6 +192,12 @@ export function splitClip(c: Clip, beat: number): [Clip, Clip] | null {
   const right = { ...structuredClone(c), id: uid('c'), start: beat, length: c.length - d, fadeIn: undefined }
   if (left.fadeIn) left.fadeIn = Math.min(left.fadeIn, d) || undefined
   if (right.fadeOut) right.fadeOut = Math.min(right.fadeOut, right.length) || undefined
+  if (c.gainTo != null) {
+    // A volume ride carries on where it was too.
+    const mid = c.gainDb + (c.gainTo - c.gainDb) * (d / c.length)
+    left.gainTo = mid
+    right.gainDb = mid
+  }
   if (c.verb) {
     // The reverb build carries on where it was: the left half up to the split, the right from it.
     const t = (d / c.length) ** 2
@@ -293,5 +299,6 @@ export function parseProject(text: string): Project {
     clips: p.clips ?? [], markers: p.markers ?? [],
     loop: p.loop ?? { start: 0, end: 16, enabled: false }, metronome: p.metronome ?? false,
     createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now,
+    ...(p.generation ? { generation: p.generation } : {}),
   }
 }

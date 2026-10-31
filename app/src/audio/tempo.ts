@@ -24,10 +24,11 @@ const bassInflight = new Map<string, Promise<void>>()
 const renderState = {
   bass: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   keys: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  stab: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
 }
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */
-export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' = 'bass'): () => void {
+export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' | 'stab' = 'bass'): () => void {
   const state = renderState[role]
   state.listeners.add(fn)
   fn(state.pending > 0)
