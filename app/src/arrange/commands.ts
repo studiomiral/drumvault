@@ -314,7 +314,7 @@ export async function newClipBassline(): Promise<void> {
     useApp.getState().toast('info', 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.')
     return
   }
-  const first = selectedClips().find((c) => c.type === 'audio' && c.bass && c.bass.role !== 'keys')
+  const first = selectedClips().find((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === 'bass')
   if (first?.type !== 'audio' || !first.bass) return
   const old = first.bass
   // A generated line's transpose (an octave up, say) carries over; an imported one's moved it into the key.

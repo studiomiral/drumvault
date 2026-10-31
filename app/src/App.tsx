@@ -21,11 +21,15 @@ import { SettingsView } from './views/SettingsView'
 import { WelcomeView } from './views/WelcomeView'
 
 const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = [
-  { label: 'Samples', items: [
+  // The source material: drums from the stem zips, and the music Generate plays over them.
+  { label: 'Drums', items: [
     { view: 'process', label: 'Drumvault' },
     { view: 'library', label: 'Library' },
     { view: 'grid', label: 'Grid' },
+  ] },
+  { label: 'Music', items: [
     { view: 'midi', label: 'MIDI' },
+    { view: 'stabs', label: 'Chord Stabs' },
     { view: 'hits', label: 'Disco Hits' },
   ] },
   { label: 'Create', items: [
@@ -121,7 +125,8 @@ export function App() {
         {view === 'library' && <LibraryView />}
         {view === 'grid' && <GridView />}
         {view === 'midi' && <MidiView />}
-        {view === 'hits' && <HitsView />}
+        {view === 'hits' && <HitsView kind="disco" />}
+        {view === 'stabs' && <HitsView key="stabs" kind="stab" />}
         {view === 'generate' && <GenerateView />}
         {view === 'arrange' && <ArrangeView />}
         {view === 'settings' && <SettingsView />}

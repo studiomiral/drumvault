@@ -17,7 +17,8 @@ import { isGenerated, keyOfLine } from '../generate/bassline'
 export function BassEditor({ clip, onClose }: { clip: AudioClip; onClose: () => void }) {
   const bassState = useBass()
   const keysState = useKeys()
-  const role = clip.bass?.role ?? 'bass'
+  // (Stab parts have no piano roll: BottomPanel never opens one here.)
+  const role = clip.bass?.role === 'keys' ? 'keys' : 'bass'
   const isKeys = role === 'keys'
   const basslines = isKeys ? keysState.parts : bassState.basslines
   const loaded = isKeys ? keysState.loaded : bassState.loaded

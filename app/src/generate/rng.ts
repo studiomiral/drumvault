@@ -15,6 +15,15 @@ export class Rng {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 
+  /** The state, to go on from here later (`restore`). */
+  save(): number {
+    return this.s
+  }
+
+  restore(state: number): void {
+    this.s = state >>> 0
+  }
+
   chance(p: number): boolean {
     return this.next() < p
   }

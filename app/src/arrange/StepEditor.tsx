@@ -12,7 +12,8 @@ export function BottomPanel() {
   const { project, selection, editingClip, openEditor } = useProject()
   const editing = project.clips.find((c) => c.id === editingClip)
   if (editing?.type === 'pattern') return <StepEditor clip={editing} onClose={() => openEditor(null)} />
-  if (editing?.type === 'audio' && editing.bass) return <BassEditor clip={editing} onClose={() => openEditor(null)} />
+  // (A Serum chord stab part has no piano roll: its notes are the track's stab rhythm.)
+  if (editing?.type === 'audio' && editing.bass && editing.bass.role !== 'stab') return <BassEditor clip={editing} onClose={() => openEditor(null)} />
   const single = selection.length === 1 ? project.clips.find((c) => c.id === selection[0]) : undefined
   if (single) return <ClipInspector clip={single} />
   return (
@@ -36,7 +37,33 @@ function GainSlider({ clip }: { clip: Clip }) {
                d.clips.find((c) => c.id === clip.id)!.gainDb = 0
              })} />
       <span className="w-12 tabular-nums">{clip.gainDb > 0 ? '+' : ''}{clip.gainDb.toFixed(1)} dB</span>
+      <RideControl clip={clip} />
     </label>
+  )
+}
+
+/** Volume ride: the gain moving from the clip's gain at its start to a second one at its end. */
+function RideControl({ clip }: { clip: Clip }) {
+  const edit = useProject((s) => s.edit)
+  const set = (label: string, to: number | null, coalesce?: string) => edit(label, (d) => {
+    const c = d.clips.find((x) => x.id === clip.id)!
+    if (to == null) delete c.gainTo
+    else c.gainTo = to
+  }, { coalesce })
+  return (
+    <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}
+          title="Ride the volume across the clip: from the gain at its start to this at its end">
+      <input type="checkbox" className="accent-[#e2c35f]" checked={clip.gainTo != null}
+             onChange={(e) => set('Volume ride', e.target.checked ? clip.gainDb - 12 : null)} />
+      ride to
+      {clip.gainTo != null && (
+        <>
+          <input type="range" min={-30} max={6} step={0.5} value={clip.gainTo} className="w-20 accent-[#e2c35f]"
+                 onChange={(e) => set('Volume ride', Number(e.target.value), `ride-${clip.id}`)} />
+          <span className="w-12 tabular-nums">{clip.gainTo > 0 ? '+' : ''}{clip.gainTo.toFixed(1)} dB</span>
+        </>
+      )}
+    </span>
   )
 }
 

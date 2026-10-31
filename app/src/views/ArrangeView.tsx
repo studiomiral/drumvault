@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { playback } from '../audio/engine'
 import { BottomPanel } from '../arrange/StepEditor'
 import { LaneHeaders } from '../arrange/LaneHeaders'
@@ -7,7 +7,10 @@ import { MarkerEditor } from '../arrange/MarkerEditor'
 import { Timeline } from '../arrange/Timeline'
 import { Toolbar } from '../arrange/Toolbar'
 import { ExportDialog } from '../arrange/ExportDialog'
+import { LanePanel } from '../components/LanePanel'
+import { IconX } from '../components/icons'
 import { useApp } from '../store/app'
+import { arrangeTrack, loadSamples, useGenerate } from '../store/generate'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Marker } from '../types/project'
@@ -75,9 +78,42 @@ export function ArrangeView() {
           </div>
         )}
         {libraryOpen && <LibraryPanel />}
+        <GeneratedLanePanel />
       </div>
       <BottomPanel />
       {modal === 'export' && <ExportDialog onClose={() => setModal(null)} />}
     </div>
+  )
+}
+
+/**
+ * A generated project's lane panel (SCOPE.md §6.6): the lane's module (Bass, Chords, Disco Hits)
+ * or its sounds and choices, as in Generate; changes are edits of the project (⌘Z).
+ */
+function GeneratedLanePanel() {
+  const panel = useArrange((s) => s.lanePanel)
+  const project = useProject((s) => s.project)
+  const g = useMemo(() => arrangeTrack(project), [project])
+  const samples = useGenerate((s) => s.samples)
+  const generated = !!project.generation
+  // The modules draw from the library like Generate does.
+  useEffect(() => {
+    if (generated && !useGenerate.getState().samples) void loadSamples()
+  }, [generated])
+  if (!panel || !g) return null
+  return (
+    <aside className="w-[440px] shrink-0 border-l border-line bg-panel overflow-y-auto">
+      <div className="h-10 px-4 flex items-center border-b border-line">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-faint flex-1">Generated lanes</span>
+        <button className="w-6 h-6 rounded-md flex items-center justify-center text-faint hover:text-text" title="Close"
+                onClick={() => useArrange.getState().set({ lanePanel: null })}>
+          <IconX className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="p-4">
+        {!samples ? <p className="text-muted text-[12.5px]">Loading the library…</p>
+          : <LanePanel g={g} panel={panel} onPanel={(lanePanel) => useArrange.getState().set({ lanePanel })} where="arrange" />}
+      </div>
+    </aside>
   )
 }

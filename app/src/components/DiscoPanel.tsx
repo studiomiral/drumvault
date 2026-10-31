@@ -5,7 +5,7 @@ import { HIT_PITCH_RANGE, hitIdOf, hitTranspose } from '../generate/disco'
 import type { Generation } from '../generate/generator'
 import { pitchRate } from '../lib/project'
 import { useApp } from '../store/app'
-import { setDiscoOptions, setHitPitchInTrack, useGenerate } from '../store/generate'
+import { newDiscoHits, setDiscoOptions, setHitPitchInTrack, useGenerate } from '../store/generate'
 import { useHits } from '../store/hits'
 import type { HitItem } from '../types/api'
 import { IconPlay, IconStop } from './icons'
@@ -18,22 +18,34 @@ const WHERE: Record<string, string> = {
 }
 
 /** Disco hits (SCOPE.md §6.8): which of the Disco Hits page's samples this track drops, and their pitch. */
-export function DiscoPanel({ g }: { g: Generation }) {
+export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const opts = useGenerate((s) => s.settings.disco)
   useGenerate((s) => s.history)  // re-render after a pitch change
-  const { hits, loaded } = useHits()
+  const all = useHits((s) => s.hits)
+  const loaded = useHits((s) => s.loaded)
+  const hits = all.filter((h) => h.kind !== 'stab')
   const setView = useApp((s) => s.setView)
   const used = (['disco', 'disco2'] as const)
     .map((role) => hits.find((h) => h.id === hitIdOf(g.picks[role]?.id)))
     .filter((h): h is HitItem => !!h)
   const where = WHERE[String(g.rules.discoAt)] ?? ''
+  const toast = useApp((s) => s.toast)
+  const reroll = () => {
+    if (!newDiscoHits()) toast('info', 'No other disco hits came out: add more on the Disco Hits page.')
+  }
+  const newButton = (
+    <Button variant="secondary" onClick={reroll}
+            title="Other disco hits and/or other places for them in this track; the rest stays (← goes back)">
+      {used.length ? 'New disco hits' : 'Add disco hits'}
+    </Button>
+  )
   const summary = !opts.enabled ? 'Off: G generates without disco hits'
     : !hits.length ? 'No disco hits yet: add them on the Disco Hits page'
       : used.length ? <><span className="text-text">{used.map((h) => h.name).join(' and ')}</span> · {where}</>
         : 'On: none in this track (some tracks get one or two)'
 
   return (
-    <Module id="disco" title="Disco Hits" enabled={opts.enabled} onEnabled={(enabled) => setDiscoOptions({ enabled })}
+    <Module id="disco" title="Disco Hits" fixed={fixed} enabled={opts.enabled} onEnabled={(enabled) => setDiscoOptions({ enabled })}
             enabledTitle={opts.enabled ? 'On: some new generations drop one or two disco hits' : 'Off: new generations have no disco hits'}
             summary={summary}>
       {!loaded ? <p className="text-muted text-[12.5px]">Loading disco hits…</p>
@@ -42,12 +54,16 @@ export function DiscoPanel({ g }: { g: Generation }) {
             <Button variant="ghost" onClick={() => setView('hits')}>Open Disco Hits</Button>
           </p>
         ) : !used.length ? (
-          <p className="text-muted text-[12.5px]">
-            {opts.enabled ? `No disco hits in this track. Some tracks get one or two, from your ${hits.length} hits.` : 'Disco hits are off for new generations.'}
-          </p>
+          <div className="flex flex-wrap items-center gap-3 text-[12.5px] text-muted">
+            {newButton}
+            <span>{opts.enabled ? `No disco hits in this track. Some tracks get one or two, from your ${hits.length} hits.` : 'Disco hits are off for new generations.'}</span>
+          </div>
         ) : (
           <div className="space-y-2 text-[12.5px]">
-            <p className="text-[12px] text-muted">On the 1 {where}{used.length > 1 ? ', taking turns' : ''}.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {newButton}
+              <span className="text-[12px] text-muted">On the 1 {where}{used.length > 1 ? ', taking turns' : ''}.</span>
+            </div>
             {used.map((h) => <HitRow key={h.id} hit={h} g={g} />)}
             <p className="text-faint text-[11.5px]">A pitch you set is remembered for the hit: the next tracks move it into their key the same way.</p>
           </div>
@@ -56,7 +72,8 @@ export function DiscoPanel({ g }: { g: Generation }) {
   )
 }
 
-function HitRow({ hit, g }: { hit: HitItem; g: Generation }) {
+/** A disco hit (or chord stab) in the track: play it, and its pitch, remembered on the sample. */
+export function HitRow({ hit, g, color = '#f0abfc' }: { hit: HitItem; g: Generation; color?: string }) {
   const dragging = useRef(false)
   const [playing, setPlaying] = useState<number | null>(audition.playingId)
   useEffect(() => audition.subscribe(setPlaying), [])
@@ -78,7 +95,7 @@ function HitRow({ hit, g }: { hit: HitItem; g: Generation }) {
           {hit.key_source === 'detected' ? ' · key from the sound' : ''}
         </span>
       </span>
-      <BarSlider min={-HIT_PITCH_RANGE} max={HIT_PITCH_RANGE} step={1} value={pitch} reset={auto} origin={0} color="#f0abfc"
+      <BarSlider min={-HIT_PITCH_RANGE} max={HIT_PITCH_RANGE} step={1} value={pitch} reset={auto} origin={0} color={color}
                  dragging={dragging} title={`Pitch in semitones (double-click: the move into the track key, ${auto >= 0 ? '+' : ''}${auto})`}
                  onChange={(v) => v !== pitch && setHitPitchInTrack(hit, Math.round(v))} />
       <span className="text-right tabular-nums text-muted">{pitch > 0 ? '+' : ''}{pitch} st</span>

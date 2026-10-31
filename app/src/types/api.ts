@@ -27,6 +27,8 @@ export interface AppSettings {
   bass?: BassSettings
   /** Independent Serum 2 patch pool for keys, piano and organ. */
   keys?: BassSettings
+  /** Serum 2 patches that play chord stabs (SCOPE.md §6.9), beside the Chord Stabs page's samples. */
+  stabs?: BassSettings
 }
 
 export interface BassSettings {
@@ -38,6 +40,16 @@ export interface BassSettings {
   favorites: string[]
   /** Octave set for a preset in Generate (semitones, a multiple of 12, by path): kept for every next track. */
   octaves?: Record<string, number>
+  /** Chord stab patches: set by hand, whether a patch plays a chord from one key (by path). */
+  chords?: Record<string, boolean>
+  /** Chord stabs: rhythms saved in the step sequencer, that Generate learns from. */
+  rhythms?: SavedStabRhythm[]
+}
+
+/** A chord stab rhythm saved in Generate's step sequencer (SCOPE.md §6.9): 1 or 2 bars of 16 steps (1 on, 0 off). */
+export interface SavedStabRhythm {
+  name: string
+  steps: number[][]
 }
 
 /** An imported MIDI file (SCOPE.md §6.7). Notes: [start beats, length beats, pitch, velocity]. */
@@ -60,6 +72,8 @@ export interface MidiItem {
 /** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
 export interface HitItem {
   id: number
+  /** A disco hit (the Disco Hits page) or a chord stab (Chord Stabs); older rows are disco hits. */
+  kind: 'disco' | 'stab'
   file_name: string
   name: string
   rel_path: string
@@ -85,6 +99,10 @@ export interface SerumPreset {
   name: string
   folder: string
   tags: string[]
+  /** A chord stab patch that plays a chord from one key (SCOPE.md §6.9): it gets the root alone. */
+  chord?: boolean
+  /** A chord stab patch's own chord, from its clip player (semitones from the root): played on every step. */
+  voicing?: number[] | null
 }
 
 export interface MidiImportResult {
@@ -223,6 +241,12 @@ export interface TrackArrangement {
   bpm: number
   bars: number
   parts: Record<string, string>
+  /**
+   * The producer's rides, per part and bar (schema v11; absent until measured): dB against the
+   * part's full level, and brightness in octaves against its full bars (below 0 darker, a low-pass;
+   * above, thinner, a high-pass). Null where the part is silent.
+   */
+  detail?: Record<string, { db: (number | null)[]; bright: (number | null)[] }> | null
 }
 
 export interface LibraryFacets {
@@ -334,9 +358,9 @@ export interface DrumvaultAPI {
   /** Imported MIDI files. */
   listMidi(): Promise<MidiItem[]>
   /** Add disco hits from audio files, folders and zips (SCOPE.md §6.8). */
-  importHits(paths: string[]): Promise<HitImportResult>
+  importHits(paths: string[], kind?: HitItem['kind']): Promise<HitImportResult>
   /** File dialog for disco hits: audio files, folders, zips. */
-  chooseHits(): Promise<string[]>
+  chooseHits(title?: string): Promise<string[]>
   /** Correct a hit's key (null: no key, never moved into the track key). */
   setHitKey(hitId: number, key: string | null): Promise<void>
   /** The semitones a hit plays off from the track key, −12…12 (a key read wrong, fixed once). */
@@ -347,6 +371,11 @@ export interface DrumvaultAPI {
   arrangements(): Promise<TrackArrangement[]>
   /** Preset folders under `root` with counts, and the presets in `folders`. */
   serumPresets(root: string, folders: string[] | null): Promise<{ folders: { folder: string; count: number }[]; presets: SerumPreset[] }>
+  /**
+   * Per chord stab patch (read and measured once by the engine): the chord its clip player plays
+   * (semitones from C4, null without one), and whether it plays a chord from one key anyway.
+   */
+  stabChords(presets: string[]): Promise<{ chords: Record<string, boolean>; voicings: Record<string, number[] | null> }>
   /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
@@ -375,6 +404,9 @@ export interface DrumvaultAPI {
   /** Current library rows for these paths (sample ids change when a zip is reprocessed). */
   samplesByPath(relPaths: string[]): Promise<SampleListItem[]>
 
+  /** Generate's shortlist (starred generations, JSON), or null before the first star. */
+  readShortlist(): Promise<string | null>
+  writeShortlist(text: string): Promise<void>
   listProjects(): Promise<ProjectFileInfo[]>
   readProject(file: string): Promise<string>
   /** Returns the file name used (it follows the project name). */

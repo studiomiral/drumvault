@@ -346,3 +346,68 @@ def test_render_polyphonic_keys_through_serum(tmp_path):
     assert np.isfinite(audio).all() and np.abs(audio).max() > 0.01
     assert result["cached"] is False
     assert pipeline.render_bass(s, str(keys_presets[0]), -1, 0, 124, out, notes=notes, bars=1)["cached"] is True
+
+
+def test_chord_stab_parts_render_into_their_own_folder(tmp_path):
+    # A Serum patch playing chord stabs (SCOPE.md §6.9): the app's notes, in .drumvault/stabs/.
+    s = Settings(library_path=str(tmp_path / "lib"))
+    stab = [[0.5, 0.25, p, 112] for p in (57, 60, 64, 67)]
+    with pytest.raises(pipeline.PipelineError, match="preset not found"):  # past the path check
+        pipeline.render_bass(s, "/nope.SerumPreset", 0, 0, 124, ".drumvault/stabs/s.wav", notes=stab, bars=2)
+    with pytest.raises(pipeline.PipelineError, match="Bad bass render path"):
+        pipeline.render_bass(s, "/nope.SerumPreset", 0, 0, 124, ".drumvault/stab/s.wav", notes=stab, bars=2)
+
+
+@pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
+def test_chord_stab_parts_render_through_a_patch(tmp_path):
+    lib = tmp_path / "lib"
+    s = Settings(library_path=str(lib))
+    preset = sorted(FACTORY_BASS.rglob("*.SerumPreset"))[1]
+    stab = [[b * 4 + 0.5, 0.25, p, 112] for b in (0, 1) for p in (57, 60, 64, 67)]
+    r = pipeline.render_bass(s, str(preset), 0, 0, 124, ".drumvault/stabs/s.wav", notes=stab, bars=2)
+    y, sr = sf.read(lib / r["path"], always_2d=True)
+    assert y.shape[0] == round(2 * 4 * 60 / 124 * sr) and np.abs(y).max() > 0.05
+
+
+def _tone(midis: list[int], sr: int = 44100, seconds: float = 1.0) -> np.ndarray:
+    t = np.arange(int(sr * seconds)) / sr
+    x = sum(sum(np.sin(2 * np.pi * 440 * 2 ** ((m - 69) / 12) * k * t) / k for k in range(1, 7)) for m in midis)
+    return np.stack([x, x], axis=1).astype(np.float32) * 0.1
+
+
+def test_tells_a_patch_that_plays_a_chord_from_one_key():
+    s = Settings()
+    assert not pipeline.plays_chord(_tone([48]), 44100, 48, s)                  # one note, with its overtones
+    assert pipeline.plays_chord(_tone([48, 55, 58, 62]), 44100, 48, s)           # C G Bb D from one key
+    assert pipeline.plays_chord(_tone([43, 48, 50, 55]), 44100, 48, s)           # a voicing reaching below it
+
+
+@pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
+def test_measures_stab_patches_once(tmp_path):
+    s = Settings(library_path=str(tmp_path / "lib"))
+    preset = str(sorted(FACTORY_BASS.rglob("*.SerumPreset"))[1])
+    r = pipeline.stab_chords(s, [preset, "/nope.SerumPreset"])["chords"]
+    assert list(r) == [preset] and isinstance(r[preset], bool)                 # a missing preset is left out
+    assert (tmp_path / "lib" / ".drumvault" / "stabs" / "chords.json").exists()
+    assert pipeline.stab_chords(s, [preset])["chords"] == r
+
+
+
+def _fake_preset(path: Path, patch: dict) -> Path:
+    import struct
+    import cbor2
+    import zstandard
+    raw = cbor2.dumps(patch)
+    path.write_bytes(serum.write_xfer({"product": "Serum2"}, struct.pack("<II", len(raw), 2) + zstandard.ZstdCompressor().compress(raw)))
+    return path
+
+
+def test_reads_the_chord_a_presets_clip_player_plays(tmp_path):
+    note = lambda t, n: {"timeStamp": t, "length": 0.25, "noteNum": n, "attributes": [0.8], "channel": 0}  # noqa: E731
+    clip = {"ClipPlayer0": {"plainParams": {"kParamEnabled": 1.0}}, "ClipPlayer": {"kUIParamSelectedClip": 0.0},
+            "MidiClip0": {"clip": {"notes": [note(0.0, 48), note(0.0, 63), note(0.0, 70), note(1.0, 65), note(1.0, 72)]}},
+            "MidiClip1": {"clip": {}}}
+    assert serum.clip_chord(_fake_preset(tmp_path / "a.SerumPreset", clip)) == [-12, 3, 10]   # the first chord, from C4
+    off = dict(clip, ClipPlayer0={"plainParams": {}})
+    assert serum.clip_chord(_fake_preset(tmp_path / "b.SerumPreset", off)) is None          # clip player off
+    assert serum.clip_chord(_fake_preset(tmp_path / "c.SerumPreset", {"ClipPlayer0": "x"})) is None

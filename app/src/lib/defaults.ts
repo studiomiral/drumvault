@@ -46,6 +46,9 @@ export const BASS_DEFAULTS = {
 
 export const KEYS_DEFAULTS = { ...BASS_DEFAULTS, folders: [] as string[], favorites: [] as string[] }
 
+/** Chord stab patch pool (SCOPE.md §6.9): the House chord stabs folder until others are picked. */
+export const STABS_DEFAULTS = { ...BASS_DEFAULTS, folders: ['House - Chord Stabs'], favorites: [] as string[] }
+
 export type ResolvedEngineOptions = typeof ENGINE_DEFAULTS & EngineOptions
 
 export function resolveEngine(opts: EngineOptions): ResolvedEngineOptions {

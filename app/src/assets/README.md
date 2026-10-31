@@ -1,6 +1,6 @@
 # Menu and top-bar artwork
 
-- `menu-flat/*.svg`: current menu artwork. Eight flat vector icons at 24 × 24 pixels, with consistent strokes, solid colors and restrained secondary tones. No surrounding tiles, gradients, shadows, or raster textures. Grid uses a waveform over beat markers.
+- `menu-flat/*.svg`: current menu artwork. Ten flat vector icons at 24 × 24 pixels, with consistent strokes, solid colors and restrained secondary tones. No surrounding tiles, gradients, shadows, or raster textures. Grid uses a waveform over beat markers; Chord Stabs uses three aligned MIDI notes; Disco Hits uses a disco ball and glint.
 - `app/artwork/menu-3d/`: previous full-resolution 3D icons and their built-in image generation prompts, retained as source history; no longer used by the menu.
 - `menu-3d/*.png`: previous 128px exports, retained but no longer used.
 - `menu/*.svg`: previous vector tile icons, retained as source history; no longer used by the menu.

@@ -3,7 +3,7 @@ import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo } from '../types/api'
 
-export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'generate' | 'arrange' | 'settings'
+export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'generate' | 'arrange' | 'settings'
 
 export interface Toast {
   id: number

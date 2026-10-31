@@ -28,7 +28,7 @@ from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
     HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
-    SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
+    SerumPresetsParams, SetHitMetaParams, StabChordsParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
@@ -39,7 +39,7 @@ JOB_METHODS = {"process_zip", "import_samples", "reprocess_zip", "delete_zip", "
 DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSamplesParams,
                   "restore_samples": RestoreSamplesParams, "shift_sample": ShiftSampleParams,
                   "stretch_samples": StretchSamplesParams, "import_midi": ImportMidiParams,
-                  "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams,
+                  "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams, "stab_chords": StabChordsParams,
                   "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
                   "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams,
                   "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams}
@@ -213,6 +213,8 @@ class RpcServer:
             elif method == "render_bass":
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
                                                          p.notes, p.bars, p.groove))
+            elif method == "stab_chords":
+                self._reply(req_id, pipeline.stab_chords(settings, p.presets))
             elif method == "save_midi":
                 self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label, p.role))
             elif method == "set_midi_meta":
@@ -220,7 +222,7 @@ class RpcServer:
             elif method == "delete_midi":
                 self._reply(req_id, pipeline.delete_midi(settings, p.midi_ids))
             elif method == "import_hits":
-                self._reply(req_id, hitsmod.import_hits(settings, p.paths))
+                self._reply(req_id, hitsmod.import_hits(settings, p.paths, p.kind))
             elif method == "set_hit_meta":
                 self._reply(req_id, hitsmod.set_hit_meta(settings, p.hit_id, p.key_label, p.clear_key, p.pitch_fix))
             elif method == "delete_hits":

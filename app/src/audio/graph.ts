@@ -127,7 +127,16 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   } else {
     src.connect(head)
   }
-  g.connect(lane.gain)
+  let out: AudioNode = g
+  if (ev.gainEnd != null && ev.gainEnd !== 1) {
+    // Volume ride: from the event's gain to `gainEnd` of it, evenly in dB (an exponential ramp).
+    const r = ctx.createGain()
+    r.gain.setValueAtTime(1, when)
+    r.gain.exponentialRampToValueAtTime(Math.max(1e-4, ev.gainEnd), when + Math.max(1e-3, ev.duration ?? duration))
+    g.connect(r)
+    out = r
+  }
+  out.connect(lane.gain)
   if (ev.verb?.some((v) => v > 0)) {
     // Reverb build: the send follows the clip's curve over the event (after its fades).
     const s = ctx.createGain()
@@ -136,7 +145,7 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
       s.gain.value = ev.verb[0]
       s.gain.setValueCurveAtTime(Float32Array.from(ev.verb), when, Math.max(1e-3, ev.duration ?? duration))
     }
-    g.connect(s).connect(laneVerb(ctx, lane).input)
+    out.connect(s).connect(laneVerb(ctx, lane).input)
   }
   src.start(when, offset, duration * rate)  // Web Audio's duration is buffer time
   return src

@@ -533,7 +533,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
             { label: 'New keys part', onClick: () => void newClipKeysPart() },
           ] : []),
           ...(hasBass(selClips) ? [
-            { label: 'Edit notes…', title: 'Piano roll: changes every clip of this bassline', onClick: () => st.openEditor(selClips.find((k) => k.type === 'audio' && k.bass && k.bass.role !== 'keys')!.id) },
+            { label: 'Edit notes…', title: 'Piano roll: changes every clip of this bassline', onClick: () => st.openEditor(selClips.find((k) => k.type === 'audio' && k.bass && (k.bass.role ?? 'bass') === 'bass')!.id) },
             { label: 'Transpose up a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 1) }), 'bass') },
             { label: 'Transpose down a semitone', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.max(-24, b.transpose - 1) }), 'bass') },
             { label: 'Octave up', onClick: () => void changeBass('Transpose bass', (b) => ({ ...b, transpose: Math.min(24, b.transpose + 12) }), 'bass') },

@@ -345,3 +345,18 @@ describe('reverb builds', () => {
     expect(b.verb).toEqual({ from: 0.2, to: 0.8 })
   })
 })
+
+describe('volume rides', () => {
+  it('moves the gain evenly in dB across the clip: each event its stretch, hits where they land', () => {
+    const c: AudioClip = { ...audio(0, 16, 2), gainDb: -12, gainTo: 0 }
+    const ev = eventsInRange(project([c]), 0, 1000)
+    expect(ev.map((e) => 20 * Math.log10(e.gain))).toEqual([expect.closeTo(-12, 6), expect.closeTo(-6, 6)])
+    expect(ev.map((e) => 20 * Math.log10(e.gainEnd!))).toEqual([expect.closeTo(6, 6), expect.closeTo(6, 6)])
+    const hits = eventsInRange(project([{ ...pattern(0, 4, four()), gainDb: 0, gainTo: -8 }]), 0, 1000)
+    expect(hits.map((e) => 20 * Math.log10(e.gain))).toEqual([0, -2, -4, -6].map((v) => expect.closeTo(v, 6)))
+    expect(hits.every((e) => e.gainEnd == null)).toBe(true)
+    const [a, b] = splitClip(c, 8)!
+    expect([a.gainDb, a.gainTo, b.gainDb, b.gainTo]).toEqual([-12, -6, -6, 0])
+    expect(eventsInRange(project([audio(0, 16)]), 0, 1000).every((e) => e.gainEnd == null)).toBe(true)
+  })
+})

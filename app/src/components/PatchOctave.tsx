@@ -1,7 +1,7 @@
 import { useApp } from '../store/app'
 
 /** The octave a patch remembers (set with −12 / +12 in Generate), when it has one. */
-export function PatchOctave({ role, path }: { role: 'bass' | 'keys'; path: string }) {
+export function PatchOctave({ role, path }: { role: 'bass' | 'keys' | 'stabs'; path: string }) {
   const octave = useApp((s) => s.settings?.[role]?.octaves?.[path] ?? 0)
   if (!octave) return null
   return (

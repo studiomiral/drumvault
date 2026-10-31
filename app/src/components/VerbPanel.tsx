@@ -11,7 +11,7 @@ const EVERY = [
 ]
 
 /** Reverb builds (SCOPE.md §6.6): the top loops and/or keys washing out into drops and breaks. */
-export function VerbPanel() {
+export function VerbPanel({ fixed }: { fixed?: boolean }) {
   const opts = useGenerate((s) => s.settings.verb)
   const dragging = useRef(false)
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px]'
@@ -22,7 +22,7 @@ export function VerbPanel() {
       : <><span className="text-text">{on[0].toUpperCase() + on.slice(1)}</span> · {where} · {Math.round(opts.amount * 100)}%</>
 
   return (
-    <Module id="verb" title="Reverb builds" enabled={opts.enabled} onEnabled={(enabled) => setVerbOptions({ enabled })}
+    <Module id="verb" title="Reverb builds" fixed={fixed} enabled={opts.enabled} onEnabled={(enabled) => setVerbOptions({ enabled })}
             enabledTitle={opts.enabled ? 'On: new generations get reverb builds' : 'Off: new generations have no reverb builds'}
             summary={summary}>
       <div className="grid grid-cols-[86px_1fr] gap-y-2 items-center text-[12.5px]">

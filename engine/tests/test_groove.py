@@ -84,6 +84,30 @@ def test_arrangement_marks_full_quiet_and_silent_bars():
     assert set(a["parts"]) == {"kick", "bass", "music", "hats"}
 
 
+def test_arrangement_measures_rides_bar_by_bar():
+    """A low-passed stretch reads darker (and a little quieter); a fader move quieter, as bright."""
+    from scipy.signal import butter, sosfilt
+    sr = 32000
+    chords = _bars([0.3] * 16, sr=sr)
+    bar = len(chords) // 16
+    lp = sosfilt(butter(4, 600, "low", fs=sr, output="sos"), chords[4 * bar:8 * bar]).astype(np.float32)
+    chords = np.concatenate([chords[:4 * bar], lp, chords[8 * bar:12 * bar] * 0.3, chords[12 * bar:]])
+    a = arrangement.measure([("Chords", "melodic", chords, sr)], BPM, 0.0, Thresholds())
+    d = a["detail"]["music"]
+    assert len(d["db"]) == len(d["bright"]) == a["bars"] >= 15
+    full = range(0, 4)
+    for b in full:
+        assert abs(d["db"][b]) < 1.5 and abs(d["bright"][b]) < 0.15
+    for b in range(4, 8):                     # low-passed at 600 Hz: octaves darker
+        assert d["bright"][b] < -1.5
+    for b in range(8, 12):                    # the fader down 10 dB: as bright
+        assert d["db"][b] == pytest.approx(-10.5, abs=1.5)
+        assert abs(d["bright"][b]) < 0.15
+    silent = arrangement.measure([("Chords", "melodic", _bars([0.3] * 4 + [0] * 4, sr=sr), sr)], BPM, 0.0, Thresholds())
+    sd = silent["detail"]["music"]
+    assert all(v is None for v in sd["db"][4:] + sd["bright"][4:]) and len(sd["db"]) > 4
+
+
 def test_arrangement_on_a_later_bar_one():
     kick = np.concatenate([np.zeros(1000, dtype=np.float32), _bars([0.5] * 4)])
     a = arrangement.measure([("Kick", "kick", kick, 8000)], BPM, 1000 / 8000, Thresholds())

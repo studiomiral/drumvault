@@ -66,3 +66,12 @@ export const IconChevron = ({ className }: P) => (
 export const IconCheck = ({ className }: P) => (
   <svg viewBox="0 0 20 20" className={className} {...base} strokeWidth={2.2}><path d="m5 10.5 3.2 3.2L15 6.5" /></svg>
 )
+export const IconLock = ({ className, open }: P & { open?: boolean }) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}>
+    <rect x="4.5" y="9" width="11" height="8" rx="1.5" />
+    <path d={open ? 'M7 9V6.5a3 3 0 0 1 5.8-1' : 'M7 9V6.5a3 3 0 0 1 6 0V9'} />
+  </svg>
+)
+export const IconShuffle = ({ className }: P) => (
+  <svg viewBox="0 0 20 20" className={className} {...base}><path d="M3 6h3.5c3.5 0 3.5 8 7 8H17m0 0-2-2m2 2-2 2M3 14h3.5c1.2 0 2-.9 2.6-2M17 6h-3.5c-1.2 0-2 .9-2.6 2M17 6l-2-2m2 2-2 2" /></svg>
+)

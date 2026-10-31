@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { IconShuffle, IconSparkle } from '../components/icons'
 import { cx } from '../components/ui'
+import { laneRole } from '../generate/generator'
+import { useApp } from '../store/app'
+import { newSound, rerollLane } from '../store/generate'
 import { LANE_PALETTE, makeLane, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
-import { useArrange } from '../store/arrange'
+import { panelOf, useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Lane } from '../types/project'
 import { HEADER_W, TOP } from './geometry'
@@ -53,6 +57,11 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
 }) {
   const edit = useProject((s) => s.edit)
   const clipCount = useProject((s) => s.project.clips.filter((c) => c.laneId === lane.id).length)
+  // A generated project's lanes keep their module: a new sound, the lane made again, its panel.
+  const generated = useProject((s) => !!s.project.generation) && !!laneRole(lane.name)
+  const panel = useArrange((s) => s.lanePanel)
+  const open = !!panel && JSON.stringify(panel) === JSON.stringify(panelOf(lane.name))
+  const toast = useApp((s) => s.toast)
   const [name, setName] = useState<string | null>(null)
   const [palette, setPalette] = useState<DOMRect | null>(null)
   // Set while a control (volume, pan) is being dragged, so the lane itself doesn't start moving.
@@ -125,6 +134,23 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
                      if (e.key === 'Escape') setName(null)
                    }}
                    className="flex-1 min-w-0 h-5 text-[12.5px] rounded border border-accent px-1 outline-none" />
+          )}
+          {generated && (
+            <>
+              <button title="New sound: other sounds of the same kind (another patch on Bass and Keys), the clips stay where they are"
+                      className="w-5 h-5 rounded bg-raised text-muted hover:text-text flex items-center justify-center"
+                      onClick={() => !newSound(lane.id) && toast('info', `No other sound for ${lane.name} in the library.`)}>
+                <IconShuffle className="w-3 h-3" />
+              </button>
+              <button title="Remake: the lane written again as Generate would (your edits on it are replaced; ⌘Z undoes)"
+                      className="w-5 h-5 rounded bg-raised text-accent hover:bg-accent/20 flex items-center justify-center"
+                      onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${lane.name}.`)}>
+                <IconSparkle className="w-3 h-3" />
+              </button>
+              <button title={open ? 'Close the lane panel' : 'Open the lane in the lane panel: its module, sounds and choices'}
+                      className={cx('w-5 h-5 rounded text-[11px] font-bold', open ? 'bg-accent-soft text-accent' : 'bg-raised text-muted hover:text-text')}
+                      onClick={() => useArrange.getState().set({ lanePanel: open ? null : panelOf(lane.name) })}>⋯</button>
+            </>
           )}
           <button title="Mute" onClick={() => set(lane.mute ? 'Unmute' : 'Mute', { mute: !lane.mute })}
                   className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.mute ? 'bg-warn text-on-accent' : 'bg-raised text-muted hover:text-text')}>M</button>

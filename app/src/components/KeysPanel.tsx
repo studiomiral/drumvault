@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '../api'
 import { playback } from '../audio/engine'
-import { onBassRendering } from '../audio/tempo'
 import { bassBars, harmonyOfKeys, transposeTo, type Generation } from '../generate/generator'
 import { moves, progressionName } from '../generate/harmony'
-import { Module } from './Module'
 import { isGenerated } from '../generate/bassline'
 import { attempt, useApp } from '../store/app'
 import { loadKeys, useKeys, toggleFavoriteKeysPreset } from '../store/keys'
@@ -16,16 +14,21 @@ import { IconStar } from './icons'
 import { Button, cx, inputClass } from './ui'
 const NO_FAVORITES: string[] = []
 
-export function KeysPanel({ g }: { g: Generation }) {
-  const { parts, presets, loaded, error } = useKeys()
+/** What the Chords module says about a track's keys (folded). */
+export function keysSummary(g: Generation): string | null {
+  const b = g.keys
+  const harmony = harmonyOfKeys(b, g.key)
+  return b ? `${b.midi.name}${harmony ? ` · ${progressionName(harmony)}` : ''} · ${b.preset.name}` : null
+}
+
+/** Keys (SCOPE.md §6.7) in the Chords module: the track's keys part through a Serum 2 patch. */
+export function KeysPart({ g }: { g: Generation }) {
+  const { parts, presets, loaded } = useKeys()
   const opts = useGenerate((s) => s.settings.keys)
-  const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a Keys change
   // Default outside the selector: a new [] on every read makes the store re-render forever.
   const favorites = useApp((s) => s.settings?.keys?.favorites) ?? NO_FAVORITES
   const setView = useApp((s) => s.setView)
-  const [rendering, setRendering] = useState(false)
-  useEffect(() => onBassRendering(setRendering, 'keys'), [])
   const [editing, setEditing] = useState(false)
   const [saveName, setSaveName] = useState('')
   const dragging = useRef(false)
@@ -39,26 +42,11 @@ export function KeysPanel({ g }: { g: Generation }) {
     return others.length ? others[Math.floor(Math.random() * others.length)] : cur
   }
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
-  const missing = !parts.length ? 'No keys, piano or organ MIDI to learn from yet: add your MIDI zips on the MIDI page.'
-    : !presets.length ? 'No Serum 2 patches yet: tick folders for Keys under Settings → Serum 2.' : null
-
-  const kept = [keep.keysPart && 'part', keep.keysPatch && 'patch'].filter(Boolean).join(' and ')
+  const missing = keysMissing(parts.length, presets.length)
   const harmony = harmonyOfKeys(b, g.key)
-  const summary = !opts.enabled ? 'Off: G generates without keys'
-    : missing ?? (b ? <>
-        <span className="text-text">{b.midi.name}</span>
-        {harmony && <> · {progressionName(harmony)}</>} · {b.preset.name}
-        {kept && <span className="text-accent"> · keeping the {kept}</span>}
-      </> : 'On: the next generation gets keys')
 
   return (
-    <Module id="keys" title="Keys" enabled={opts.enabled} onEnabled={(on) => setKeysOptions({ enabled: on })}
-            enabledTitle={opts.enabled ? 'On: G writes a keys part for every new generation' : 'Off: new generations have no keys'}
-            summary={summary}
-            status={<>
-              {rendering && <span className="text-[11.5px] text-accent">Rendering with Serum 2…</span>}
-              {error && <span className="text-[11.5px] text-bad" title={error}>Engine: {error.slice(0, 80)}</span>}
-            </>}>
+    <>
       {harmony && b && (
         <p className="text-[12px] text-muted mb-2">
           {moves(harmony) ? 'Chords' : 'One chord'} <span className="text-text">{progressionName(harmony)}</span>
@@ -68,11 +56,10 @@ export function KeysPanel({ g }: { g: Generation }) {
       {!loaded ? <p className="text-muted text-[12.5px]">Loading parts and patches…</p>
         : missing ? (
           <p className="text-muted text-[12.5px]">{missing}{' '}
-            {!parts.length && <Button variant="ghost" onClick={() => setView('midi')}>Open MIDI</Button>}
-            {!presets.length && parts.length > 0 && <Button variant="ghost" onClick={() => setView('settings')}>Open Settings</Button>}
+            <Button variant="ghost" onClick={() => setView('midi')}>Open MIDI</Button>
           </p>
         ) : !b ? (
-          <p className="text-muted text-[12.5px]">{opts.enabled ? 'Press G for a generation with keys.' : 'Keys is off for new generations.'}</p>
+          <p className="text-muted text-[12.5px]">{opts.enabled ? 'This track has no keys.' : 'Keys are off for new generations.'}</p>
         ) : (
           <div className="grid grid-cols-[86px_1fr] gap-y-2 items-center text-[12.5px]">
             <span className="text-muted">Patch</span>
@@ -146,8 +133,14 @@ export function KeysPanel({ g }: { g: Generation }) {
             </span>
           </div>
         )}
-    </Module>
+    </>
   )
+}
+
+/** What Keys still needs, if anything. */
+export function keysMissing(parts: number, presets: number): string | null {
+  return !parts ? 'No keys, piano or organ MIDI to learn from yet: add it under Keys & chords on the MIDI page.'
+    : !presets ? 'No Serum 2 patches for Keys yet: tick their folders under Keys & chords on the MIDI page.' : null
 }
 
 /** Playhead inside the current Keys loop. */

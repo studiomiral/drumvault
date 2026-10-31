@@ -13,11 +13,12 @@ function savedOpen(): Record<string, boolean> {
 }
 
 /**
- * A Generate module (Bass, and the ones to come): a panel that folds down to its header. The
- * header keeps the module's on/off check, so it shows at a glance whether G writes a new one,
- * plus a one-line summary while folded. Open or folded is remembered per module.
+ * A Generate module (Bass, Chords, Disco Hits, Reverb builds): a panel that folds down to its
+ * header. The header keeps the module's on/off check, so it shows at a glance whether G writes a
+ * new one, plus a one-line summary while folded. Open or folded is remembered per module; in a
+ * lane panel (`fixed`) it is always open.
  */
-export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, status, children }: {
+export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, status, fixed, children }: {
   id: string
   title: string
   enabled: boolean
@@ -25,10 +26,13 @@ export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, s
   enabledTitle: string
   summary?: ReactNode
   status?: ReactNode
+  fixed?: boolean
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(() => savedOpen()[id] ?? true)
+  const [opened, setOpen] = useState(() => savedOpen()[id] ?? true)
+  const open = fixed || opened
   const toggle = () => {
+    if (fixed) return
     setOpen(!open)
     try {
       localStorage.setItem(OPEN_KEY, JSON.stringify({ ...savedOpen(), [id]: !open }))
@@ -39,11 +43,13 @@ export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, s
 
   return (
     <section className="rounded-2xl border border-line bg-panel-2">
-      <div className={cx('h-11 px-3 flex items-center gap-3 cursor-pointer select-none', open && 'border-b border-line')} onClick={toggle}>
-        <button className="w-6 h-6 rounded-md flex items-center justify-center text-faint hover:text-text" title={open ? 'Fold' : 'Open'}
-                onClick={(e) => { e.stopPropagation(); toggle() }}>
-          <IconChevron className={cx('w-3.5 h-3.5 transition-transform', open && 'rotate-90')} />
-        </button>
+      <div className={cx('h-11 px-3 flex items-center gap-3 select-none', !fixed && 'cursor-pointer', open && 'border-b border-line', fixed && 'pl-4')} onClick={toggle}>
+        {!fixed && (
+          <button className="w-6 h-6 rounded-md flex items-center justify-center text-faint hover:text-text" title={open ? 'Fold' : 'Open'}
+                  onClick={(e) => { e.stopPropagation(); toggle() }}>
+            <IconChevron className={cx('w-3.5 h-3.5 transition-transform', open && 'rotate-90')} />
+          </button>
+        )}
         <button role="checkbox" aria-checked={enabled} title={enabledTitle}
                 onClick={(e) => { e.stopPropagation(); onEnabled(!enabled) }}
                 className={cx('w-[18px] h-[18px] rounded-[5px] flex items-center justify-center border transition-colors',

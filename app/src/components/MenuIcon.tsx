@@ -9,8 +9,8 @@ const artwork: Record<MenuIconName, string> = {
   library: new URL('../assets/menu-flat/library.svg', import.meta.url).href,
   grid: new URL('../assets/menu-flat/grid.svg', import.meta.url).href,
   midi: new URL('../assets/menu-flat/midi.svg', import.meta.url).href,
-  // Disco Hits: the Library's artwork until it has its own.
-  hits: new URL('../assets/menu-flat/library.svg', import.meta.url).href,
+  hits: new URL('../assets/menu-flat/hits.svg', import.meta.url).href,
+  stabs: new URL('../assets/menu-flat/stabs.svg', import.meta.url).href,
   generate: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
   arrange: new URL('../assets/menu-flat/arrange.svg', import.meta.url).href,
   settings: new URL('../assets/menu-flat/settings.svg', import.meta.url).href,

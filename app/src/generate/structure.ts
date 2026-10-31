@@ -22,6 +22,8 @@ export interface Section {
   long?: boolean         // the longer breakdown
   switchHalfway?: boolean // drops: tops/groove change in the middle
   peak?: boolean         // the last drop
+  /** From a real track: its source code and the bars [from, to) of it this section stands for (its rides). */
+  src?: { code: string; from: number; to: number }
 }
 
 export const PHRASE = 8
