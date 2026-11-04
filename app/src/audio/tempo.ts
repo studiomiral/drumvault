@@ -25,10 +25,12 @@ const renderState = {
   bass: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   keys: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   stab: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  drone: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  vocal: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
 }
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */
-export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' | 'stab' = 'bass'): () => void {
+export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' | 'stab' | 'drone' | 'vocal' = 'bass'): () => void {
   const state = renderState[role]
   state.listeners.add(fn)
   fn(state.pending > 0)
@@ -43,7 +45,8 @@ export function renderBass(b: BassRender, bpm: number): Promise<void> {
   if (!p) {
     const state = renderState[b.role ?? 'bass']
     if (state.pending++ === 0) for (const fn of state.listeners) fn(true)
-    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove })
+    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove,
+      ...(b.drone ? { drone: b.drone } : {}) })
       .then(() => {
         bassReady.add(path)
       })
@@ -81,6 +84,12 @@ export async function ensureStretched(project: Project): Promise<void> {
 /** Every file the project plays at its tempo. */
 export function projectSounds(project: Project): string[] {
   return [...new Set(project.clips.map((c) => soundPath(c, project.bpm)))]
+}
+
+/** Renders were cleaned up: whatever is gone is rendered (or stretched) again when it's needed. */
+export function forgetRenders(): void {
+  ready.clear()
+  bassReady.clear()
 }
 
 /** A sample's file changed (Library "Move sound"): its stretched copies must be made again. */

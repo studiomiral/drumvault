@@ -23,7 +23,7 @@ export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   useGenerate((s) => s.history)  // re-render after a pitch change
   const all = useHits((s) => s.hits)
   const loaded = useHits((s) => s.loaded)
-  const hits = all.filter((h) => h.kind !== 'stab')
+  const hits = all.filter((h) => h.kind === 'disco')
   const setView = useApp((s) => s.setView)
   const used = (['disco', 'disco2'] as const)
     .map((role) => hits.find((h) => h.id === hitIdOf(g.picks[role]?.id)))

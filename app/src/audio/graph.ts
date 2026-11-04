@@ -1,11 +1,11 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → lane duck (sidechain) → lane pan → master
+// source → [clip filter] → clip gain → lane gain → [lane EQ] → lane duck (sidechain) → lane pan → master
 //                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
 
 import { dbToGain } from '../lib/project'
-import type { Lane } from '../types/project'
+import type { EqBand, Lane } from '../types/project'
 import { createReverb, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
@@ -14,6 +14,10 @@ export interface LaneNodes {
   /** Sidechain ducking under the kick (unity unless the lane has `duck`). */
   duck: GainNode
   pan: StereoPannerNode
+  /** The lane's EQ bands, between its gain and its duck (none: straight through). */
+  eq: BiquadFilterNode[]
+  /** The bands' shape the EQ nodes were made for (types in order), to rebuild only when it changes. */
+  eqShape: string
   /** The lane's reverb, made when a clip first sends to it. */
   verb?: Reverb
 }
@@ -41,8 +45,38 @@ export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNod
   const duck = ctx.createGain()
   const pan = ctx.createStereoPanner()
   gain.connect(duck).connect(pan).connect(dest)
-  return { gain, duck, pan }
+  return { gain, duck, pan, eq: [], eqShape: '' }
 }
+
+/** The lane's EQ as `bands` (none: bypassed): new nodes only when the bands' shape changes. */
+export function setLaneEq(ctx: BaseAudioContext, nodes: LaneNodes, bands: EqBand[]): void {
+  const shape = bands.map((b) => b.type).join(',')
+  if (shape !== nodes.eqShape) {
+    nodes.gain.disconnect()
+    for (const f of nodes.eq) f.disconnect()
+    nodes.eq = bands.map((b) => {
+      const f = ctx.createBiquadFilter()
+      f.type = b.type
+      return f
+    })
+    let at: AudioNode = nodes.gain
+    for (const f of nodes.eq) at = at.connect(f)
+    at.connect(nodes.duck)
+    nodes.eqShape = shape
+  }
+  bands.forEach((b, i) => {
+    const f = nodes.eq[i]
+    f.frequency.value = b.freq
+    f.gain.value = b.gainDb
+    f.Q.value = b.q
+  })
+}
+
+/** The bands a lane plays through (its EQ unless it's off). */
+export const laneEqBands = (lane: Lane): EqBand[] => (lane.eq && !lane.eq.off ? lane.eq.bands : [])
+
+/** A lane's gain (dB) before its duck: its volume, its level in the mix and its EQ's makeup. */
+export const laneGainDb = (lane: Lane): number => lane.volumeDb + (lane.levelDb ?? 0) + (lane.eq && !lane.eq.off ? lane.eq.gainDb : 0)
 
 /**
  * Sidechain: duck a lane by `depth` (0…1) on a kick at `when`, reaching full depth 4 ms later
@@ -61,9 +95,10 @@ export function resetDuck(nodes: LaneNodes, at: number): void {
   nodes.duck.gain.setValueAtTime(1, at)
 }
 
-/** Lane volume/pan/mute (solo is applied by the caller via `audible`). */
+/** Lane volume/pan/mute and EQ (solo is applied by the caller via `audible`). */
 export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, at = 0): void {
-  nodes.gain.gain.setTargetAtTime(audible ? dbToGain(lane.volumeDb + (lane.levelDb ?? 0)) : 0, at, 0.01)
+  nodes.gain.gain.setTargetAtTime(audible ? dbToGain(laneGainDb(lane)) : 0, at, 0.01)
+  setLaneEq(nodes.gain.context, nodes, laneEqBands(lane))
   nodes.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, lane.pan)), at, 0.01)
 }
 

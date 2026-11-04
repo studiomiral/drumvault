@@ -5,7 +5,7 @@
 import { beatToSec, dbToGain } from '../lib/project'
 import type { Project } from '../types/project'
 import { buffers } from './context'
-import { createLaneNodes, duckAt, playEvent } from './graph'
+import { createLaneNodes, duckAt, laneEqBands, laneGainDb, playEvent, setLaneEq } from './graph'
 import { duckRelease, eventsInRange, kickHits } from './schedule'
 import { ensureTempo } from './tempo'
 
@@ -33,7 +33,8 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
     if (!wanted.has(lane.id)) continue
     const n = createLaneNodes(ctx, ctx.destination)
     // Fixed values, not the live ramps, so the level is exact from the first sample.
-    n.gain.gain.value = lane.mute ? 0 : dbToGain(lane.volumeDb + (lane.levelDb ?? 0))
+    n.gain.gain.value = lane.mute ? 0 : dbToGain(laneGainDb(lane))
+    setLaneEq(ctx, n, laneEqBands(lane))
     n.pan.pan.value = Math.max(-1, Math.min(1, lane.pan))
     nodes.set(lane.id, n)
   }

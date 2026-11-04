@@ -5,16 +5,18 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { BASS_DEFAULTS } from '../lib/defaults'
 import type { BassSettings, MidiItem, SerumPreset } from '../types/api'
-import { serumPresetRoot, useApp } from './app'
+import { playable, serumPresetRoot, useApp } from './app'
 
 interface BassState {
   basslines: MidiItem[]
   presets: SerumPreset[]
+  /** Patches in the chosen folders left out: their samples aren't on this Mac. */
+  skipped: number
   loaded: boolean
   error: string | null
 }
 
-export const useBass = create<BassState>(() => ({ basslines: [], presets: [], loaded: false, error: null }))
+export const useBass = create<BassState>(() => ({ basslines: [], presets: [], skipped: 0, loaded: false, error: null }))
 
 export function bassSettings(): BassSettings {
   return { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot() }
@@ -31,7 +33,7 @@ export function loadBass(): Promise<void> {
         api.listMidi(),
         s.folders.length ? api.serumPresets(s.presetRoot, s.folders) : Promise.resolve({ folders: [], presets: [] }),
       ])
-      useBass.setState({ basslines: midis.filter((m) => m.role === 'bass'), presets: pool.presets, loaded: true, error: null })
+      useBass.setState({ basslines: midis.filter((m) => m.role === 'bass'), presets: playable(pool.presets), skipped: pool.presets.length - playable(pool.presets).length, loaded: true, error: null })
     } catch (e) {
       useBass.setState({ loaded: true, error: (e as Error).message })
     } finally {

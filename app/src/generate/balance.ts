@@ -17,7 +17,7 @@ import type { Role } from './generator'
  * user's library), so only the balance changes, not the headroom.
  */
 export const KICK_LEVEL_DB = -17.5
-/** A rendered bass, keys or stab part (the engine renders them at −14 LUFS: stereo, so −3 dB in mono). */
+/** A rendered bass, drone or vocal part (the engine renders them at −14 LUFS: stereo, so −3 dB in mono). */
 const RENDER_LEVEL_DB = -17
 /** A lane's level moves at most this far either way (a mismeasured sample can't blow up the mix). */
 const MAX_LEVEL_DB = 18
@@ -25,20 +25,20 @@ const MAX_LEVEL_DB = 18
 const MIN_REFERENCES = 3
 
 /** The engine's part of each lane (its arrangement parts); lanes without one keep the default. */
-const PART: Partial<Record<Role, string>> = {
+export const PART: Partial<Record<Role, string>> = {
   kick: 'kick', clap: 'clap', clap2: 'clap', clap3: 'clap', hats: 'hats', hats2: 'hats', ride: 'ride',
   perc: 'perc', perc2: 'perc', top: 'top', top2: 'top', top3: 'top', top4: 'top', groove: 'top',
-  bass: 'bass', keys: 'music', stab: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx',
+  bass: 'bass', stab: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx',
 }
 
 /** House defaults (dB against the kick, all of a part's lanes together). */
 const DEFAULT_DB: Record<string, number> = {
   clap: -4, hats: -10, ride: -12, perc: -10, top: -7, bass: -2, music: -8, crash: -12, fills: -6, fx: -9,
-  hits: -8, atmos: -14, disco: -7, buildup: -9,
+  hits: -8, atmos: -14, disco: -7, buildup: -9, drone: -13, vocal: -3, vchop: -6,
 }
 
 /** The lanes that sound together as one part: their sum sits where the part does. */
-const GROUP: Partial<Record<Role, Role>> = {
+export const GROUP: Partial<Record<Role, Role>> = {
   clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', groove: 'top',
   fx2: 'fx', disco2: 'disco',
 }
@@ -71,7 +71,7 @@ function median(xs: number[]): number {
 }
 
 /** Mean square (linear) of a clip while it plays, before the lane; null when its sample isn't measured. */
-function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number): number | null {
+export function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number): number | null {
   const gain = 10 ** (((c.gainDb ?? 0) + (c.gainTo ?? c.gainDb ?? 0)) / 20)
   if (c.type === 'audio' && c.bass) return 10 ** (RENDER_LEVEL_DB / 10) * gain
   const e = s?.energy_db

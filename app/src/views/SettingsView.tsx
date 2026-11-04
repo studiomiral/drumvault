@@ -5,11 +5,10 @@ import { ENGINE_DEFAULTS, resolveEngine, type ResolvedEngineOptions } from '../l
 import { CATEGORY_LABELS } from '../lib/format'
 import { attempt, serumPresetRoot, useApp } from '../store/app'
 import { SERUM_MODULES } from '../components/SerumFolders'
-import { loadKeys, useKeys } from '../store/keys'
 import { loadBass, useBass } from '../store/bass'
-import { loadHits, useHits } from '../store/hits'
-import { loadStabPresets, useStabPresets } from '../store/stabs'
-import type { LibraryFacets } from '../types/api'
+import { cleanRenders } from '../store/renders'
+import type { CleanRendersResult } from '../types/engine'
+import type { ElevenStatus, LibraryFacets } from '../types/api'
 import type { Category } from '../types/engine'
 
 const LOOP_CATS = Object.keys(ENGINE_DEFAULTS.loop_lengths) as Category[]
@@ -168,6 +167,10 @@ export function SettingsView() {
 
           <SerumSettingsSection />
 
+          <StorageSection />
+
+          <ElevenLabsSection />
+
           <section>
             <SectionTitle right={<Button variant="ghost" onClick={() => void refreshDeps()}>Check again</Button>}>Engine</SectionTitle>
             <Field label="Status">
@@ -207,21 +210,17 @@ export function SettingsView() {
 }
 
 /**
- * Serum 2 (SCOPE.md §6.7): one presets folder for every module that plays Serum patches, and per
- * module the folders under it that make up its patch pool (saved at once, apart from the engine
+ * Serum 2 (SCOPE.md §6.7): the presets folder, and per module that plays Serum patches (the
+ * bass) the folders under it that make up its patch pool (saved at once, apart from the engine
  * settings).
  */
 function SerumSettingsSection() {
   const { libraryVersion, toast, setView } = useApp()
   const rootNow = serumPresetRoot()
-  const pools = { bass: useBass((s) => s.presets.length), keys: useKeys((s) => s.presets.length), stabs: useStabPresets((s) => s.presets.length) }
-  const stabSamples = useHits((s) => s.hits.filter((h) => h.kind === 'stab').length)
-  const parts = { bass: useBass((s) => s.basslines.length), keys: useKeys((s) => s.parts.length), stabs: stabSamples }
+  const pools = { bass: useBass((s) => s.presets.length) }
+  const parts = { bass: useBass((s) => s.basslines.length) }
   useEffect(() => {
     void loadBass()
-    void loadKeys()
-    void loadStabPresets()
-    void loadHits()
   }, [libraryVersion])
   const [root, setRoot] = useState(rootNow)
 
@@ -242,7 +241,7 @@ function SerumSettingsSection() {
   return (
     <section>
       <SectionTitle>Serum 2</SectionTitle>
-      <Field label="Presets folder" hint="Serum 2's .SerumPreset files, shared by Bass, Keys and Chord Stabs">
+      <Field label="Presets folder" hint="Serum 2's .SerumPreset files the Bass draws its patches from">
         <span className="flex items-center gap-2">
           <input className={cx(inputClass, 'w-[420px]')} value={root} onChange={(e) => setRoot(e.target.value)}
                  onBlur={() => void changeRoot(root.trim())} />
@@ -250,14 +249,134 @@ function SerumSettingsSection() {
         </span>
       </Field>
       {SERUM_MODULES.map((m) => (
-        <Field key={m.id} label={m.label} hint={m.id === 'stabs' ? 'samples and patch folders on the Chord Stabs page' : `MIDI and patch folders under ${m.label === 'Keys' ? 'Keys & chords' : 'Bass'} on the MIDI page`}>
+        <Field key={m.id} label={m.label} hint="MIDI and patch folders on the MIDI page">
           <span className="text-[12.5px] flex items-center gap-2">
-            {m.id === 'stabs' ? `${parts[m.id]} stab sample${parts[m.id] === 1 ? '' : 's'}` : `${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from`}
+            {`${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from`}
             {' · '}{pools[m.id]} patches in the pool
-            <Button variant="ghost" onClick={() => setView(m.id === 'stabs' ? 'stabs' : 'midi')}>Pick folders</Button>
+            <Button variant="ghost" onClick={() => setView('midi')}>Pick folders</Button>
           </span>
         </Field>
       ))}
+    </section>
+  )
+}
+
+/** "2.5 GB", "340 MB". */
+function formatSize(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`
+}
+
+/**
+ * Storage: the renders the app keeps (bass and drone parts, FX stretched to other
+ * tempos), and a cleanup of the ones nothing plays any more (they're made again when needed).
+ */
+function StorageSection() {
+  const { engine, toast } = useApp()
+  const ready = engine.state === 'ready'
+  const [count, setCount] = useState<CleanRendersResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const measure = async () => {
+    try {
+      setCount(await cleanRenders(true))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  useEffect(() => {
+    if (ready) void measure()
+  }, [ready])
+  const clean = async () => {
+    if (!count?.files) return
+    if (!window.confirm(`Delete ${count.files} renders (${formatSize(count.bytes)}) that no saved project, shortlisted track or generation of this session plays?\n\nThey're made again if something needs them.`)) return
+    setBusy(true)
+    try {
+      const r = await cleanRenders(false)
+      toast('info', `Cleaned up ${r.files} renders: ${formatSize(r.bytes)} freed.`)
+      await measure()
+    } catch (e) {
+      toast('error', `Cleanup failed: ${(e as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section>
+      <SectionTitle>Storage</SectionTitle>
+      <Field label="Renders" hint="bass and drone parts, and FX stretched to other tempos: made again whenever they're needed">
+        <span className="text-[12.5px] flex items-center gap-3">
+          {!ready ? <span className="text-muted">Waiting for the engine…</span>
+            : error ? <span className="text-bad select-text">{error}</span>
+              : !count ? <span className="text-muted">Measuring…</span>
+                : (
+                  <span className="text-muted">
+                    {formatSize(count.bytes + count.kept_bytes)} in {count.files + count.kept_files} files ·{' '}
+                    <span className={count.files ? 'text-text' : undefined}>{formatSize(count.bytes)} not used</span> by a saved project, the shortlist or this session
+                  </span>
+                )}
+          <Button variant="secondary" disabled={!ready || busy || !count?.files} onClick={() => void clean()}
+                  title="Delete the renders nothing plays any more; anything made in the last 10 minutes stays">
+            {busy ? 'Cleaning up…' : 'Clean up renders'}
+          </Button>
+        </span>
+      </Field>
+    </section>
+  )
+}
+
+/**
+ * ElevenLabs (vocals, SCOPE.md §6.11): the API key, kept encrypted in the macOS keychain (never in
+ * the settings file), and the plan and credits it has.
+ */
+function ElevenLabsSection() {
+  const toast = useApp((s) => s.toast)
+  const [st, setSt] = useState<ElevenStatus | null>(null)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    void api.elevenStatus().then(setSt).catch((e) => setSt({ hasKey: false, error: (e as Error).message }))
+  }, [])
+  const save = async () => {
+    if (!draft.trim()) return
+    setBusy(true)
+    try {
+      const next = await api.setElevenKey(draft)
+      setSt(next)
+      setDraft('')
+      toast(next.error ? 'error' : 'info', next.error ? `Key saved, but: ${next.error}` : 'ElevenLabs key saved in the keychain')
+    } catch (e) {
+      toast('error', (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const remove = async () => {
+    if (!window.confirm('Remove the ElevenLabs key from this Mac?')) return
+    await api.clearElevenKey()
+    setSt({ hasKey: false })
+  }
+  const c = st?.credits
+  return (
+    <section>
+      <SectionTitle>ElevenLabs</SectionTitle>
+      <Field label="API key" hint="for vocals; kept in the macOS keychain, never in the settings file">
+        <span className="flex items-center gap-2">
+          <input type="password" className={cx(inputClass, 'w-[320px]')} value={draft} placeholder={st?.hasKey ? '•••••••• (saved)' : 'paste your key'}
+                 onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void save() }} />
+          <Button variant="secondary" disabled={busy || !draft.trim()} onClick={() => void save()}>Save</Button>
+          {st?.hasKey && <Button variant="ghost" onClick={() => void remove()}>Remove</Button>}
+        </span>
+      </Field>
+      {st?.hasKey && (
+        <Field label="Account">
+          <span className="text-[12.5px] text-muted">
+            {st.error ? <span className="text-bad select-text">{st.error}</span>
+              : c ? <>{st.tier} plan · <span className="text-text">{(c.limit - c.used).toLocaleString()}</span> of {c.limit.toLocaleString()} credits left
+                {c.resetsAt ? ` · renews ${new Date(c.resetsAt).toLocaleDateString()}` : ''}</> : 'Checking…'}
+          </span>
+        </Field>
+      )}
     </section>
   )
 }

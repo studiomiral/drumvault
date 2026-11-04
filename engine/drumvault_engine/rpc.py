@@ -22,13 +22,14 @@ from typing import Any, Callable, TextIO
 
 from pydantic import ValidationError
 
-from . import __version__, hits as hitsmod, key as keymod, pipeline, stretch
+from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, stretch
 from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
-    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, ProcessZipParams, ProgressEvent,
+    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams,
+    ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
-    SerumPresetsParams, SetHitMetaParams, StabChordsParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
+    SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
@@ -39,10 +40,11 @@ JOB_METHODS = {"process_zip", "import_samples", "reprocess_zip", "delete_zip", "
 DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSamplesParams,
                   "restore_samples": RestoreSamplesParams, "shift_sample": ShiftSampleParams,
                   "stretch_samples": StretchSamplesParams, "import_midi": ImportMidiParams,
-                  "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams, "stab_chords": StabChordsParams,
+                  "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams,
                   "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
                   "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams,
-                  "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams}
+                  "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams,
+                  "master_mixdown": MasterMixdownParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams}
 
 
 @dataclass
@@ -209,14 +211,12 @@ class RpcServer:
             elif method == "stretch_samples":
                 self._reply(req_id, pipeline.stretch_samples(settings, p.rel_paths, p.bpm))
             elif method == "import_midi":
-                self._reply(req_id, pipeline.import_midi(settings, p.paths, p.role))
+                self._reply(req_id, pipeline.import_midi(settings, p.paths))
             elif method == "render_bass":
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
-                                                         p.notes, p.bars, p.groove))
-            elif method == "stab_chords":
-                self._reply(req_id, pipeline.stab_chords(settings, p.presets))
+                                                         p.notes, p.bars, p.groove, p.drone.model_dump() if p.drone else None))
             elif method == "save_midi":
-                self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label, p.role))
+                self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label))
             elif method == "set_midi_meta":
                 self._reply(req_id, pipeline.set_midi_meta(settings, p.midi_id, p.role, p.key_label, p.clear_key))
             elif method == "delete_midi":
@@ -227,9 +227,17 @@ class RpcServer:
                 self._reply(req_id, hitsmod.set_hit_meta(settings, p.hit_id, p.key_label, p.clear_key, p.pitch_fix))
             elif method == "delete_hits":
                 self._reply(req_id, hitsmod.delete_hits(settings, p.hit_ids))
+            elif method == "analyze_vocal":
+                self._reply(req_id, pipeline.analyze_vocal(settings, p.folder))
+            elif method == "import_vocal":
+                self._reply(req_id, pipeline.import_vocal(settings, p.folder))
+            elif method == "clean_renders":
+                self._reply(req_id, pipeline.clean_renders(settings, p.keep, p.dry_run))
+            elif method == "master_mixdown":
+                self._reply(req_id, mastermod.master_mixdown(settings, p.mix_path, p.out_path, p.format))
             else:
                 self._reply(req_id, pipeline.serum_presets(settings, p.root, p.folders))
-        except (pipeline.PipelineError, hitsmod.HitError) as e:
+        except (pipeline.PipelineError, hitsmod.HitError, mastermod.MasterError) as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
             log.error("%s failed:\n%s", method, traceback.format_exc())

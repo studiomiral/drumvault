@@ -97,8 +97,8 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
               <button className={btn} onClick={() => setGenerationBass({ transpose: Math.max(-24, b.transpose - 1) })}>−</button>
               <span className="w-16 text-center tabular-nums">{b.transpose > 0 ? '+' : ''}{b.transpose} st</span>
               <button className={btn} onClick={() => setGenerationBass({ transpose: Math.min(24, b.transpose + 1) })}>+</button>
-              <button className={btn} title="An octave down: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', -12)}>−12</button>
-              <button className={btn} title="An octave up: the patch remembers it for the next tracks" onClick={() => void shiftOctave('bass', 12)}>+12</button>
+              <button className={btn} title="An octave down: the patch remembers it for the next tracks" onClick={() => void shiftOctave(-12)}>−12</button>
+              <button className={btn} title="An octave up: the patch remembers it for the next tracks" onClick={() => void shiftOctave(12)}>+12</button>
               <PatchOctave role="bass" path={b.preset.path} />
               <span className="text-faint text-[11.5px] ml-1">
                 {g.key ? `into ${g.key} (${transposeTo(b.midi.key_label, g.key) >= 0 ? '+' : ''}${transposeTo(b.midi.key_label, g.key)} st from ${b.midi.key_label ?? '?'})` : 'no track key'}

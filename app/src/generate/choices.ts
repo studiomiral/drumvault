@@ -13,7 +13,7 @@ export interface Choice {
   options: { value: unknown; label: string }[]
   /** The lanes it shapes. */
   roles: Role[]
-  /** Only on tracks it applies to (with breakdowns, with keys, …). */
+  /** Only on tracks it applies to (with breakdowns, with stabs, …). */
   when?: (g: Generation) => boolean
   /** Its value on a track made before the rule was. */
   unset?: unknown
@@ -24,7 +24,7 @@ const HATS: Role[] = ['hats', 'hats2']
 /** The top loops of builds (a fourth plays only in peak drops). */
 const BUILD_TOPS: Role[] = ['top', 'top2', 'top3']
 /** What plays in the bars before drops (the layers that play in drops only, and the ride, start with them). */
-const LEAD_IN: Role[] = ['kick', 'clap', ...HATS, 'perc', ...BUILD_TOPS, 'groove', 'bass', 'keys', 'stab']
+const LEAD_IN: Role[] = ['kick', 'clap', ...HATS, 'perc', ...BUILD_TOPS, 'groove', 'bass', 'stab']
 /** Everything that stops for the silence before drops (fills, FX, crashes and hits ring through). */
 const SILENCED: Role[] = [...LEAD_IN, 'disco', 'disco2', 'atmos']
 /** What the mix high-pass before drops rides: the loops (not the moments: risers, fills, impacts, atmos, hits). */
@@ -51,6 +51,9 @@ export const CHOICES: Choice[] = [
   { rule: 'dropFill', label: 'Into drops', group: 'Drops', roles: BUILDUP_ROLES,
     options: [{ value: 'roll', label: 'a roll' }, { value: 'fill', label: 'a fill' }, { value: null, label: 'no fill' }] },
   { rule: 'dropRiser', label: 'Riser into drops', group: 'Drops', roles: ['fx', 'fx2'], options: yesNo('yes', 'no') },
+  { rule: 'firstDrop', label: 'Drop 1', group: 'Drops', roles: ['clap2', 'clap3', 'hats2', 'perc2', 'top2', 'top3', 'groove'],
+    when: (g) => g.sections[1]?.kind === 'drop', unset: 'full',
+    options: [{ value: 'lean', label: 'leaner at first, full halfway' }, { value: 'full', label: 'full from the start' }] },
   { rule: 'mixHp', label: 'Mix high-passed', group: 'Drops', roles: MIX,
     options: [{ value: 0, label: 'no' }, { value: 1, label: 'the bar before' }, { value: 2, label: '2 bars before' }, { value: 4, label: '4 bars before' }] },
   { rule: 'topsBreaks', label: 'Tops', group: 'Breakdowns', roles: ['top'], when: has('break'),
@@ -58,17 +61,13 @@ export const CHOICES: Choice[] = [
   { rule: 'hatsInBreaks', label: 'Hats', group: 'Breakdowns', roles: ['hats'], when: has('break'), options: yesNo('high-passed', 'out') },
   { rule: 'bassBreaks', label: 'Bass', group: 'Breakdowns', roles: ['bass'], when: (g) => !!g.bass && has('break')(g),
     options: [{ value: 'filtered', label: 'high-passed' }, { value: 'none', label: 'out' }] },
-  { rule: 'keysBreaks', label: 'Keys', group: 'Breakdowns', roles: ['keys'], when: (g) => !!g.keys && has('break')(g),
-    options: [{ value: 'full', label: 'open' }, { value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
   { rule: 'stabsIn', label: 'Stabs', group: 'Breakdowns', roles: ['stab'], when: (g) => !!g.rules.stabs,
-    options: [{ value: 'drops', label: 'in drops only' }, { value: 'keys', label: 'like keys' }] },
+    options: [{ value: 'drops', label: 'in drops only' }, { value: 'keys', label: 'also breaks & builds' }] },
   { rule: 'stabsBreaks', label: 'Stabs in breaks', group: 'Breakdowns', roles: ['stab'],
     when: (g) => !!g.rules.stabs && g.rules.stabsIn === 'keys' && has('break')(g),
     options: [{ value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
   { rule: 'bassBuild', label: 'Bass', group: 'Builds', roles: ['bass'], when: (g) => !!g.bass && has('build')(g),
     options: [{ value: 'filtered', label: 'high-passed' }, { value: 'sweep', label: 'sub sweeps in' }, { value: 'none', label: 'out' }] },
-  { rule: 'keysBuild', label: 'Keys', group: 'Builds', roles: ['keys'], when: (g) => !!g.keys && has('build')(g),
-    options: [{ value: 'sweep', label: 'filter opens' }, { value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
   { rule: 'stabsBuild', label: 'Stabs', group: 'Builds', roles: ['stab'],
     when: (g) => !!g.rules.stabs && g.rules.stabsIn === 'keys' && has('build')(g),
     options: [{ value: 'sweep', label: 'filter opens' }, { value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
@@ -80,6 +79,8 @@ export const CHOICES: Choice[] = [
     options: [{ value: 'none', label: 'none (DJ friendly)' }, { value: 'filtered', label: 'high-passed, half' }] },
   { rule: 'ioClaps', label: 'Claps', group: 'Intro & outro', roles: ['clap'], options: yesNo(NEXT_TO_DROPS, 'none') },
   { rule: 'ioPerc', label: 'Perc', group: 'Intro & outro', roles: ['perc'], options: yesNo(NEXT_TO_DROPS, 'none') },
+  { rule: 'ioLift', label: 'Lift', group: 'Intro & outro', roles: ['hats', 'perc', 'top2', 'clap'], unset: false,
+    options: yesNo('fills up into the drop', 'no') },
   { rule: 'phraseCrash', label: 'Crash', group: 'Every 8 and 16 bars', roles: ['crash'], options: yesNo('every 16 bars', 'no') },
   { rule: 'crash8', label: 'Crash every 8', group: 'Every 8 and 16 bars', roles: ['crash'], options: yesNo('yes', 'no') },
   { rule: 'phraseKickOut', label: 'Four kicks out', group: 'Every 8 and 16 bars', roles: ['kick', 'crash'], options: yesNo('every 16 bars', 'no') },
@@ -88,6 +89,22 @@ export const CHOICES: Choice[] = [
     options: [{ value: 'none', label: 'none' }, { value: '16', label: 'every 16 bars' }, { value: '8', label: 'every 8 bars' }] },
   { rule: 'ride', label: 'Ride', group: 'Sound', roles: ['ride', 'crash'],
     options: [{ value: 'late', label: 'later in drop 1' }, { value: 'second', label: 'from drop 2' }, { value: 'both', label: 'late in drop 1, then all through' }] },
+  { rule: 'droneAt', label: 'Drone', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone,
+    options: [{ value: 'drops', label: 'in the drops' }, { value: 'all', label: 'all through' }, { value: 'inner', label: 'all but intro and outro' }] },
+  { rule: 'vocalUse', label: 'Vocal', group: 'Sound', roles: ['vocal', 'vchop'], when: (g) => !!g.picks.vocal,
+    options: [{ value: 'phrase', label: 'its phrase' }, { value: 'chops', label: 'chopped' }, { value: 'both', label: 'phrase and chops' }] },
+  { rule: 'vocalAt', label: 'Vocal phrase', group: 'Sound', roles: ['vocal', 'vchop'], when: (g) => !!g.picks.vocal && g.rules.vocalUse !== 'chops',
+    options: [{ value: 'drops', label: 'in the drops' }, { value: 'halves', label: 'second half of drops' },
+      { value: 'drops_breaks', label: 'drops and breakdowns' }, { value: 'breaks', label: 'breakdowns, last drop' }] },
+  { rule: 'vocalLoop', label: 'Vocal loop', group: 'Sound', roles: ['vocal'], when: (g) => !!g.picks.vocal && g.rules.vocalUse !== 'chops',
+    options: [{ value: 'long', label: 'the long one' }, { value: 'short', label: 'the short one' }] },
+  { rule: 'droneRhythm', label: 'Drone rhythm', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone,
+    options: [{ value: 'pump', label: 'sidechain pump' }, { value: 'gate8', label: 'gated 8ths' }, { value: 'gate16', label: 'gated 16ths' },
+      { value: 'dotted', label: 'gated dotted 8ths' }, { value: 'swell', label: 'offbeat swells' }, { value: 'chop', label: 'chopped 16ths' }] },
+  { rule: 'droneWarp', label: 'Drone warp', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone, unset: 'none',
+    options: [{ value: 'none', label: 'as it is' }, { value: 'slow2', label: 'slowed down 2×' }, { value: 'slow4', label: 'slowed down 4×' }, { value: 'reverse', label: 'reversed' }] },
+  { rule: 'droneOctave', label: 'Drone octave', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone, unset: 0,
+    options: [{ value: -12, label: 'down' }, { value: 0, label: 'in the key' }, { value: 12, label: 'up' }] },
   { rule: 'fx', label: 'FX', group: 'Sound', roles: ['fx', 'fx2', 'hits'],
     options: [{ value: 'sparse', label: 'sparse' }, { value: 'normal', label: 'normal' }, { value: 'busy', label: 'busy' }] },
 ]

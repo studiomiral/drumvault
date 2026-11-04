@@ -7,13 +7,13 @@ import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import type { WavFormat } from '../audio/wav'
-import { exportStems, exportTargets, midiFileNames, type ExportOptions, type ExportResult } from './exporter'
+import { exportDir, exportFolderName, exportStems, exportTargets, hasVocals, MASTERED_FILE, MASTERED_INSTRUMENTAL_FILE, midiParts, safeName, type ExportOptions, type ExportResult } from './exporter'
 
 type Phase =
   | { kind: 'setup' }
   | { kind: 'running'; message: string; pct: number }
   | { kind: 'clipping'; result: ExportResult; opts: ExportOptions }
-  | { kind: 'done'; files: string[]; note?: string }
+  | { kind: 'done'; files: string[]; note?: string; result?: ExportResult }
   | { kind: 'error'; message: string }
 
 /** Export Stems (SCOPE.md §6.5). */
@@ -23,13 +23,14 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const sampleRate = settings?.engine.output_sample_rate ?? 44100
   const usedLanes = useMemo(() => new Set(project.clips.map((c) => c.laneId)), [project.clips])
   const [dir, setDir] = useState<string>(settings?.lastExportDir ?? '')
-  const [prefix, setPrefix] = useState(project.name)
+  const [folder, setFolder] = useState(() => exportFolderName(project))
   const hasLoop = project.loop.end > project.loop.start
   const [range, setRange] = useState<'project' | 'loop'>('project')
   const [format, setFormat] = useState<WavFormat>(settings?.engine.output_format === 'float32' ? 'float32' : 'pcm24')
   const [lanes, setLanes] = useState<string[]>(project.lanes.filter((l) => !l.mute && usedLanes.has(l.id)).map((l) => l.id))
-  const [master, setMaster] = useState(false)
-  const [midi, setMidi] = useState(project.markers.length > 0)
+  const [master, setMaster] = useState(true)
+  const parts = useMemo(() => midiParts(project), [project])
+  const [midi, setMidi] = useState(parts.length > 0)
   const [phase, setPhase] = useState<Phase>({ kind: 'setup' })
   const cancelled = useRef(false)
 
@@ -43,7 +44,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const startBar = r.startBeat / BEATS_PER_BAR + 1
   const bars = (r.endBeat - r.startBeat) / BEATS_PER_BAR
   const base: ExportOptions = {
-    dir, prefix: prefix.trim() || project.name, range: r, format, sampleRate, laneIds: lanes, master, midi,
+    dir, folder: folder.trim() || exportFolderName(project), range: r, format, sampleRate, laneIds: lanes, master, midi,
     gain: 1, allowClipping: false,
   }
   const targets = exportTargets(project, base)
@@ -52,9 +53,15 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const run = async (opts: ExportOptions, checkExisting: boolean) => {
     cancelled.current = false
     if (checkExisting) {
-      const names = [...exportTargets(project, opts).map((t) => t.file), ...(opts.midi ? midiFileNames(project, opts.prefix) : [])]
-      const existing = await api.existingFiles(opts.dir, names)
-      if (existing.length && !window.confirm(`Replace ${existing.length} existing file${existing.length > 1 ? 's' : ''} in ${opts.dir}?\n\n${existing.join('\n')}`)) return
+      const files = [...exportTargets(project, opts), ...(opts.master ? [{ sub: 'masters' as const, file: MASTERED_FILE }] : []),
+        ...(opts.master && hasVocals(project) ? [{ sub: 'masters' as const, file: MASTERED_INSTRUMENTAL_FILE }] : []),
+        ...(opts.midi ? midiParts(project).map((m) => ({ sub: 'midi' as const, file: m.file })) : [])]
+      const existing: string[] = []
+      for (const sub of ['masters', 'stems', 'midi'] as const) {
+        const names = files.filter((f) => f.sub === sub).map((f) => f.file)
+        if (names.length) existing.push(...(await api.existingFiles(exportDir(opts, sub), names)).map((n) => `${sub}/${n}`))
+      }
+      if (existing.length && !window.confirm(`Replace ${existing.length} existing file${existing.length > 1 ? 's' : ''} in ${safeName(opts.folder)}?\n\n${existing.join('\n')}`)) return
       void saveSettings({ lastExportDir: opts.dir })
     }
     playback.stop()
@@ -62,9 +69,9 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     try {
       const result = await exportStems(project, opts, (message, pct) => setPhase({ kind: 'running', message, pct }),
         () => cancelled.current)
-      if (cancelled.current) setPhase({ kind: 'done', files: result.written, note: 'Export cancelled.' })
+      if (cancelled.current) setPhase({ kind: 'done', files: result.written, note: 'Export cancelled.', result })
       else if (result.clipped.length) setPhase({ kind: 'clipping', result, opts })
-      else setPhase({ kind: 'done', files: result.written })
+      else setPhase({ kind: 'done', files: result.written, result })
     } catch (e) {
       setPhase({ kind: 'error', message: (e as Error).message })
     }
@@ -106,8 +113,17 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         {phase.kind === 'error' ? <p className="text-bad select-text">{phase.message}</p> : (
           <>
             {phase.note && <p className="text-warn mb-2">{phase.note}</p>}
+            {phase.result?.masterError && (
+              <p className="text-warn mb-2 select-text">mastered.wav was not made: {phase.result.masterError}</p>
+            )}
+            {phase.result?.mastered && (
+              <p className="text-muted mb-2">
+                Mastered with Ozone 11: <b className="text-text">{phase.result.mastered.lufs.toFixed(1)} LUFS</b> integrated,
+                peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
+              </p>
+            )}
             <p className="text-muted mb-3">
-              {phase.files.length} file{phase.files.length === 1 ? '' : 's'} in <span className="text-text select-text">{dir}</span>.
+              {phase.files.length} file{phase.files.length === 1 ? '' : 's'} in <span className="text-text select-text">{dir}/{safeName(base.folder)}</span>.
               In Logic, set the project to <b className="text-text">{formatBpm(project.bpm)} BPM</b> and import them at
               <b className="text-text"> bar {startBar}</b>.
             </p>
@@ -118,7 +134,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         )}
         <div className="flex justify-end gap-2 mt-5">
           {phase.kind === 'done' && phase.files.length > 0 && (
-            <Button onClick={() => void api.revealPath(`${dir}/${phase.files[0]}`)}>Reveal in Finder</Button>
+            <Button onClick={() => void api.revealPath(`${dir}/${safeName(base.folder)}`)}>Reveal in Finder</Button>
           )}
           <Button variant="primary" onClick={onClose}>Done</Button>
         </div>
@@ -135,8 +151,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           if (d) setDir(d)
         }}>Choose…</Button>
       </Field>
-      <Field label="File name prefix">
-        <input className={cx(inputClass, 'w-64')} value={prefix} disabled={running} onChange={(e) => setPrefix(e.target.value)} />
+      <Field label="Project folder" hint="with masters, stems and midi inside">
+        <input className={cx(inputClass, 'w-80')} value={folder} disabled={running} onChange={(e) => setFolder(e.target.value)} />
       </Field>
       <Field label="Range">
         <select className={cx(inputClass, 'w-64')} value={range} disabled={running} onChange={(e) => setRange(e.target.value as 'project' | 'loop')}>
@@ -165,19 +181,22 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           ))}
           <label className="flex items-center gap-2 col-span-2 border-t border-line pt-2 mt-1">
             <input type="checkbox" className="accent-[#e2c35f]" checked={master} disabled={running} onChange={(e) => setMaster(e.target.checked)} />
-            <span className="font-medium">Master</span><span className="text-[11px] text-faint">all unmuted lanes</span>
+            <span className="font-medium">Masters</span>
+            <span className="text-[11px] text-faint">
+              mixdown.wav (all unmuted lanes) and mastered.wav (Ozone 11, −6.5 LUFS, 0 dB ceiling){hasVocals(project) ? ', and both without the vocals (instrumental)' : ''}
+            </span>
           </label>
-          <label className="flex items-center gap-2 col-span-2">
-            <input type="checkbox" className="accent-[#e2c35f]" checked={midi} disabled={running} onChange={(e) => setMidi(e.target.checked)} />
-            <span className="font-medium">Markers (MIDI)</span>
-            <span className="text-[11px] text-faint">tempo + {project.markers.length} section marker{project.markers.length === 1 ? '' : 's'} for Logic</span>
+          <label className={cx('flex items-center gap-2 col-span-2', !parts.length && 'text-faint')}>
+            <input type="checkbox" className="accent-[#e2c35f]" checked={midi && parts.length > 0} disabled={running || !parts.length} onChange={(e) => setMidi(e.target.checked)} />
+            <span className="font-medium">MIDI</span>
+            <span className="text-[11px] text-faint">{parts.length ? parts.map((m) => `midi/${m.file}`).join(', ') : 'no bass part'}</span>
           </label>
         </div>
       </div>
       <p className="text-[12px] text-faint mt-3">
-        {targets.length} WAV{targets.length === 1 ? '' : 's'}, each {bars} bars long from bar {startBar}, named
-        {' '}<span className="font-mono">{targets[0]?.file ?? `${prefix}_<Lane>_${formatBpm(project.bpm)}bpm.wav`}</span>
-        {targets.length > 1 ? ' …' : ''}. Solo is ignored; muted lanes are skipped.
+        {targets.length} WAV{targets.length === 1 ? '' : 's'}, each {bars} bars long from bar {startBar}, named as their lanes
+        {' '}(<span className="font-mono">stems/{targets.find((t) => t.sub === 'stems')?.file ?? '<Lane>.wav'}</span>
+        {targets.length > 1 ? ' …' : ''}). Solo is ignored; muted lanes are skipped.
       </p>
       {running && (
         <div className="mt-4">
@@ -191,7 +210,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         {running ? <Button onClick={() => {
           cancelled.current = true
         }}>Cancel</Button> : <Button variant="ghost" onClick={onClose}>Cancel</Button>}
-        <Button variant="primary" disabled={running || !dir || (!targets.length && !midi)} onClick={() => void run(base, true)}>
+        <Button variant="primary" disabled={running || !dir || (!targets.length && !(midi && parts.length))} onClick={() => void run(base, true)}>
           Export
         </Button>
       </div>

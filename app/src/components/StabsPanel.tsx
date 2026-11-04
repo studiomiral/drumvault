@@ -1,17 +1,12 @@
 import { useState } from 'react'
 import { hitIdOf } from '../generate/disco'
 import { STAB_ROLES, type Generation } from '../generate/generator'
-import { stabOneKey, stabPresetId } from '../generate/stabs'
 import { useApp } from '../store/app'
-import {
-  deleteStabRhythm, newChordStabs, saveStabRhythm, setStabChord, setTrackStabRhythm, shiftStabOctave, useGenerate,
-} from '../store/generate'
+import { deleteStabRhythm, newChordStabs, saveStabRhythm, setTrackStabRhythm, useGenerate } from '../store/generate'
 import { useHits } from '../store/hits'
-import { playsChord, useStabPresets } from '../store/stabs'
-import type { HitItem, SerumPreset } from '../types/api'
-import type { AudioClip, Velocity } from '../types/project'
+import type { HitItem } from '../types/api'
+import type { Velocity } from '../types/project'
 import { HitRow } from './DiscoPanel'
-import { PatchOctave } from './PatchOctave'
 import { Button, cx, inputClass } from './ui'
 
 /** Where a track's stabs play, in words. */
@@ -21,26 +16,18 @@ export function stabsWhere(g: Generation): string {
 }
 
 /**
- * Chord stabs (SCOPE.md §6.9) in the Chords module: which stab this track plays instead of the
- * keys (a sample of the Chord Stabs page or a Serum patch), its pitch or octave, its rhythm.
+ * Chord stabs (SCOPE.md §6.9) in the Chords module: which of the Chord Stabs page's samples this
+ * track plays, its pitch, its rhythm.
  */
 export function StabsPart({ g }: { g: Generation }) {
   useGenerate((s) => s.history)  // re-render after a pitch change
   const all = useHits((s) => s.hits)
   const loaded = useHits((s) => s.loaded)
   const samples = all.filter((h) => h.kind === 'stab')
-  const presets = useStabPresets((s) => s.presets)
-  const pool = samples.length + presets.length
   const setView = useApp((s) => s.setView)
   const toast = useApp((s) => s.toast)
-  // The track's stabs, in lane order: a sample of the Chord Stabs page, or a Serum patch.
-  const used = STAB_ROLES.flatMap((role): ({ hit: HitItem } | { preset: Pick<SerumPreset, 'path' | 'name'> })[] => {
-    const id = g.picks[role]?.id
-    const hit = samples.find((h) => h.id === hitIdOf(id))
-    if (hit) return [{ hit }]
-    const clip = g.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab' && stabPresetId(c.bass.preset) === id)
-    return clip ? [{ preset: { path: clip.bass!.preset, name: clip.bass!.presetName } }] : []
-  })
+  // The track's stabs, in lane order.
+  const used = STAB_ROLES.flatMap((role) => samples.filter((h) => h.id === hitIdOf(g.picks[role]?.id)))
   const where = stabsWhere(g)
   const reroll = () => {
     if (!newChordStabs()) toast('info', 'No other chord stab came out: add more on the Chord Stabs page.')
@@ -55,23 +42,24 @@ export function StabsPart({ g }: { g: Generation }) {
   return (
     <>
       {!loaded ? <p className="text-muted text-[12.5px]">Loading chord stabs…</p>
-        : !pool ? (
-          <p className="text-muted text-[12.5px]">No chord stabs yet: drop organ, piano and synth stabs on the Chord Stabs page, or tick
-            stab patch folders there.{' '}
+        : !samples.length ? (
+          <p className="text-muted text-[12.5px]">No chord stabs yet: drop organ, piano, synth and string stabs on the Chord Stabs page.{' '}
             <Button variant="ghost" onClick={() => setView('stabs')}>Open Chord Stabs</Button>
           </p>
         ) : !used.length ? (
-          <p className="text-[12.5px] text-muted">This track has no chord stabs.</p>
+          <div className="flex flex-wrap items-center gap-3 text-[12.5px]">
+            {newButton}
+            <span className="text-muted">This track has no chord stabs.</span>
+          </div>
         ) : (
           <div className="space-y-2 text-[12.5px]">
             <div className="flex flex-wrap items-center gap-3">
               {newButton}
               <span className="text-[12px] text-muted">Plays {where}.</span>
             </div>
-            {used.map((u) => ('hit' in u ? <HitRow key={u.hit.id} hit={u.hit} g={g} color="#fcd34d" />
-              : <PresetRow key={u.preset.path} preset={u.preset} g={g} />))}
+            {used.map((hit) => <HitRow key={hit.id} hit={hit} g={g} color="#fcd34d" />)}
             <p className="text-faint text-[11.5px]">
-              A pitch you set is remembered for the stab sample, an octave for the patch: the next tracks play it the same way.
+              A pitch you set is remembered for the stab sample: the next tracks play it the same way.
             </p>
             <StabSequencer g={g} />
           </div>
@@ -80,56 +68,14 @@ export function StabsPart({ g }: { g: Generation }) {
   )
 }
 
-/** The names of a track's stabs (sample or patch). */
+/** The names of a track's stabs. */
 export function stabNames(g: Generation, hits: HitItem[]): string[] {
-  return STAB_ROLES.flatMap((role) => {
-    const id = g.picks[role]?.id
-    const hit = hits.find((h) => h.kind === 'stab' && h.id === hitIdOf(id))
-    if (hit) return [hit.name]
-    const clip = g.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab' && stabPresetId(c.bass.preset) === id)
-    return clip ? [clip.bass!.presetName] : []
-  })
-}
-
-/** A Serum patch playing stabs: the track key's seventh chord rendered through it, and its octave (saved on the patch). */
-function PresetRow({ preset, g }: { preset: Pick<SerumPreset, 'path' | 'name'>; g: Generation }) {
-  const clip = g.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab' && c.bass.preset === preset.path)
-  const t = clip?.bass?.transpose ?? 0
-  useApp((s) => s.settings?.stabs?.chords)  // re-render when set
-  useStabPresets((s) => s.measured)          // … or measured
-  // What this track's part plays (the patch's setting may have been measured since it was made).
-  const st = clip?.bass?.stab ?? (clip?.bass?.notes ? { oneKey: stabOneKey(clip.bass.notes) } : { oneKey: playsChord(preset) })
-  const oneKey = !!st.oneKey
-  const key = g.key ?? 'the key'
-  const what = st.voicing ? `its own chord (from the preset's clip), from ${key}'s root, on your steps`
-    : oneKey ? `${key}'s root: the patch stacks its own chord`
-      : `${key}'s ${/m$/.test(g.key ?? 'm') ? 'minor' : 'major'} 7th chord`
-  const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
-  return (
-    <div className="grid grid-cols-[28px_minmax(0,1fr)_auto] gap-3 items-center">
-      <span className="w-7 h-7 rounded-full bg-raised flex items-center justify-center text-[10px] text-accent shrink-0" title="Serum 2 patch">S2</span>
-      <span className="min-w-0">
-        <span className="block truncate font-medium">{preset.name}<PatchOctave role="stabs" path={preset.path} /></span>
-        <span className="block truncate text-faint text-[11.5px]">
-          Serum patch · {what}
-        </span>
-      </span>
-      <span className="flex items-center gap-1.5">
-        <label className="flex items-center gap-1.5 text-[12px] text-muted mr-2 cursor-pointer"
-               title="On: the patch stacks a chord from one key, so it gets the root alone. Off: its own chord from the preset's clip, else the key's seventh chord. Remembered for the patch.">
-          <input type="checkbox" className="accent-[#e2c35f]" checked={oneKey} onChange={(e) => void setStabChord(preset, e.target.checked)} />
-          chord from one key
-        </label>
-        <button className={btn} disabled={t <= -24} title="An octave down (remembered for the patch)" onClick={() => void shiftStabOctave(preset.path, -12)}>−12</button>
-        <button className={btn} disabled={t >= 24} title="An octave up (remembered for the patch)" onClick={() => void shiftStabOctave(preset.path, 12)}>+12</button>
-      </span>
-    </div>
-  )
+  return STAB_ROLES.flatMap((role) => hits.filter((h) => h.kind === 'stab' && h.id === hitIdOf(g.picks[role]?.id)).map((h) => h.name))
 }
 
 /**
  * The track's stab rhythm as a step sequencer (1 or 2 bars of 16ths): click a step to change the
- * track at once (when the sample plays, or when the patch gets its chord). Saved rhythms replace
+ * track at once. Saved rhythms replace
  * the built-in ones: Generate takes one of them as it is for some tracks and learns from them for
  * the rest. Click a saved one to play it in this track.
  */

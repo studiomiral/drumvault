@@ -469,7 +469,7 @@ function Details({ g }: { g: Generation }) {
         <span className="font-display text-[22px]">{Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</span>
         <span className="text-muted">{g.project.lengthBars} bars · {bpm} BPM</span>
         <label className="rounded-md pl-2 h-[22px] inline-flex items-center gap-1 bg-pastel-yellow text-on-pastel text-[12px] font-medium"
-               title="Another key for this track: bass and keys move, disco hits are pitched, FX that don't fit are swapped; the drums stay (← goes back)">
+               title="Another key for this track: the bass moves, disco hits and chord stabs are pitched, FX that don't fit are swapped; the drums stay (← goes back)">
           Key
           <select className="bg-transparent font-medium outline-none cursor-pointer pr-1" value={g.key ?? ''}
                   onChange={(e) => e.target.value && changeTrackKey(e.target.value)}>

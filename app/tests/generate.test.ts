@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { isGenerated } from '../src/generate/bassline'
 import {
-  applyMix, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, newLaneSound, rerollDisco, rerollKeys, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
-  transposeTo, type GenerateOptions, type Generation, type Role,
+  applyMix, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newDroneSound, newLaneSound, rerollDisco, rerollDrone, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
+  transposeTo, type GenerateOptions, type Generation,
 } from '../src/generate/generator'
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
 import { dropRanges, KICK_LEVEL_DB, laneLoudness } from '../src/generate/balance'
 import { bassPath } from '../src/audio/schedule'
 import type { EventShape, HitItem, LoopGroove, MidiItem, SerumPreset, TrackArrangement } from '../src/types/api'
 import { hitPitch } from '../src/generate/disco'
+import { parseKey } from '../src/generate/bassline'
+import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
 import { readSections, templateFrom } from '../src/generate/template'
 import { SAVED_EXACT, stabRhythm } from '../src/generate/stabs'
 import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
+import { bassy } from '../src/generate/eq'
 import type { SampleListItem } from '../src/types/api'
 import type { Category, SampleKind } from '../src/types/engine'
 import type { AudioClip, Clip, PatternClip, Velocity } from '../src/types/project'
@@ -134,13 +137,16 @@ describe('generator: rules every generation keeps', () => {
         const intoDrop = s === intro && g.sections[1].kind === 'drop'
         const end = (s.start + s.bars) * 4 - (intoDrop ? 2 : 0)
         const hatsEnd = (s.start + s.bars) * 4 - (intoDrop ? (g.rules.dropBreath === 'all' ? 4 : 2) : 0)
-        // Hats none, the half next to the drops, or all through.
+        // Hats none, the half next to the drops, or all through; with the lift, none until the
+        // bars it fills up over (hats come in first).
         const how = s === intro ? g.rules.introHats : g.rules.outroHats
         const half = s.start + Math.floor(s.bars / 2 / 8) * 8
+        const lift = s === intro ? s.start + s.bars - liftBars(s.bars) : s.start + liftBars(s.bars)
         for (let beat = s.start * 4; beat < end; beat++) {
           expect(hitAt(g, 'Kick', beat * 4)).toBe(3)
           const inHalf = s === intro ? beat >= half * 4 : beat < half * 4
-          if (beat < hatsEnd) expect(covers(g, 'Hats', beat)).toBe(how === 'all' || (how === 'half' && inHalf))
+          const inLift = !!g.rules.ioLift && (s === intro ? beat >= lift * 4 : beat < lift * 4)
+          if (beat < hatsEnd) expect(covers(g, 'Hats', beat)).toBe(how === 'all' || (how === 'half' && inHalf) || (how === 'none' && inLift))
         }
       }
     }
@@ -250,7 +256,9 @@ describe('generator: rules every generation keeps', () => {
       expect(marks.size).toBeLessThanOrEqual(1)  // crash and kicks-out the same at every 16-bar mark
       const tops = (s: Generation['sections'][number]) =>
         g.project.lanes.filter((l) => l.name.startsWith('Tops') && covers(g, l.name, (s.start + 1) * 4)).length
-      const counts = new Set(drops.filter((s) => !s.peak).map(tops))
+      // (A lean first drop straight after the intro brings its last top loop in halfway.)
+      const lean = (s: Generation['sections'][number]) => s === g.sections[1] && g.rules.firstDrop === 'lean'
+      const counts = new Set(drops.filter((s) => !s.peak && !lean(s)).map(tops))
       expect(counts.size).toBeLessThanOrEqual(1)
       // One fill sample per track for the one-bar fills into drops and 16-bar parts, unless a
       // drop's FX stop at another moment than it does: then one that stops with them.
@@ -273,6 +281,62 @@ describe('generator: rules every generation keeps', () => {
           && g.project.clips.some((c) => c.laneId === l.id && c.start < (s.start + s.bars) * 4 && c.start + c.length > s.start * 4))
         .map((l) => l.name).sort()
       expect(lanesIn(outro)).toEqual(lanesIn(intro))
+    }
+  })
+
+  it('fills the intro up over its last bars with what the drops have, and thins the outro out the same way', () => {
+    const plays = (g: Generation, name: string, from: number, to: number) =>
+      clipsOn(g, name).some((c) => c.start < to * 4 && c.start + c.length > from * 4)
+    let n = 0
+    for (const g of gens.filter((x) => x.rules.ioLift && !x.rules.ioClaps && x.rules.buildup !== 'claps' && laneOf(x, 'Clap'))) {
+      const intro = g.sections[0]
+      const outro = g.sections.at(-1)!
+      const iz = intro.start + intro.bars
+      const oz = outro.start + outro.bars
+      // The claps join last, within the bars the intro fills up over, and leave first in the outro.
+      expect(plays(g, 'Clap', intro.start, iz - liftBars(intro.bars))).toBe(false)
+      expect(plays(g, 'Clap', iz - 4, iz - 1)).toBe(true)
+      expect(plays(g, 'Clap', outro.start, outro.start + 4)).toBe(true)
+      expect(plays(g, 'Clap', outro.start + liftBars(outro.bars), oz)).toBe(false)
+      // Hats (when the track's rule has none there) come in first: no later than the claps.
+      if (g.rules.introHats === 'none') {
+        const first = (name: string) => Math.min(...clipsOn(g, name).filter((c) => c.start < iz * 4).map((c) => c.start))
+        expect(first('Hats')).toBeLessThanOrEqual(first('Clap'))
+      }
+      // Without the lift, the intro keeps its claps out.
+      const off = setTrackRule(LIB, OPTS, g, 'ioLift', false, ['hats', 'perc', 'top2', 'clap'])
+      expect(plays(off, 'Clap', intro.start, iz)).toBe(false)
+      n++
+    }
+    expect(n).toBeGreaterThan(10)
+    // Most tracks lift, some don't.
+    const lifted = gens.filter((g) => g.rules.ioLift).length
+    expect(lifted).toBeGreaterThan(gens.length * 0.6)
+    expect(lifted).toBeLessThan(gens.length)
+  })
+
+  it('starts a first drop straight after the intro leaner, with its layers in by halfway', () => {
+    const plays = (g: Generation, name: string, from: number, to: number) =>
+      clipsOn(g, name).some((c) => c.start < to * 4 && c.start + c.length > from * 4)
+    let n = 0
+    for (const g of gens.filter((x) => x.sections[1].kind === 'drop' && x.rules.firstDrop === 'lean' && x.sections[1].bars >= 16)) {
+      const d = g.sections[1]
+      const half = d.start + Math.floor(d.bars / 2 / 8) * 8
+      // Its first phrase without the clap layers and the second hats; groove and second perc halfway.
+      for (const name of ['Clap 2', 'Clap 3', 'Hats 2']) expect(plays(g, name, d.start, d.start + 8)).toBe(false)
+      for (const name of ['Groove', 'Perc 2']) expect(plays(g, name, d.start, half)).toBe(false)
+      if (laneOf(g, 'Clap 2')) expect(plays(g, 'Clap 2', d.start + 8, d.start + 9)).toBe(true)
+      // Full from the start, it has them from its first bar.
+      const full = setTrackRule(LIB, OPTS, g, 'firstDrop', 'full', ['clap2', 'clap3', 'hats2', 'perc2', 'top2', 'top3', 'groove'])
+      if (laneOf(full, 'Clap 2')) expect(plays(full, 'Clap 2', d.start, d.start + 1)).toBe(true)
+      n++
+    }
+    expect(n).toBeGreaterThan(5)
+    // The later drops stay full: the lean one is only the first, straight after the intro.
+    for (const g of gens.filter((x) => x.rules.firstDrop === 'lean' && laneOf(x, 'Clap 2'))) {
+      for (const s of g.sections.filter((x) => x.kind === 'drop' && x !== g.sections[1])) {
+        expect(plays(g, 'Clap 2', s.start, s.start + 1)).toBe(true)
+      }
     }
   })
 
@@ -779,7 +843,7 @@ describe('generator: structures from real tracks', () => {
       expect(minutes).toBeGreaterThanOrEqual(4 - 0.15)
       expect(minutes).toBeLessThanOrEqual(6 + 0.15)
       // The producer's choice: no claps in the intro (unless that rule was drawn again).
-      if (g.rules.ioClaps === false) expect(covers(g, 'Clap', (g.sections[0].start + g.sections[0].bars - 1) * 4)).toBe(false)
+      if (g.rules.ioClaps === false && !g.rules.ioLift) expect(covers(g, 'Clap', (g.sections[0].start + g.sections[0].bars - 1) * 4)).toBe(false)
     }
     // Same seed, same track.
     expect(strip(generate(LIB, { ...OPTS, templates: [REAL] }, 9001))).toBe(strip(generate(LIB, { ...OPTS, templates: [REAL] }, 9001)))
@@ -791,44 +855,8 @@ describe('generator: structures from real tracks', () => {
   })
 })
 
-describe('Keys generation beside Bass', () => {
-  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90], [2.5, 0.5, 57, 100], [2.5, 0.5, 60, 90], [2.5, 0.5, 64, 90]], favorite: 0, source: null, source_code: null }
-  const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4, bars: 2 as const }
-  it('puts polyphonic Keys in drops, keeps DJ intro/outro clean and leaves drum choices unchanged', () => {
-    const plain = generate(LIB, OPTS, 42); const g = generate(LIB, { ...OPTS, keys }, 42)
-    expect(g.keys?.midi.role).toBe('keys'); expect(g.keys?.midi.bars).toBe(2)
-    const lane = g.project.lanes.find((l) => l.name === 'Keys')!
-    expect(lane.duck).toBe(0.4)
-    const clips = g.project.clips.filter((c) => c.laneId === lane.id)
-    expect(clips.length).toBeGreaterThan(0)
-    for (const c of clips) {
-      expect(c.type === 'audio' && c.bass?.role).toBe('keys')
-      expect(g.sections.some((s) => (s.kind === 'intro' || s.kind === 'outro') && c.start < (s.start + s.bars) * 4 && c.start + c.length > s.start * 4)).toBe(false)
-    }
-    const signature = (g: Generation) => g.project.clips.filter((c) => c.type !== 'audio' || c.bass?.role !== 'keys').map(({ id: _i, laneId: _l, ...c }) => c)
-    expect(signature(g)).toEqual(signature(plain)); expect(g.sections).toEqual(plain.sections)
-  })
-  it('keeps the Keys part and patch independently, including note edits', () => {
-    const a = generate(LIB, { ...OPTS, keys }, 41)
-    const notes: MidiItem['notes'] = [[0, 3, 69, 90], [0, 3, 72, 85], [0, 3, 76, 80]]
-    const b = generate(LIB, { ...OPTS, keys }, 42, { keysMidi: a.keys!.midi, keysPreset: a.keys!.preset, keysEdit: { notes, bars: 1 } })
-    expect(b.keys?.notes).toEqual(notes); expect(b.keys?.preset).toEqual(a.keys?.preset); expect(b.keys?.midi.id).toBe(a.keys?.midi.id)
-    const clip = b.project.clips.find((c) => c.type === 'audio' && c.bass?.role === 'keys') as AudioClip
-    expect(clip.bass?.notes).toEqual(notes); expect(clip.sample.bars).toBe(1)
-  })
-  it('rerolls Keys without changing other lanes', () => {
-    const options = { ...OPTS, keys: { ...keys, midis: [piano, { ...piano, id: 766, notes: piano.notes.map(([s, l, p, v]) => [s + 0.25, l, p, v]) as MidiItem['notes'] }] } }
-    const g = generate(LIB, options, 41); const lane = g.project.lanes.find((l) => l.name === 'Keys')!
-    const r = rerollLane(LIB, options, g, lane.id, 95)!
-    expect(r).not.toBeNull()
-    expect(r.project.clips.filter((c) => c.laneId !== lane.id)).toEqual(g.project.clips.filter((c) => c.laneId !== lane.id))
-    expect(r.keys).not.toEqual(g.keys)
-  })
-})
-
 describe('generator: reverb builds', () => {
-  const verb = { tops: true, keys: false, every: null, amount: 0.6 }
+  const verb = { tops: true, every: null, amount: 0.6 }
   const into = (g: Generation, bar: number) => g.project.clips.filter((c) => c.verb && c.start + c.length <= bar * 4 && c.start >= (bar - 2) * 4)
 
   it('washes the top loops out into every drop and break, rising to the amount where they stop', () => {
@@ -876,20 +904,6 @@ describe('generator: reverb builds', () => {
     for (const c of built) expect(windows.some(([a, z]) => c.start >= a * 4 && c.start + c.length <= z * 4)).toBe(true)
     expect(generate(LIB, { ...OPTS, verb: { ...verb, tops: false } }, 2100).project.clips.some((c) => c.verb)).toBe(false)
     expect(generate(LIB, OPTS, 2100).project.clips.some((c) => c.verb)).toBe(false)
-  })
-
-  it('builds on the keys part when asked, keeping its render', () => {
-    const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-      key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90]], favorite: 0, source: null, source_code: null }
-    const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4, bars: 2 as const }
-    const g = generate(LIB, { ...OPTS, keys, verb: { ...verb, tops: false, keys: true } }, 42)
-    const lane = g.project.lanes.find((l) => l.name === 'Keys')!.id
-    const built = g.project.clips.filter((c) => c.verb)
-    expect(built.length).toBeGreaterThan(0)
-    for (const c of built) {
-      expect(c.laneId).toBe(lane)
-      expect(c.type === 'audio' && c.bass?.role).toBe('keys')
-    }
   })
 })
 
@@ -977,17 +991,15 @@ describe('generator: disco hits', () => {
 })
 
 describe('generator: another key for the same track', () => {
-  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90]], favorite: 0, source: null, source_code: null }
-  const bassMidi: MidiItem = { ...piano, id: 766, role: 'bass', name: 'Bass', notes: [[0.5, 0.25, 41, 100], [1.5, 0.25, 41, 100]] }
+  const bassMidi: MidiItem = { id: 766, file_name: 'Bass.mid', name: 'Bass', rel_path: 'MIDI/Bass/Bass.mid', role: 'bass', bars: 1,
+    key_label: 'Am', key_camelot: null, notes: [[0.5, 0.25, 41, 100], [1.5, 0.25, 41, 100]], favorite: 0, source: null, source_code: null }
   const presets = [{ path: '/p.SerumPreset', name: 'P', folder: 'X', tags: [] }]
   const hits: HitItem[] = [{ id: 1, kind: 'disco', file_name: 'Stab Cm.wav', name: 'Stab Cm', rel_path: 'Disco Hits/stab.wav', key_label: 'Cm', key_camelot: null,
     key_source: 'name', pitch_fix: 0, duration_s: 1, channels: 2 }]
-  const opts: GenerateOptions = { ...OPTS, bass: { midis: [bassMidi], presets, favorites: [], sidechain: 0.5, octaves: { '/p.SerumPreset': -12 } },
-    keys: { midis: [piano], presets, favorites: [], sidechain: 0.4 }, disco: { hits } }
+  const opts: GenerateOptions = { ...OPTS, bass: { midis: [bassMidi], presets, favorites: [], sidechain: 0.5, octaves: { '/p.SerumPreset': -12 } }, disco: { hits } }
   const TONAL = ['fx_riser', 'fx_downlifter', 'fx_atmos', 'fx']
 
-  it('moves bass, keys and disco hits, swaps FX out of key, and leaves the drums', () => {
+  it('moves the bass and disco hits, swaps FX out of key, and leaves the drums', () => {
     let swaps = 0
     for (let i = 0; i < 15; i++) {
       const g = generate(LIB, opts, 4000 + i)
@@ -999,13 +1011,12 @@ describe('generator: another key for the same track', () => {
       const step = (b: Generation['bass']) => b!.transpose - transposeTo(b!.midi.key_label, g.key)
       expect(r.bass!.transpose - transposeTo(r.bass!.midi.key_label, to)).toBe(step(g.bass))  // the patch octave stays
       expect(step(g.bass)).toBe(-12)
-      expect(r.keys!.transpose).toBe(transposeTo(r.keys!.midi.key_label, to))
       const fits = new Set(expandCompatible([to]))
       g.project.clips.forEach((c, k) => {
         const n = r.project.clips[k]
         const s = byPath.get(c.sample.relPath)
         if (c.type === 'audio' && c.bass) {
-          expect((n as AudioClip).bass!.transpose).toBe(c.bass.role === 'keys' ? r.keys!.transpose : r.bass!.transpose)
+          expect((n as AudioClip).bass!.transpose).toBe(r.bass!.transpose)
           expect(n.sample.relPath).not.toBe(c.sample.relPath)
         } else if (c.sample.category === 'disco_hit') {
           expect(n.pitch ?? 0).toBe(hitPitch(hits[0], to))
@@ -1031,7 +1042,7 @@ describe('generator: another key for the same track', () => {
 
 describe('generator: rides from real tracks', () => {
   // Intro 32, drop 32, break 16, drop 32, outro 32 (as in "structures from real tracks"), with
-  // the keys low-passed and opening over the first 16 bars of each drop, the tops quieter in the
+  // the tops low-passed and opening over the first 16 bars of each drop and quieter in the
   // breakdown, and the whole mix thinner in the 2 bars before each drop.
   const BARS = 144
   const drops = [32, 80]
@@ -1051,28 +1062,24 @@ describe('generator: rides from real tracks', () => {
       kick: { db: series(() => 0), bright: series((b) => (into(b) ? 0.6 : 0)) },
       hats: { db: series(() => 0), bright: series((b) => (into(b) ? 0.6 : 0)) },
       bass: { db: series(() => 0), bright: series((b) => (into(b) ? 0.6 : 0)) },
-      top: { db: series((b) => (b >= 64 && b < 80 ? -10 : 0)), bright: series((b) => (into(b) ? 0.6 : 0)) },
-      music: { db: series((b) => (opening(b) != null ? -6 + opening(b)! * 0.4 : 0)),
-        bright: series((b) => (opening(b) != null ? -2.2 + opening(b)! * 0.14 : 0)) },
+      top: { db: series((b) => (opening(b) != null ? -6 + opening(b)! * 0.4 : b >= 64 && b < 80 ? -10 : 0)),
+        bright: series((b) => (into(b) ? 0.6 : opening(b) != null ? -2.2 + opening(b)! * 0.14 : 0)) },
     },
   }
-  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90]], favorite: 0, source: null, source_code: null }
-  const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4 }
-  const opts: GenerateOptions = { ...OPTS, minMinutes: 4, maxMinutes: 5, templates: [REAL], keys }
+  const opts: GenerateOptions = { ...OPTS, minMinutes: 4, maxMinutes: 5, templates: [REAL] }
   const gs = Array.from({ length: 30 }, (_, i) => generate(LIB, opts, 5000 + i))
   const lane = (g: Generation, name: string) => g.project.lanes.find((l) => l.name === name)?.id
   const at = (g: Generation, name: string, bar: number) => g.project.clips.filter((c) => c.laneId === lane(g, name) && c.start <= bar * 4 && c.start + c.length > bar * 4)
 
-  it('rides the keys open over the drops the way the reference track does', () => {
+  it('rides the tops open over the drops the way the reference track does', () => {
     const built = gs.filter((g) => g.template === 'S0042')
     expect(built.length).toBeGreaterThan(10)
     for (const g of built) {
       const d = g.sections.find((s) => s.kind === 'drop')!
-      const early = at(g, 'Keys', d.start + 1)[0]
+      const early = at(g, 'Tops', d.start + 1)[0]
       if (!early) continue
       expect(early.filter?.type).toBe('lowpass')
-      const later = at(g, 'Keys', d.start + Math.min(14, d.bars - 2))[0]
+      const later = at(g, 'Tops', d.start + Math.min(14, d.bars - 2))[0]
       const cut = (c: Clip) => (c.filter ? (c.filter.to ?? c.filter.from) : 20000)
       expect(cut(later)).toBeGreaterThan(early.filter!.from)          // opening up
       expect(early.gainDb).toBeLessThan(0)
@@ -1096,15 +1103,16 @@ describe('generator: rides from real tracks', () => {
   it('gives tracks without a reference rides from a like section of one', () => {
     const own = gs.filter((g) => !g.template)
     expect(own.length).toBeGreaterThan(0)
-    expect(own.some((g) => g.project.clips.some((c) => c.laneId === lane(g, 'Keys') && c.filter?.type === 'lowpass'))).toBe(true)
+    const ridden = (g: Generation) => g.sections.some((d) => d.kind === 'drop' && at(g, 'Tops', d.start + 1)[0]?.filter?.type === 'lowpass')
+    expect(own.some(ridden)).toBe(true)
     expect(own.some((g) => g.choices.some((c) => c.includes('after S0042')))).toBe(true)
   })
 
   it('rides the same way when another lane is made again', () => {
-    const g = gs.find((x) => x.template === 'S0042' && lane(x, 'Keys'))!
+    const g = gs.find((x) => x.template === 'S0042' && lane(x, 'Tops'))!
     const r = rerollLane(LIB, opts, g, lane(g, 'Hats')!, 3)!
-    const keysOf = (x: Generation) => x.project.clips.filter((c) => c.laneId === lane(x, 'Keys')).map(({ id: _i, ...c }) => c)
-    expect(keysOf(r)).toEqual(keysOf(g))
+    const topsOf = (x: Generation) => x.project.clips.filter((c) => c.laneId === lane(x, 'Tops')).map(({ id: _i, ...c }) => c)
+    expect(topsOf(r)).toEqual(topsOf(g))
   })
 })
 
@@ -1207,10 +1215,7 @@ describe('generator: chord stabs', () => {
     key_camelot: null, key_source: key ? 'name' : null, pitch_fix, duration_s: 0.6, channels: 2,
   })
   const STABS = [stab(1, 'Cm'), stab(2, 'F'), stab(3, 'Am', -12), stab(4, 'G'), stab(5, null)]
-  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90]], favorite: 0, source: null, source_code: null }
-  const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4 }
-  const opts: GenerateOptions = { ...OPTS, keys, stabs: { hits: STABS } }
+  const opts: GenerateOptions = { ...OPTS, stabs: { hits: STABS } }
   const gs = Array.from({ length: 60 }, (_, i) => generate(LIB, opts, 6100 + i))
   const stabLanes = (g: Generation) => g.project.lanes.filter((l) => /^Stab/.test(l.name))
   const stabClips = (g: Generation) => {
@@ -1228,19 +1233,15 @@ describe('generator: chord stabs', () => {
     return out
   }
 
-  it('plays chord stabs instead of the keys in about 2 in 3 tracks, never both', () => {
-    const withStabs = gs.filter((g) => g.rules.stabs)
-    expect(withStabs.length / gs.length).toBeGreaterThan(0.5)
-    expect(withStabs.length / gs.length).toBeLessThan(0.85)
+  it('plays chord stabs in every track while there are some, none without', () => {
     for (const g of gs) {
-      const hasKeys = g.project.lanes.some((l) => l.name === 'Keys')
-      expect(hasKeys).toBe(!g.rules.stabs)
-      expect(stabLanes(g).length > 0).toBe(!!g.rules.stabs)
-      if (g.rules.stabs) expect(g.keys).toBeNull()
+      expect(g.rules.stabs).toBe(true)
+      expect(stabLanes(g).length).toBeGreaterThan(0)
     }
-    // Only stabs: every track; keys only: none.
-    expect(Array.from({ length: 10 }, (_, i) => generate(LIB, { ...OPTS, stabs: { hits: STABS } }, 6300 + i)).every((g) => stabLanes(g).length)).toBe(true)
-    expect(Array.from({ length: 10 }, (_, i) => generate(LIB, { ...OPTS, keys }, 6300 + i)).some((g) => stabLanes(g).length)).toBe(false)
+    for (const o of [OPTS, { ...OPTS, stabs: { hits: [] } }]) {
+      const none = Array.from({ length: 10 }, (_, i) => generate(LIB, o, 6300 + i))
+      expect(none.some((g) => g.rules.stabs || stabLanes(g).length)).toBe(false)
+    }
   })
 
   it('plays one stab per track, mostly 2 hits a bar, sometimes 1 or 3', () => {
@@ -1284,7 +1285,7 @@ describe('generator: chord stabs', () => {
     expect(perBar / bars).toBeGreaterThanOrEqual(1)
   })
 
-  it('plays in the drops only, or like the keys: the same rhythm low-passed in breakdowns, or nothing there', () => {
+  it('plays in the drops only, or also in breakdowns: the same rhythm low-passed, or nothing there', () => {
     const seen = new Set<string>()
     for (const g of gs.filter((x) => x.rules.stabs)) {
       for (const s of g.sections.filter((x) => x.kind !== 'drop')) {
@@ -1306,126 +1307,23 @@ describe('generator: chord stabs', () => {
   })
 
   it('keeps the drums and the bass the same with or without stabs', () => {
-    const sig = (g: Generation) => g.project.clips.filter((c) => !/^(Stab|Keys)/.test(g.project.lanes.find((l) => l.id === c.laneId)!.name))
+    const sig = (g: Generation) => g.project.clips.filter((c) => !/^Stab/.test(g.project.lanes.find((l) => l.id === c.laneId)!.name))
       .map(({ id: _i, laneId: _l, ...c }) => c)
-    for (let i = 0; i < 15; i++) expect(sig(generate(LIB, opts, 6200 + i))).toEqual(sig(generate(LIB, { ...OPTS, keys }, 6200 + i)))
+    for (let i = 0; i < 15; i++) expect(sig(generate(LIB, opts, 6200 + i))).toEqual(sig(generate(LIB, OPTS, 6200 + i)))
   })
 
-  it('makes new stabs for a track, or stabs instead of its keys, the rest as it is', () => {
-    const rest = (g: Generation) => g.project.clips.filter((c) => !/^(Stab|Keys)/.test(g.project.lanes.find((l) => l.id === c.laneId)!.name))
+  it('makes new stabs for a track, or stabs in one without, the rest as it is', () => {
+    const rest = (g: Generation) => g.project.clips.filter((c) => !/^Stab/.test(g.project.lanes.find((l) => l.id === c.laneId)!.name))
       .map(({ id: _i, laneId: _l, ...c }) => c)
-    const withKeys = gs.find((g) => !g.rules.stabs)!
-    const r = rerollStabs(LIB, opts, withKeys, 11)!
-    expect(r.keys).toBeNull()
-    expect(r.project.lanes.some((l) => l.name === 'Keys')).toBe(false)
+    const without = generate(LIB, OPTS, 6100)
+    const r = rerollStabs(LIB, opts, without, 11)!
     expect(stabLanes(r).length).toBeGreaterThan(0)
-    expect(rest(r)).toEqual(rest(withKeys))
-    const withStabs = gs.find((g) => g.rules.stabs)!
+    expect(rest(r)).toEqual(rest(without))
+    const withStabs = gs[0]
     const again = rerollStabs(LIB, opts, withStabs, 12)!
     expect(JSON.stringify(stabClips(again).map(({ id: _i, laneId: _l, ...c }) => c)))
       .not.toBe(JSON.stringify(stabClips(withStabs).map(({ id: _i, laneId: _l, ...c }) => c)))
     expect(rest(again)).toEqual(rest(withStabs))
-  })
-
-  describe('played by Serum patches', () => {
-    const P = (n: number): SerumPreset => ({ path: `/presets/House - Chord Stabs/Stab ${n}.SerumPreset`, name: `Stab ${n}`, folder: 'House - Chord Stabs', tags: [] })
-    const presets = [P(1), P(2), P(3), P(4)]
-    const only = Array.from({ length: 20 }, (_, i) => generate(LIB, { ...OPTS, stabs: { hits: [], presets, octaves: { [P(2).path]: -12 } } }, 6400 + i))
-    const parts = (g: Generation) => g.project.clips.filter((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab')
-    const pc = (n: number) => ((n % 12) + 12) % 12
-
-    it("renders each patch's turns in the rhythm as the track key's seventh chord, a 2-bar loop", () => {
-      for (const g of only) {
-        expect(stabLanes(g).length).toBeGreaterThan(0)
-        expect(parts(g).length).toBeGreaterThan(0)
-        const k = /^([A-G]#?)(m?)$/.exec(g.key ?? 'Cm')!
-        const root = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].indexOf(k[1])
-        const chord = new Set((k[2] ? [0, 3, 7, 10] : [0, 4, 7, 11]).map((x) => pc(root + x)))
-        const rhythm = g.rules.stabRhythm as number[][]
-        const starts = new Set<number>()
-        for (const c of parts(g)) {
-          const b = c.bass!
-          expect(b.bars).toBe(2)
-          expect(b.keyLabel).toBe(g.key)
-          expect(c.sample.relPath).toBe(bassPath(b, g.project.bpm))
-          expect(c.sample.relPath.startsWith('.drumvault/stabs/')).toBe(true)
-          expect(new Set(b.notes!.map(([, , p]) => pc(p)))).toEqual(chord)
-          expect(b.transpose).toBe(b.preset === P(2).path ? -12 : 0)
-          for (const [st] of b.notes!) starts.add(st)
-          // In phase: the loop starts on an even bar.
-          expect((c.start / 4) % 2).toBe(0)
-        }
-        // Together they play the rhythm (with three patches or fewer than the rhythm's hits, some each).
-        const want = rhythm.flatMap((bar, i) => bar.flatMap((v, j) => (v ? [i * 4 + j / 4] : [])))
-        if (stabLanes(g).length === parts(g).map((c) => c.bass!.preset).filter((x, i, a) => a.indexOf(x) === i).length) {
-          expect([...starts].sort((a, b) => a - b)).toEqual(want)
-        }
-      }
-    })
-
-    it('gives a patch that plays a chord from one key the root alone', () => {
-      const chordy = presets.map((p) => ({ ...p, chord: true }))
-      for (let i = 0; i < 10; i++) {
-        const g = generate(LIB, { ...OPTS, stabs: { hits: [], presets: chordy } }, 6450 + i)
-        const k = /^([A-G]#?)/.exec(g.key ?? 'C')![1]
-        const root = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].indexOf(k)
-        for (const c of parts(g)) {
-          const notes = c.bass!.notes!
-          expect(new Set(notes.map(([st]) => st)).size).toBe(notes.length)
-          for (const [, , p] of notes) {
-            expect(pc(p)).toBe(root)
-            expect(p).toBeGreaterThanOrEqual(48)
-            expect(p).toBeLessThan(60)
-          }
-        }
-      }
-    })
-
-    it("plays a patch's own chord (from its clip player) on the steps, from the key's root", () => {
-      const PIANO = [-12, 0, 10, 12, 14, 15, 19]                  // a spread minor 9 from C
-      const own = presets.map((p) => ({ ...p, voicing: PIANO }))
-      for (let i = 0; i < 8; i++) {
-        const g = generate(LIB, { ...OPTS, stabs: { hits: [], presets: own } }, 6460 + i)
-        const k = /^([A-G]#?)(m?)$/.exec(g.key ?? 'Cm')!
-        // Its third is minor: in a major key it plays from the relative minor's root.
-        const r = pc(['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].indexOf(k[1]) + (k[2] ? 0 : -3))
-        const root = 60 + (r > 5 ? r - 12 : r)
-        for (const c of parts(g)) {
-          expect(c.bass!.stab).toEqual({ voicing: PIANO })
-          const byStart = new Map<number, number[]>()
-          for (const [st, , p] of c.bass!.notes!) byStart.set(st, [...(byStart.get(st) ?? []), p])
-          for (const ps of byStart.values()) expect(ps.sort((a, b) => a - b)).toEqual(PIANO.map((v) => root + v))
-        }
-        // Another key: the same chord from its root.
-        const moved = changeKey(LIB, { ...OPTS, stabs: { hits: [], presets: own } }, g, 'F#m', 1)
-        for (const c of parts(moved)) {
-          expect(c.bass!.stab).toEqual({ voicing: PIANO })
-          expect(Math.min(...c.bass!.notes!.map(([, , p]) => p))).toBe(54 - 12)
-        }
-      }
-    })
-
-    it('draws each stab from the samples and the patches together', () => {
-      const mixed = Array.from({ length: 40 }, (_, i) => generate(LIB, { ...OPTS, stabs: { hits: STABS, presets } }, 6500 + i))
-      const kinds = mixed.flatMap((g) => stabLanes(g).map((l) => (g.project.clips.find((c) => c.laneId === l.id)?.type)))
-      expect(kinds).toContain('audio')
-      expect(kinds).toContain('pattern')
-    })
-
-    it('moves patch stabs into another key, and makes new ones', () => {
-      const g = only.find((x) => x.key && x.key !== 'Dm' && parts(x).length)!
-      const moved = changeKey(LIB, { ...OPTS, stabs: { hits: [], presets } }, g, 'Dm', 1)
-      for (const [a, b] of parts(g).map((c, i) => [c, parts(moved)[i]] as const)) {
-        // The same rhythm and octave, D minor's seventh chord.
-        expect(b.bass!.transpose).toBe(a.bass!.transpose)
-        expect(b.bass!.keyLabel).toBe('Dm')
-        expect(new Set(b.bass!.notes!.map(([, , p]) => pc(p)))).toEqual(new Set([2, 5, 9, 0]))
-        expect(b.bass!.notes!.map(([st]) => st)).toEqual(a.bass!.notes!.map(([st]) => st))
-        expect(b.sample.relPath).toBe(bassPath(b.bass!, moved.project.bpm))
-      }
-      const r = rerollStabs(LIB, { ...OPTS, stabs: { hits: [], presets } }, g, 5)!
-      expect(new Set(parts(r).map((c) => c.bass!.preset))).not.toEqual(new Set(parts(g).map((c) => c.bass!.preset)))
-    })
   })
 
   describe('rhythms from the step sequencer', () => {
@@ -1478,23 +1376,6 @@ describe('generator: chord stabs', () => {
         .map(({ id: _i, laneId: _l, ...c }) => c)
       expect(rest(e)).toEqual(rest(g))
       expect(new Set(stabClips(e).map((c) => c.sample.relPath))).toEqual(new Set(stabClips(g).map((c) => c.sample.relPath)))
-      // A patch gets its notes where the steps are.
-      const P: SerumPreset = { path: '/p/Stab.SerumPreset', name: 'Stab', folder: 'x', tags: [] }
-      const po: GenerateOptions = { ...OPTS, stabs: { hits: [], presets: [P] } }
-      const pg = generate(LIB, po, 6700)
-      const pe = setStabRhythm(LIB, po, pg, rhythm)!
-      const part = pe.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab')!
-      expect([...new Set(part.bass!.notes!.map(([st]) => st))].sort((a, b) => a - b)).toEqual([1.5, 3.5, 4.75])
-      expect(part.bass!.bars).toBe(2)
-      // Only the steps change: the same chord, patch and octave (even when the patch would get another chord now).
-      const before = pg.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab')!
-      const chordAt = (ns: [number, number, number, number][], st: number) => ns.filter(([x]) => x === st).map(([, , p]) => p).sort()
-      const first = Math.min(...before.bass!.notes!.map(([st]) => st))
-      const was = chordAt(before.bass!.notes!, first)
-      const now = setStabRhythm(LIB, { ...OPTS, stabs: { hits: [], presets: [{ ...P, voicing: [0, 7, 15] }] } }, pg, rhythm)!
-      const np = now.project.clips.find((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'stab')!
-      for (const st of [1.5, 3.5, 4.75]) expect(chordAt(np.bass!.notes!, st)).toEqual(was)
-      expect({ ...np.bass, notes: undefined, bars: undefined }).toEqual({ ...before.bass, notes: undefined, bars: undefined })
     })
   })
 
@@ -1505,14 +1386,11 @@ describe('generator: chord stabs', () => {
   })
 })
 
-describe('generator: changing a made track (choices, a new sound, keys instead of stabs)', () => {
+describe('generator: changing a made track (choices, a new sound)', () => {
   const ALL = LANES.map((l) => l.role)
   /** A lane's clips without ids, by lane name. */
   const lanesOf = (g: Generation) => Object.fromEntries(g.project.lanes.map((l) => [l.name,
     g.project.clips.filter((c) => c.laneId === l.id).map(({ id: _i, laneId: _l, ...c }) => c)]))
-  const piano: MidiItem = { id: 765, file_name: 'Piano.mid', name: 'Piano', rel_path: 'MIDI/Keys/Piano.mid', role: 'keys', bars: 1,
-    key_label: 'Am', key_camelot: null, notes: [[0, 1.5, 57, 100], [0, 1.5, 60, 90], [0, 1.5, 64, 90]], favorite: 0, source: null, source_code: null }
-  const keys = { midis: [piano], presets: [{ path: '/piano.SerumPreset', name: 'Piano', folder: 'Keys', tags: [] }], favorites: [], sidechain: 0.4 }
 
   it('makes the same track again from where its RNG was, a rule set to what it was', () => {
     for (const g of gens.slice(0, 25)) {
@@ -1575,7 +1453,8 @@ describe('generator: changing a made track (choices, a new sound, keys instead o
         expect(at(g, name, intro.start, intro.start + 8)).toBe(false)
         expect(at(g, name, outro.start + outro.bars - 8, outro.start + outro.bars)).toBe(false)
       }
-      const off = setTrackRule(LIB, OPTS, setTrackRule(LIB, OPTS, g, 'ioClaps', false, ['clap']), 'ioPerc', false, ['perc'])
+      const noLift = setTrackRule(LIB, OPTS, g, 'ioLift', false, ['clap', 'perc'])
+      const off = setTrackRule(LIB, OPTS, setTrackRule(LIB, OPTS, noLift, 'ioClaps', false, ['clap']), 'ioPerc', false, ['perc'])
       for (const name of ['Clap', 'Perc']) {
         expect(at(off, name, intro.start, intro.start + intro.bars)).toBe(false)
         expect(at(off, name, outro.start, outro.start + outro.bars)).toBe(false)
@@ -1595,16 +1474,19 @@ describe('generator: changing a made track (choices, a new sound, keys instead o
     expect(r.picks.clap?.rel_path).toBe(rolled.picks.clap?.rel_path)
   })
 
-  it('keeps the bass and keys parts exactly as they play now when a choice remakes their lanes', () => {
-    const opts: GenerateOptions = { ...OPTS, keys }
+  it('keeps the bass part exactly as it plays now when a choice remakes its lane', () => {
+    const line: MidiItem = { id: 766, file_name: 'Bass.mid', name: 'Bass', rel_path: 'MIDI/Bass/Bass.mid', role: 'bass', bars: 1,
+      key_label: 'Am', key_camelot: null, notes: [[0.5, 0.25, 45, 100], [1.5, 0.25, 45, 100]], favorite: 0, source: null, source_code: null }
+    const bass = { midis: [line], presets: [{ path: '/bass.SerumPreset', name: 'Bass', folder: 'Bass', tags: [] }], favorites: [], sidechain: 0.5 }
+    const opts: GenerateOptions = { ...OPTS, bass }
     const g = generate(LIB, opts, 7301)
-    g.keys = { ...g.keys!, transpose: g.keys!.transpose + 12 }
-    for (const c of g.project.clips) if (c.type === 'audio' && c.bass?.role === 'keys') c.bass = { ...c.bass, transpose: g.keys.transpose }
-    const value = g.rules.keysBreaks === 'none' ? 'filtered' : 'none'
-    const r = setTrackRule(LIB, opts, g, 'keysBreaks', value, ['keys'])
-    const parts = r.project.clips.filter((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'keys')
+    g.bass = { ...g.bass!, transpose: g.bass!.transpose + 12 }
+    for (const c of g.project.clips) if (c.type === 'audio' && c.bass) c.bass = { ...c.bass, transpose: g.bass.transpose }
+    const value = g.rules.bassBreaks === 'none' ? 'filtered' : 'none'
+    const r = setTrackRule(LIB, opts, g, 'bassBreaks', value, ['bass'])
+    const parts = r.project.clips.filter((c): c is AudioClip => c.type === 'audio' && !!c.bass)
     expect(parts.length).toBeGreaterThan(0)
-    for (const c of parts) expect(c.bass!.transpose).toBe(g.keys.transpose)
+    for (const c of parts) expect(c.bass!.transpose).toBe(g.bass.transpose)
   })
 
   it('locks choices for every track', () => {
@@ -1645,22 +1527,6 @@ describe('generator: changing a made track (choices, a new sound, keys instead o
       })
       expect(r.project.clips.filter((c) => c.laneId !== id)).toEqual(g.project.clips.filter((c) => c.laneId !== id))
     }
-  })
-
-  it('plays keys instead of chord stabs, going with the bass, the rest as it is', () => {
-    const stab: HitItem = { id: 1, kind: 'stab', file_name: 'Organ.wav', name: 'Organ', rel_path: 'Chord Stabs/organ.wav', key_label: 'Cm',
-      key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 0.6, channels: 2 }
-    const opts: GenerateOptions = { ...OPTS, keys, stabs: { hits: [stab] } }
-    const g = Array.from({ length: 20 }, (_, i) => generate(LIB, opts, 9100 + i)).find((x) => x.rules.stabs)!
-    const r = rerollKeys(LIB, opts, g, 3)!
-    expect(r.keys).not.toBeNull()
-    expect(r.rules.stabs).toBe(false)
-    expect(r.project.lanes.some((l) => l.name === 'Stab')).toBe(false)
-    expect(r.project.lanes.some((l) => l.name === 'Keys')).toBe(true)
-    const rest = (x: Generation) => Object.fromEntries(Object.entries(lanesOf(x)).filter(([n]) => n !== 'Keys' && n !== 'Stab'))
-    expect(rest(r)).toEqual(rest(g))
-    const roles: Role[] = r.project.lanes.map((l) => laneRole(l.name)!).filter(Boolean)
-    expect(roles).toContain('keys')
   })
 })
 
@@ -1807,5 +1673,241 @@ describe('generator: the mix balance', () => {
       // (Levels are in half-dB steps.)
       expect(Math.abs(heard(x, 'Hats') - heard(x, 'Kick') - (heard(g, 'Hats') - heard(g, 'Kick')))).toBeLessThanOrEqual(0.51)
     }
+  })
+})
+
+describe('generator: drones', () => {
+  const droneHit = (id: number, key: string, name: string): HitItem => ({ id, kind: 'drone', file_name: `${name} ${key}.wav`, name,
+    rel_path: `Drones/${name.toLowerCase()}.wav`, key_label: key, key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 12, channels: 2 })
+  const HITS = [droneHit(41, 'Am', 'Air'), droneHit(42, 'F', 'Choir'), droneHit(43, 'Dm', 'Strings')]
+  const opts: GenerateOptions = { ...OPTS, drones: { hits: HITS, sidechain: 0.7 } }
+  const gs = Array.from({ length: 80 }, (_, i) => generate(LIB, opts, 7700 + i))
+  const droneClips = (g: Generation) => g.project.clips.filter((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'drone')
+  const withDrone = gs.filter((g) => g.picks.drone)
+  const hitOf = (g: Generation) => HITS.find((h) => h.rel_path === droneClips(g)[0].bass!.preset)!
+
+  it('runs a drone under some tracks, from the Drones page samples, with a random stream of its own', () => {
+    expect(withDrone.length).toBeGreaterThan(gs.length * 0.4)
+    expect(withDrone.length).toBeLessThan(gs.length * 0.9)
+    expect(generate(LIB, OPTS, 7700).project.lanes.some((l) => l.name === 'Drone')).toBe(false)
+    expect(generate(LIB, { ...OPTS, drones: { hits: [] } }, 7700).project.lanes.some((l) => l.name === 'Drone')).toBe(false)
+    // The rest of the track is the same with or without drones.
+    for (const g of gs.slice(0, 12)) {
+      const bare = generate(LIB, OPTS, g.seed)
+      const others = (x: Generation) => strip({ ...x, project: { ...x.project, clips: x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'drone')) } })
+      expect(others(g)).toBe(others(bare))
+    }
+  })
+
+  it('plays it in the drops, all through, or between the intro and the outro', () => {
+    const seen = new Set<string>()
+    for (const g of withDrone) {
+      seen.add(String(g.rules.droneAt))
+      const intro = g.sections[0]
+      const outro = g.sections.at(-1)!
+      const mid = (s: Generation['sections'][number]) => (s.start + s.bars / 2) * 4
+      for (const d of g.sections.filter((s) => s.kind === 'drop')) expect(covers(g, 'Drone', mid(d))).toBe(true)
+      if (g.rules.droneAt === 'all') {
+        expect(covers(g, 'Drone', 0)).toBe(true)
+        expect(covers(g, 'Drone', mid(outro))).toBe(true)
+      } else {
+        expect(covers(g, 'Drone', mid(intro))).toBe(false)
+        expect(covers(g, 'Drone', mid(outro))).toBe(false)
+      }
+      if (g.rules.droneAt === 'inner') expect(covers(g, 'Drone', (intro.start + intro.bars) * 4)).toBe(true)
+      if (g.rules.droneAt === 'drops') for (const b of g.sections.filter((s) => s.kind === 'break')) expect(covers(g, 'Drone', mid(b))).toBe(false)
+      // Ducking under the kick, by the module's sidechain.
+      expect(g.project.lanes.find((l) => l.name === 'Drone')!.duck).toBe(0.7)
+      expect(g.choices.some((c) => c.startsWith('drone from '))).toBe(true)
+    }
+    expect([...seen].sort()).toEqual(['all', 'drops', 'inner'])
+  })
+
+  it('takes the sample its own way per track: in the key, an octave, a warp, a start, sometimes a rhythm', () => {
+    const rhythms = new Set<string>()
+    const warps = new Set<string>()
+    const octaves = new Set<number>()
+    const starts = new Set<number>()
+    for (const g of withDrone) {
+      const cs = droneClips(g)
+      const r = cs[0].bass!
+      expect(cs.every((c) => JSON.stringify(c.bass) === JSON.stringify(r))).toBe(true)  // one drone, one render
+      expect(r.preset.startsWith('Drones/')).toBe(true)  // a sample, never a Serum patch
+      expect(r.notes).toBeUndefined()
+      expect(r.transpose).toBe(Math.max(-24, Math.min(24, hitPitch(hitOf(g), g.key) + Number(g.rules.droneOctave))))
+      expect(r.drone).toEqual({ rhythm: g.rules.droneRhythm, warp: g.rules.droneWarp, start: g.rules.droneStart })
+      expect(cs[0].sample.relPath).toBe(bassPath(r, g.project.bpm))
+      expect(cs[0].sample.relPath.startsWith('.drumvault/drones/')).toBe(true)
+      rhythms.add(r.drone!.rhythm)
+      warps.add(r.drone!.warp!)
+      octaves.add(Number(g.rules.droneOctave))
+      starts.add(r.drone!.start!)
+    }
+    expect(rhythms.size).toBeGreaterThanOrEqual(5)
+    expect([...warps].sort()).toEqual(['none', 'reverse', 'slow2', 'slow4'])
+    expect([...octaves].sort((a, b) => a - b)).toEqual([-12, 0, 12])
+    expect(starts.size).toBeGreaterThan(withDrone.length / 2)
+    // Mostly just the sidechain pump: a rhythm is the exception.
+    expect(withDrone.filter((g) => g.rules.droneRhythm === 'pump').length).toBeGreaterThan(withDrone.length * 0.25)
+  })
+
+  it('makes a new drone, or another sample for it where it plays, the rest as it is', () => {
+    const none = gs.find((g) => !g.picks.drone)!
+    const added = rerollDrone(LIB, opts, none, 5)!
+    expect(added.picks.drone).toBeTruthy()
+    expect(droneClips(added).length).toBeGreaterThan(0)
+    const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'drone')).map(({ id: _i, laneId: _l, ...c }) => c))
+    expect(rest(added)).toBe(rest(none))
+    const g = withDrone[0]
+    const other = newDroneSound(LIB, opts, g, 9)!
+    expect(other.picks.drone!.id).not.toBe(g.picks.drone!.id)
+    for (const r of ['droneAt', 'droneRhythm', 'droneWarp', 'droneOctave', 'droneStart']) expect(other.rules[r]).toBe(g.rules[r])
+    expect(rest(other)).toBe(rest(g))
+  })
+
+  it('moves the drone into another key, keeping its octave', () => {
+    const g = withDrone.find((x) => Number(x.rules.droneOctave) !== 0) ?? withDrone[0]
+    const to = g.key === 'Dm' ? 'F' : 'Dm'
+    const r = changeKey(LIB, opts, g, to, 3)
+    const b = droneClips(r)[0].bass!
+    expect(b.keyLabel).toBe(to)
+    expect(b.transpose).toBe(Math.max(-24, Math.min(24, hitPitch(hitOf(g), to) + Number(g.rules.droneOctave))))
+    expect(droneClips(r)[0].sample.relPath).toBe(bassPath(b, r.project.bpm))
+  })
+})
+
+describe('generator: vocals', () => {
+  const take = (id: string, key: string, used: string[] = []): VocalTake => ({
+    id, lines: ['Hold on to me'], voice: 'female', mood: 'gospel', bpm: 124, key, seconds: 25, createdAt: '2026-11-02T00:00:00Z',
+    source: 'elevenlabs', model: 'music_v1', format: 'mp3_44100_128', headers: {}, credits: null, take: `Vocals/${id}/take.mp3`,
+    vocal: `Vocals/${id}/vocal.wav`, stems: [], durationS: 25, keyHeard: key, usedIn: used,
+    analysis: {
+      key, bpm: 124,
+      phrases: [{ path: `Vocals/${id}/phrases/phrase-2bars.wav`, bars: 2, period_s: 3.87, stretch: 1 }, { path: `Vocals/${id}/phrases/phrase-8bars.wav`, bars: 8, period_s: 15.5, stretch: 1 }],
+      chops: [{ path: `Vocals/${id}/chops/chop-01.wav`, note: 64, seconds: 0.3, energy_db: -20 }, { path: `Vocals/${id}/chops/chop-02.wav`, note: 67.2, seconds: 0.25, energy_db: -22 }],
+    },
+  })
+  const TAKES = [take('a', 'Em'), take('b', 'Am'), take('c', 'C', ['Generated 03'])]
+  const opts: GenerateOptions = { ...OPTS, vocals: { takes: TAKES } }
+  const gs = Array.from({ length: 60 }, (_, i) => generate(LIB, opts, 8800 + i))
+  const on = (g: Generation, name: string) => g.project.clips.filter((c) => c.laneId === laneOf(g, name))
+
+  it('sings a vocal in every track, with a random stream of its own', () => {
+    for (const g of gs) {
+      expect(g.picks.vocal).toBeTruthy()
+      expect(on(g, 'Vocal').length + on(g, 'Vocal Chops').length).toBeGreaterThan(0)
+    }
+    expect(generate(LIB, OPTS, 8800).project.lanes.some((l) => l.name === 'Vocal' || l.name === 'Vocal Chops')).toBe(false)
+    const voc = (c: Clip) => c.sample.relPath.startsWith('Vocals/') || c.sample.relPath.startsWith('.drumvault/vocals/')
+    for (const g of gs.slice(0, 10)) {
+      const bare = generate(LIB, OPTS, g.seed)
+      const others = (x: Generation) => strip({ ...x, project: { ...x.project, clips: x.project.clips.filter((c) => !voc(c)) } })
+      expect(others(g)).toBe(others(bare))
+    }
+  })
+
+  it('takes a vocal no export has used yet while there is one', () => {
+    for (const g of gs) expect(g.picks.vocal!.rel_path).not.toBe('Vocals/c/vocal.wav')
+  })
+
+  it('moves the phrase into the track key and the chops onto its chord tones, never in the intro or outro', () => {
+    const uses = new Set<string>()
+    for (const g of gs) {
+      uses.add(String(g.rules.vocalUse))
+      const intro = g.sections[0]
+      const outro = g.sections.at(-1)!
+      for (const c of [...on(g, 'Vocal'), ...on(g, 'Vocal Chops')]) {
+        expect(c.start).toBeGreaterThanOrEqual((intro.start + intro.bars) * 4)
+        expect(c.start).toBeLessThan(outro.start * 4)
+      }
+      for (const c of on(g, 'Vocal') as AudioClip[]) {
+        const t = TAKES.find((x) => x.id === c.bass!.vocal!.take)!
+        expect(c.bass!.role).toBe('vocal')
+        expect(c.bass!.transpose).toBe(Math.max(-12, Math.min(12, transposeTo(t.analysis.key, g.key))))
+        expect(c.sample.relPath).toBe(bassPath(c.bass!, g.project.bpm))
+        expect([2, 8]).toContain(c.bass!.bars)
+      }
+      const k = parseKey(g.key)!
+      const tones = [0, k.minor ? 3 : 4, 7].map((iv) => (k.root + iv) % 12)
+      for (const c of on(g, 'Vocal Chops') as PatternClip[]) {
+        const chop = TAKES.flatMap((t) => t.analysis.chops).find((x) => x.path === c.sample.relPath)!
+        expect(tones).toContain((((Math.round(chop.note) + (c.pitch ?? 0)) % 12) + 12) % 12)
+      }
+      // Phrase and chops together: the chops take each drop's first half, the phrase its second.
+      if (g.rules.vocalUse === 'both' && g.rules.vocalAt !== 'breaks') {
+        for (const d of g.sections.filter((x) => x.kind === 'drop' && x.bars >= 16)) {
+          const half = d.start + Math.floor(d.bars / 2 / 8) * 8
+          expect(on(g, 'Vocal').some((c) => c.start === half * 4)).toBe(true)
+          expect(on(g, 'Vocal Chops').every((c) => c.start + c.length <= half * 4 || c.start >= (d.start + d.bars) * 4 || c.start < d.start * 4)).toBe(true)
+        }
+      }
+    }
+    expect([...uses].sort()).toEqual(['both', 'chops', 'phrase'])
+  })
+
+  it('moves the vocal into another key, and makes a new vocal with the rest as it is', () => {
+    const g = gs.find((x) => on(x, 'Vocal').length && on(x, 'Vocal Chops').length)!
+    const to = g.key === 'Dm' ? 'F' : 'Dm'
+    const r = changeKey(LIB, opts, g, to, 3)
+    for (const c of on(r, 'Vocal') as AudioClip[]) expect(c.bass!.transpose).toBe(Math.max(-12, Math.min(12, transposeTo(c.bass!.vocal!.key, to))))
+    const n = rerollVocal(LIB, opts, g, 4)!
+    const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !c.sample.relPath.startsWith('Vocals/') && !c.sample.relPath.startsWith('.drumvault/vocals/')).map(({ id: _i, laneId: _l, ...c }) => c))
+    expect(rest(n)).toBe(rest(g))
+    expect(on(n, 'Vocal').length + on(n, 'Vocal Chops').length).toBeGreaterThan(0)
+  })
+
+  it('sings the take made for a track in Arrange, the rest as it is, even once it is exported', () => {
+    const voc = (c: Clip) => c.sample.relPath.startsWith('Vocals/') || c.sample.relPath.startsWith('.drumvault/vocals/')
+    const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !voc(c)).map(({ id: _i, laneId: _l, ...c }) => c))
+    for (const made of [take('d', 'Fm'), take('e', 'G', ['Generated 07'])]) {
+      const bare = generate(LIB, OPTS, 8900)
+      const n = rerollVocal(LIB, { ...OPTS, vocals: { takes: [made] } }, bare, 5)!
+      expect(n.picks.vocal!.rel_path).toBe(`Vocals/${made.id}/vocal.wav`)
+      expect(on(n, 'Vocal').length + on(n, 'Vocal Chops').length).toBeGreaterThan(0)
+      expect(rest(n)).toBe(rest(bare))
+    }
+  })
+})
+
+describe('bassy hits and impacts', () => {
+  /** A tone (24 bands, dB against the total) with `low` dB in the bands under 100 Hz and `rest` above. */
+  const tone = (low: number, rest: number) => Array.from({ length: 24 }, (_, i) => (i < 4 ? low : rest))
+  const impactsOf = (g: Generation) => g.project.clips.filter((c) => byPath.get(c.sample.relPath)?.category === 'fx_impact')
+  const kickAt = (g: Generation, bar: number) => Array.from({ length: 16 }, (_, k) => bar * 16 + k).some((t) => hitAt(g, 'Kick', t) > 0)
+    || clipsOn(g, 'Build-up').some((c) => c.type === 'pattern' && byPath.get(c.sample.relPath)?.category === 'kick' && c.start <= bar * 4 && c.start + c.length > bar * 4)
+
+  it('measures the low end: an impact with most of its power under 100 Hz is bassy, one not measured counts as bassy', () => {
+    expect(bassy({ category: 'fx_impact', tone: tone(-3, -25) })).toBe(true)
+    expect(bassy({ category: 'fx_impact', tone: tone(-40, -12) })).toBe(false)
+    expect(bassy({ category: 'fx_downlifter', tone: tone(-40, -12) })).toBe(false)
+    expect(bassy({ category: 'fx_impact', tone: null })).toBe(true)
+    expect(bassy({ category: 'fx_downlifter', tone: null })).toBe(false)
+  })
+
+  it('never plays one on a drop: it opens breakdowns and build-ups where no kick plays under it', () => {
+    let placed = 0
+    for (const g of gens) {
+      const drops = new Set(g.sections.filter((s) => s.kind === 'drop').map((s) => s.start * 4))
+      const opens = new Set(g.sections.filter((s) => s.kind === 'break' || s.kind === 'build').map((s) => s.start * 4))
+      for (const c of impactsOf(g)) {
+        placed++
+        expect(drops.has(c.start)).toBe(false)
+        expect(opens.has(c.start)).toBe(true)
+        expect(kickAt(g, c.start / 4)).toBe(false)
+      }
+    }
+    expect(placed).toBeGreaterThan(20)
+  })
+
+  it('lets an impact without much bass hit the drops as before', () => {
+    const lib = LIB.map((s) => (s.category === 'fx_impact' ? { ...s, tone: tone(-40, -12) } : s))
+    const at = new Map(lib.map((s) => [s.rel_path, s]))
+    let onDrops = 0
+    for (let i = 0; i < 40; i++) {
+      const g = generate(lib, OPTS, 1000 + i)
+      const drops = new Set(g.sections.filter((s) => s.kind === 'drop').map((s) => s.start * 4))
+      onDrops += g.project.clips.filter((c) => at.get(c.sample.relPath)?.category === 'fx_impact' && drops.has(c.start)).length
+    }
+    expect(onDrops).toBeGreaterThan(10)
   })
 })

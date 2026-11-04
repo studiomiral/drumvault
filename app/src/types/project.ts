@@ -33,6 +33,23 @@ export interface Lane {
    * place in the balance, on top of `volumeDb` (the slider stays the producer's).
    */
   levelDb?: number
+  /** The lane's EQ in the generated mix (SCOPE.md §6.6), in playback and baked into its stem. */
+  eq?: LaneEq
+}
+
+/** One band of a lane EQ (Web Audio biquads: a high-pass's Q in dB, a bell's as is; shelves have none). */
+export interface EqBand {
+  type: 'highpass' | 'lowshelf' | 'peaking' | 'highshelf'
+  freq: number
+  gainDb: number
+  q: number
+}
+
+/** A lane EQ: its bands, the makeup gain that keeps the lane as loud as without them, and off (bypassed). */
+export interface LaneEq {
+  bands: EqBand[]
+  gainDb: number
+  off?: boolean
 }
 
 /**
@@ -79,10 +96,13 @@ interface ClipBase {
 
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
-  /** Absent on older bass projects. Keys and Serum chord stabs (§6.9) share the render pipeline. */
-  role?: 'bass' | 'keys' | 'stab'
+  /**
+   * Absent on older bass projects. Drones (§6.10) and vocal phrases (§6.11) share the render
+   * pipeline; keys parts and Serum chord stabs only in tracks made before they were removed.
+   */
+  role?: 'bass' | 'keys' | 'stab' | 'drone' | 'vocal'
   keyLabel?: string | null
-  /** Absolute path of the .SerumPreset. */
+  /** Absolute path of the .SerumPreset; a drone's may be a Drones page sample (library-relative). */
   preset: string
   presetName: string
   midiId: number
@@ -97,9 +117,18 @@ export interface BassRender {
   bars?: number
   /** The track's groove: per 16th step, how late (in 16ths) notes starting there play. */
   groove?: number[]
-  /** A chord stab part: the patch's own chord (semitones from the root), or its root alone (a patch that plays a chord from one key). */
+  /** An older track's Serum chord stab part: the patch's own chord (semitones from the root), or its root alone. */
   stab?: { voicing?: number[]; oneKey?: boolean }
+  /** A drone: its rhythm, warp and where in the sample it starts (the engine washes it into a loop, drone.py). */
+  drone?: { rhythm: DroneRhythm; warp?: DroneWarp; start?: number }
+  /** A vocal phrase: the key it's sung in (`transpose` moves it from there) and its take's id. */
+  vocal?: { key: string | null; take: string }
 }
+
+/** A drone's rhythm: the sidechain alone, a soft 8th, 16th or dotted-8th gate, swells up to every offbeat, or chopped 16ths. */
+export type DroneRhythm = 'pump' | 'gate8' | 'gate16' | 'swell' | 'dotted' | 'chop'
+/** A drone's warp: as it is, 2× or 4× slower with its pitch kept, or reversed. */
+export type DroneWarp = 'none' | 'slow2' | 'slow4' | 'reverse'
 
 /** A loop on the bar grid; extending it repeats the loop. */
 export interface AudioClip extends ClipBase {
@@ -162,8 +191,8 @@ export interface Project {
   createdAt: string
   updatedAt: string
   /**
-   * A project sent from Generate: the track it was made as (structure, key, rules, picks, bass
-   * and keys), so its lanes keep their modules in Arrange: a new sound, the lane made again.
+   * A project sent from Generate: the track it was made as (structure, key, rules, picks, bass),
+   * so its lanes keep their modules in Arrange: a new sound, the lane made again.
    */
   generation?: GenerationMeta
 }

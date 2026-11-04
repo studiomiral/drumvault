@@ -3,7 +3,6 @@ import { api } from '../api'
 import { audition } from '../audio/audition'
 import { IconDrop, IconPlay, IconStop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
-import { SerumFolders } from '../components/SerumFolders'
 import { hitSampleId } from '../generate/disco'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -27,15 +26,23 @@ const TEXT = {
     title: 'Chord Stabs', one: 'chord stab', many: 'chord stabs', empty: 'Drop your chord stabs here: organ, piano, synth and string stabs.',
     drop: 'Drop chord stabs: audio files, folders or zips',
     about: 'One chord per file, trimmed and copied into the library. The key comes from the file name ("Organ Stab Cm7", '
-      + '"Stab_F#_maj"), else from the sound. Most generated tracks play two or three of them instead of the keys, in a '
-      + 'funky rhythm, moved into the track key; if one sounds off, fix the key here or the pitch in Generate.',
+      + '"Stab_F#_maj"), else from the sound. Every generated track plays one of them in a funky rhythm, moved into '
+      + 'the track key; if one sounds off, fix the key here or the pitch in Generate.',
+  },
+  drone: {
+    title: 'Drones', one: 'drone', many: 'drones', empty: 'Drop your drones here: pads, ambiences, sustained textures.',
+    drop: 'Drop drones: audio files, folders or zips',
+    about: 'Sustained sounds with a key: pads, ambiences, held vocal or string textures (up to a minute each). The key comes '
+      + 'from the file name ("Dark Drone Am"), else from the sound. Generate moves a drone into the track key (sometimes an '
+      + 'octave), warps it its own way per track (slowed down or reversed, from another part of the sound), washes it in '
+      + 'reverb and loops it, sometimes with a rhythm, under the sidechain.',
   },
 }
 
 /**
  * Samples → Disco Hits (SCOPE.md §6.8): stabs, brass hits and the like. Generate drops one or
  * two of them on the 1 at key moments of some tracks, moved into the track key. Samples → Chord
- * Stabs (§6.9) is the same page for the chord stabs most tracks play instead of the keys.
+ * Stabs (§6.9) is the same page for the chord stabs every track plays.
  */
 export function HitsView({ kind }: { kind: HitItem['kind'] }) {
   const { libraryVersion, engine, toast } = useApp()
@@ -121,8 +128,6 @@ export function HitsView({ kind }: { kind: HitItem['kind'] }) {
             <span className="block mt-1 text-[12px] text-muted">{t.about}</span>
           </span>
         </button>
-
-        {kind === 'stab' && <SerumFolders module="stabs" />}
 
         {loaded && !hits.length ? (
           <Empty title={`No ${t.many} yet`}>{t.empty}</Empty>

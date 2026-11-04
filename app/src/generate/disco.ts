@@ -36,7 +36,7 @@ export function hitSample(h: HitItem): SampleListItem {
   return {
     id: hitSampleId(h.id), rel_path: h.rel_path, name: h.name, kind: 'oneshot', category: stab ? 'chord_stab' : 'disco_hit',
     bpm: null, bars: null, body_bars: null, key_label: h.key_label, key_camelot: h.key_camelot,
-    duration_s: h.duration_s, channels: h.channels, favorite: 0, rating: null, tags: null, energy_db: h.energy_db ?? null,
+    duration_s: h.duration_s, channels: h.channels, favorite: 0, rating: null, tags: null, energy_db: h.energy_db ?? null, tone: h.tone ?? null,
     zip_id: -1, source_code: stab ? 'Chord Stabs' : 'Disco Hits',
   }
 }

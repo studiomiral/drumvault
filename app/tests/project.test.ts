@@ -183,6 +183,15 @@ describe('project files', () => {
     await expect(readProjectFile(lib, '../x.dvproj')).rejects.toThrow()
     expect(projectFileName('  ')).toBe('Untitled.dvproj')
   })
+
+  it('takes saves of one project at the same time (autosave during a save): the last one wins, no temp files left', async () => {
+    const lib = mkdtempSync(join(tmpdir(), 'dv-proj-'))
+    const first = await writeProjectFile(lib, null, 'Generated 10', '{"v":0}')
+    const saves = Array.from({ length: 8 }, (_, i) => writeProjectFile(lib, first, 'Generated 10', `{"v":${i + 1}}`))
+    expect(await Promise.all(saves)).toEqual(Array(8).fill('Generated 10.dvproj'))
+    expect(readdirSync(join(lib, '.drumvault', 'projects'))).toEqual(['Generated 10.dvproj'])
+    expect(await readProjectFile(lib, first)).toMatch(/^\{"v":[1-8]\}$/)
+  })
 })
 
 describe('moving the sound inside a clip', () => {

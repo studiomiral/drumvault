@@ -10,6 +10,7 @@ in Generate when the key was read wrong.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import tempfile
 import zipfile
@@ -17,13 +18,13 @@ from pathlib import Path
 
 import numpy as np
 
-from . import key as keymod, naming, normalize, oneshots as osmod, zipio
+from . import arrangement, key as keymod, naming, normalize, oneshots as osmod, zipio
 from .audioutil import db_to_amp, k_energy_db, load, resample, write_wav
 from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs"}
+FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "drone": "Drones"}
 KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
@@ -69,8 +70,9 @@ def find_files(paths: list[str]) -> tuple[list[tuple[str, bytes, str]], list[str
     return out, warnings
 
 
-def trim_hit(data: np.ndarray, sr: int, settings: Settings) -> np.ndarray | None:
-    """From the attack to where the tail stays below peak + hit_tail_db (at most hit_max_len_s)."""
+def trim_hit(data: np.ndarray, sr: int, settings: Settings, max_len_s: float | None = None) -> np.ndarray | None:
+    """From the attack to where the tail stays below peak + hit_tail_db (at most `max_len_s`,
+    hit_max_len_s by default)."""
     th = settings.thresholds
     mono = data.mean(axis=1)
     pk = float(np.max(np.abs(mono))) if mono.size else 0.0
@@ -78,7 +80,7 @@ def trim_hit(data: np.ndarray, sr: int, settings: Settings) -> np.ndarray | None
         return None
     start = int(np.argmax(np.abs(mono) >= pk * db_to_amp(th.hit_tail_db)))
     end = min(start + osmod.tail_end(mono[start:], sr, th.hit_tail_db, th.hit_tail_hold_ms),
-              start + int(th.hit_max_len_s * sr))
+              start + int((max_len_s or th.hit_max_len_s) * sr))
     hit = np.array(data[start:max(end, start + 1)], dtype=np.float32)
     f = min(int(th.hit_fade_out_ms * sr / 1000), len(hit))
     if f > 1:
@@ -103,8 +105,8 @@ def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[s
 
 
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
-    """Add disco hits (or chord stabs) from files, folders and zips. Files already imported (on
-    either page) are skipped."""
+    """Add disco hits (or chord stabs, or drones) from files, folders and zips. Files already
+    imported (on any of the pages) are skipped. A drone keeps up to drone_max_len_s."""
     if kind not in FOLDERS:
         raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
     folder = FOLDERS[kind]
@@ -129,7 +131,7 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             except Exception as e:  # noqa: BLE001 - one bad file doesn't stop the rest
                 failed.append(f"{name}: {e}")
                 continue
-            hit = trim_hit(audio.data, audio.sr, settings)
+            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.drone_max_len_s if kind == "drone" else None)
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue
@@ -145,7 +147,8 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             hid = db.insert_hit(kind=kind, file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
                                 key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                                 key_source=source, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
-                                channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr), created_at=now_iso())
+                                channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
+                                tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())
             imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 

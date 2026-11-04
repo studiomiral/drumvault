@@ -1,3 +1,4 @@
+import { eqSummary } from '../generate/eq'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IconShuffle, IconSparkle } from '../components/icons'
@@ -137,7 +138,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
           )}
           {generated && (
             <>
-              <button title="New sound: other sounds of the same kind (another patch on Bass and Keys), the clips stay where they are"
+              <button title="New sound: other sounds of the same kind (another patch on Bass), the clips stay where they are"
                       className="w-5 h-5 rounded bg-raised text-muted hover:text-text flex items-center justify-center"
                       onClick={() => !newSound(lane.id) && toast('info', `No other sound for ${lane.name} in the library.`)}>
                 <IconShuffle className="w-3 h-3" />
@@ -169,7 +170,8 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
         {!compact && (
           <div className="flex items-center gap-1.5">
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb} reset={0}
-                       color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the generated mix's balance` : ''}`} dragging={controlDrag}
+                       color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the generated mix's balance` : ''}${
+                         lane.eq ? `; EQ ${lane.eq.off ? 'off' : eqSummary(lane.eq.bands)}` : ''}`} dragging={controlDrag}
                        onChange={(v) => set('Lane volume', { volumeDb: v }, `vol-${lane.id}`)} />
             <span className="w-11 text-right text-[10.5px] tabular-nums text-muted">{fmtDb(lane.volumeDb)}</span>
             <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}

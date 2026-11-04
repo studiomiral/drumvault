@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
-import type { AppSettings, DepsReport, EngineStatus, JobInfo } from '../types/api'
+import type { AppSettings, DepsReport, EngineStatus, JobInfo, SerumPreset } from '../types/api'
 
-export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'generate' | 'arrange' | 'settings'
+export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'drones' | 'generate' | 'arrange' | 'settings'
 
 export interface Toast {
   id: number
@@ -89,7 +89,10 @@ export const useApp = create<AppState>((set, get) => ({
 }))
 
 /** Run an API call; errors become toasts. */
-/** Serum 2's presets folder, shared by Bass, Keys and what comes (older settings: the bass one). */
+/** Serum 2's presets folder, for the Bass and what comes (older settings: the bass one). */
+/** The patches a pool plays: those whose samples are all here (Serum looks for missing ones on every load, and plays without them). */
+export const playable = (presets: SerumPreset[]) => presets.filter((p) => !p.missing)
+
 export function serumPresetRoot(): string {
   const s = useApp.getState().settings
   return s?.serumPresetRoot || s?.bass?.presetRoot || SERUM_PRESET_ROOT

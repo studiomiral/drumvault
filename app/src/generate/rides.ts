@@ -1,7 +1,7 @@
 // Rides (SCOPE.md §6.6): the producer's filter and fader moves, read bar by bar from a real track
 // (the engine's arrangement detail: each part's dB against its full level, and its brightness in
-// octaves against its full bars), and turned into clip filters and volume rides on keys, bass
-// and top loops. A track built on a real track rides like that track did; the others ride like
+// octaves against its full bars), and turned into clip filters and volume rides on the bass and
+// top loops. A track built on a real track rides like that track did; the others ride like
 // a section of the same kind of one of them.
 
 import type { TrackArrangement } from '../types/api'

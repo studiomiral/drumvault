@@ -178,16 +178,37 @@ def test_arrangement_measures_the_producers_balance():
     with_drums = arrangement.measure([("Kick", "kick", kick, 8000), ("Top", "top", hats, 8000), ("Drums", "drums", kick, 8000)],
                                      BPM, 0.0, th)
     assert with_drums["levels"]["parts"]["top"] == pytest.approx(lv["hats"], abs=0.2)
+    # Each part's tone: its bands against its total; noise is flat per Hz, so it rises with the band
+    # width (up to 4 kHz: the test stems are at 8 kHz).
+    sp = a["levels"]["spectra"]["hats"]
+    edges = np.geomspace(th.arrangement_band_lo_hz, th.arrangement_band_hi_hz, th.arrangement_bands + 1)
+    top = int(np.searchsorted(edges, 3500)) - 1
+    assert len(sp) == th.arrangement_bands and sp[top] > sp[0] + 10
+    assert 10 * np.log10(sum(10 ** (v / 10) for v in sp)) == pytest.approx(0, abs=0.2)
+
+
+def test_tone_of_a_sound():
+    from drumvault_engine.arrangement import tone
+    th = Thresholds()
+    sr = 44100
+    t = np.arange(sr) / sr
+    low = tone(np.sin(2 * np.pi * 100 * t).astype(np.float32), sr, th)
+    high = tone(np.sin(2 * np.pi * 5000 * t).astype(np.float32), sr, th)
+    edges = np.geomspace(th.arrangement_band_lo_hz, th.arrangement_band_hi_hz, th.arrangement_bands + 1)
+    assert int(np.argmax(low)) == int(np.searchsorted(edges, 100)) - 1
+    assert int(np.argmax(high)) == int(np.searchsorted(edges, 5000)) - 1
+    assert tone(np.zeros(1000, dtype=np.float32), sr, th) is None
 
 
 def test_samples_and_hits_get_their_loudness(fixtures, tmp_path):
     settings = Settings(library_path=str(tmp_path / "lib"))
     pipeline.process_zip(fixtures.zip("deep_groove"), settings)
     with LibraryDB(settings.library_path) as db:
-        rows = db.conn.execute("SELECT id, energy_db FROM samples").fetchall()
+        rows = db.conn.execute("SELECT id, energy_db, tone FROM samples").fetchall()
         assert rows and all(r["energy_db"] is not None and -60 < r["energy_db"] < 20 for r in rows)
+        assert all(len(json.loads(r["tone"])) == 24 for r in rows)
         measured = {r["id"]: r["energy_db"] for r in rows}
-        db.conn.execute("UPDATE samples SET energy_db = NULL")
+        db.conn.execute("UPDATE samples SET energy_db = NULL, tone = NULL")
         assert db.get_arrangement(1)["levels"]["parts"]["kick"] < 0
     assert pipeline.analyze_library(settings)["loudness"] == len(measured)
     with LibraryDB(settings.library_path) as db:
@@ -209,3 +230,15 @@ def test_rpc_runs_analyze_library_as_a_job(tmp_path):
     from drumvault_engine.schemas import RpcRequest
     req = RpcRequest.model_validate({"id": "1", "method": "analyze_library", "params": {"settings": {}}})
     assert req.method == "analyze_library"
+
+
+def test_arrangement_measures_stems_loaded_one_at_a_time():
+    """Stems given as loaders measure exactly as stems given as audio (a long track never sits in memory whole)."""
+    kick = _bars([0.5] * 8 + [0] * 4 + [0.5] * 8)
+    hats = _bars([0.05] * 14)          # shorter than the kick: its last bars are silent
+    th = Thresholds()
+    given = arrangement.measure([("Kick", "kick", kick, 8000), ("Hats", "hat_closed", hats, 8000)], BPM, 0.0, th)
+    loaded = []
+    lazy = arrangement.measure([("Kick", "kick", lambda: loaded.append("k") or kick, 8000),
+                                ("Hats", "hat_closed", lambda: loaded.append("h") or hats, 8000)], BPM, 0.0, th)
+    assert lazy == given and loaded == ["k", "h"]

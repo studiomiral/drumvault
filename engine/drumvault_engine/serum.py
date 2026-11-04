@@ -19,6 +19,7 @@ import logging
 import re
 import struct
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,8 @@ from .midi import Note
 log = logging.getLogger(__name__)
 
 PRESET_EXT = ".SerumPreset"
+# Plugin states kept in memory for the presets used last (SerumHost._states).
+STATE_CACHE = 8
 _B64 = ".ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+"
 _B64_INDEX = {c: i for i, c in enumerate(_B64)}
 
@@ -39,34 +42,29 @@ class SerumError(RuntimeError):
 
 # ---- containers ------------------------------------------------------------------------------
 
+_B64_CODES = np.frombuffer(_B64.encode(), dtype=np.uint8)
+_B64_VALUES = np.full(256, 255, dtype=np.uint8)
+_B64_VALUES[_B64_CODES] = np.arange(64, dtype=np.uint8)
+_SIX = (1 << np.arange(6)).astype(np.uint8)
+
+
 def juce_b64_decode(s: str) -> bytes:
-    """JUCE MemoryBlock::fromBase64Encoding: "<size>.<6-bit chars, least significant bit first>"."""
+    """JUCE MemoryBlock::fromBase64Encoding: "<size>.<6-bit chars, least significant bit first>".
+    In numpy: a preset with embedded samples is tens of MB."""
     size_s, data = s.split(".", 1)
     size = int(size_s)
-    out = bytearray(size)
-    bit = 0
-    for ch in data:
-        v = _B64_INDEX[ch]
-        for i in range(6):
-            if v >> i & 1:
-                byte, b = divmod(bit + i, 8)
-                if byte < size:
-                    out[byte] |= 1 << b
-        bit += 6
-    return bytes(out)
+    vals = _B64_VALUES[np.frombuffer(data.encode("ascii"), dtype=np.uint8)]
+    if (vals == 255).any():
+        raise SerumError("Unexpected character in a JUCE base64 block")
+    bits = ((vals[:, None] >> np.arange(6, dtype=np.uint8)) & 1).astype(np.uint8).ravel()
+    bits = np.pad(bits, (0, max(0, size * 8 - len(bits))))[:size * 8]
+    return np.packbits(bits, bitorder="little").tobytes()
 
 
 def juce_b64_encode(b: bytes) -> str:
-    bits = len(b) * 8
-    out = []
-    for pos in range(0, bits, 6):
-        v = 0
-        for i in range(6):
-            p = pos + i
-            if p < bits and b[p >> 3] >> (p & 7) & 1:
-                v |= 1 << i
-        out.append(_B64[v])
-    return f"{len(b)}." + "".join(out)
+    bits = np.unpackbits(np.frombuffer(b, dtype=np.uint8), bitorder="little")
+    bits = np.pad(bits, (0, -len(bits) % 6)).reshape(-1, 6)
+    return f"{len(b)}." + _B64_CODES[bits @ _SIX].tobytes().decode("ascii")
 
 
 def read_xfer(blob: bytes) -> tuple[dict, bytes]:
@@ -97,6 +95,9 @@ def _defaults_to_empty(x):
     if isinstance(x, dict):
         return {k: ({} if (k == "plainParams" and v == "default") else _defaults_to_empty(v)) for k, v in x.items()}
     if isinstance(x, list):
+        # Embedded audio is lists of millions of numbers: nothing to change in them.
+        if x and isinstance(x[0], (int, float)):
+            return x
         return [_defaults_to_empty(v) for v in x]
     return x
 
@@ -121,6 +122,30 @@ class SerumHost:
         self._plugin = None
         self._base: _Base | None = None
         self._lock = threading.Lock()
+        # The preset loaded now (path, mtime, sequencers): rendering it again doesn't load it again.
+        self._loaded: tuple[str, float, bool] | None = None
+        # Plugin states made from presets lately (most recent last): parts taking turns (bass,
+        # keys, a drone) don't convert theirs again; a preset with embedded samples is tens of MB.
+        self._states: OrderedDict[tuple[str, float], bytes] = OrderedDict()
+
+    def _use(self, p, preset: Path | str, sequencers: bool) -> None:
+        """Make `p` play `preset` (lock held): from Serum's init patch, so nothing of the preset
+        before it carries over; nothing to do when it already does."""
+        key = (str(preset), Path(preset).stat().st_mtime, sequencers)
+        if self._loaded == key:
+            return
+        assert self._base is not None
+        self._loaded = None
+        state = self._states.pop(key[:2], None) or self.state_for_preset(preset)
+        self._states[key[:2]] = state
+        while len(self._states) > STATE_CACHE:
+            self._states.popitem(last=False)
+        p.raw_state = self._base.init
+        p.raw_state = state
+        if not sequencers:
+            p.arp_enable = False
+            p.clip_player_enable = False
+        self._loaded = key
 
     def _load(self):
         if self._plugin is not None:
@@ -194,13 +219,8 @@ class SerumHost:
         with self._lock:
             p = self._load()
             # A preset only lists what differs from Serum's defaults; the rest keeps whatever the
-            # last preset set. Back to the init patch first, so a preset sounds the same every time.
-            assert self._base is not None
-            p.raw_state = self._base.init
-            p.raw_state = self.state_for_preset(preset)
-            if not sequencers:
-                p.arp_enable = False
-                p.clip_player_enable = False
+            # last preset set: `_use` starts from the init patch, so a preset sounds the same every time.
+            self._use(p, preset, sequencers)
             audio = p(msgs, duration=2 * n / sr, sample_rate=sr, num_channels=2, reset=False)
         audio = np.asarray(audio, dtype=np.float32)
         if audio.shape[0] == 2 and audio.shape[1] != 2:
@@ -211,11 +231,33 @@ class SerumHost:
         return np.ascontiguousarray(out)
 
 
+    def render_held(self, preset: Path | str, pitches: list[int], seconds: float, sr: int,
+                    velocity: int = 100) -> np.ndarray:
+        """`pitches` held together for `seconds` (a drone's source), (n, 2) float32. The preset's
+        arpeggiator and clip player are off: a drone holds its notes."""
+        from mido import Message
+        msgs = [Message("control_change", control=c, value=0, channel=ch, time=0.0)
+                for ch in range(16) for c in (123, 120)]
+        msgs += [Message("note_on", note=p, velocity=velocity, time=0.0) for p in pitches]
+        msgs += [Message("note_off", note=p, velocity=0, time=max(0.0, seconds - 0.01)) for p in pitches]
+        with self._lock:
+            p = self._load()
+            self._use(p, preset, False)
+            audio = p(msgs, duration=seconds, sample_rate=sr, num_channels=2, reset=False)
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.shape[0] == 2 and audio.shape[1] != 2:
+            audio = audio.T
+        n = int(round(seconds * sr))
+        return np.ascontiguousarray(np.pad(audio, ((0, max(0, n - audio.shape[0])), (0, 0)))[:n])
+
+
 _host: SerumHost | None = None
 _host_lock = threading.Lock()
 
 
 def host(plugin_path: str, plugin_name: str) -> SerumHost:
+    """The engine's one Serum instance. (Not one per part: a second instance of the same plugin,
+    loaded off the main thread as RPC calls are, fails in pedalboard, or crashes.)"""
     global _host
     with _host_lock:
         if _host is None or _host.plugin_path != plugin_path or _host.plugin_name != plugin_name:
@@ -223,30 +265,52 @@ def host(plugin_path: str, plugin_name: str) -> SerumHost:
         return _host
 
 
-# The key a preset's MIDI clip is written for: a clip plays as written from it, moved with the key pressed.
-CLIP_REFERENCE_NOTE = 60
+# A sample a preset names by a path on another computer: a Windows drive, or a folder at the root
+# of this Mac's disk (/Users, /Volumes, …) where there's no such file. Other paths that start with
+# "/" ("/Analog/Basic Mini.wav") are Serum's own, found in its Tables and Samples folders.
+_SAMPLE_PATH = re.compile(r"^(/|[A-Za-z]:[/\\])[^\n]{1,1000}\.(wav|aiff?|flac|mp3|ogg|sfz)$", re.I)
+_missing_cache: dict[tuple[str, float], list[str]] = {}
 
 
-def clip_chord(preset: Path | str) -> list[int] | None:
-    """The first chord of a preset's clip player clip (the clip it plays), as semitones from C4
-    (the key it's written for), when the clip player is on and the clip has notes; else None."""
-    _, payload = read_xfer(Path(preset).read_bytes())
-    d = SerumHost._decode(payload)
-    obj = lambda x: x if isinstance(x, dict) else {}  # noqa: E731 - presets keep some sections as other types
-    if not obj(obj(d.get("ClipPlayer0")).get("plainParams")).get("kParamEnabled"):
-        return None
-    clips = [k for k in d if re.fullmatch(r"MidiClip\d+", k) and isinstance(obj(obj(d[k]).get("clip")).get("notes"), list)
-             and obj(obj(d[k]).get("clip"))["notes"]]
-    if not clips:
-        return None
-    sel = f"MidiClip{int(obj(d.get('ClipPlayer')).get('kUIParamSelectedClip') or 0)}"
-    notes = d[sel if sel in clips else sorted(clips, key=lambda k: int(k[8:]))[0]]["clip"]["notes"]
-    first = min(n["timeStamp"] for n in notes)
-    return sorted({int(n["noteNum"]) - CLIP_REFERENCE_NOTE for n in notes if abs(n["timeStamp"] - first) < 1e-6})
+def _sample_refs(x, out: list[str]) -> list[str]:
+    """The sample paths in a decoded patch whose audio isn't embedded next to them (Serum's "embed
+    in preset": the oscillator keeps `embedded_audio` beside the path it came from)."""
+    if isinstance(x, dict):
+        embedded = bool(x.get("embedded_audio"))
+        for v in x.values():
+            if isinstance(v, str):
+                if not embedded and _SAMPLE_PATH.match(v):
+                    out.append(v)
+            else:
+                _sample_refs(v, out)
+    elif isinstance(x, list) and not (x and isinstance(x[0], (int, float))):
+        for v in x:
+            _sample_refs(v, out)
+    return out
+
+
+def missing_samples(preset: Path | str) -> list[str]:
+    """The sample files `preset` needs that aren't on this Mac (named by a path on the computer it
+    was made on, not embedded in it): Serum plays without them. Cached per preset file."""
+    p = Path(preset)
+    key = (str(p), p.stat().st_mtime)
+    if key not in _missing_cache:
+        _, payload = read_xfer(p.read_bytes())
+        refs = set(_sample_refs(SerumHost._decode(payload), []))
+
+        def foreign(s: str) -> bool:
+            if re.match(r"^[A-Za-z]:[/\\]", s):
+                return True
+            top = Path("/", Path(s).parts[1]) if len(Path(s).parts) > 1 else None
+            return top is not None and top.exists() and not Path(s).exists()
+
+        _missing_cache[key] = sorted(s for s in refs if foreign(s))
+    return _missing_cache[key]
 
 
 def list_presets(root: Path | str, folders: list[str] | None) -> list[dict]:
-    """Presets under `root` (only in `folders`, relative to root, when given): path, name, folder, tags."""
+    """Presets under `root` (only in `folders`, relative to root, when given): path, name, folder,
+    tags, and how many of the sample files it names aren't on this Mac (`missing`)."""
     root = Path(root)
     if not root.is_dir():
         return []
@@ -258,8 +322,12 @@ def list_presets(root: Path | str, folders: list[str] | None) -> list[dict]:
                 h = preset_header(p)
             except Exception:  # noqa: BLE001 - a damaged preset is skipped, not fatal
                 continue
+            try:
+                missing = len(missing_samples(p))
+            except Exception:  # noqa: BLE001 - a patch that doesn't decode is listed; Serum may still load it
+                missing = 0
             out.append({"path": str(p), "name": h.get("presetName") or p.stem,
-                        "folder": str(p.parent.relative_to(root)), "tags": h.get("tags") or []})
+                        "folder": str(p.parent.relative_to(root)), "tags": h.get("tags") or [], "missing": missing})
     return out
 
 

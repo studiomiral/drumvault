@@ -71,6 +71,21 @@ class Extracted:
     def drop(self, name: str) -> None:
         self._cache.pop(name, None)
 
+    def sr_of(self, name: str) -> int:
+        """A stem's sample rate, without loading it."""
+        return self._cache[name].sr if name in self._cache else audio_info(self.files[name])[1]
+
+
+def _loader(ex: Extracted, name: str):
+    """A stem's mono mix, loaded when asked and let go (measured one at a time)."""
+    def load_mono() -> np.ndarray:
+        cached = name in ex._cache
+        mono = ex.audio(name).mono()
+        if not cached:
+            ex.drop(name)
+        return mono
+    return load_mono
+
 
 def _mono_sum(ex: Extracted, names: list[str]) -> tuple[np.ndarray, int]:
     sr = ex.audio(names[0]).sr
@@ -498,7 +513,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     bpm=None if kind == "oneshot" else settings.library_bpm, bars=bars, body_bars=body_bars,
                     key_label=label, key_camelot=camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
-                    gain_applied_db=gain_db, source_offset_s=offset_s, energy_db=_energy(data, out_sr), created_at=created)
+                    gain_applied_db=gain_db, source_offset_s=offset_s, energy_db=_energy(data, out_sr),
+                    tone=json.dumps(arrmod.tone(data, out_sr, th) or []), created_at=created)
                 fingerprint = fp.astype(np.float32).tobytes()
                 rid = removed.find(stem_name, kind, bars, offset_s)
                 prev = json.loads(db.get_removed([rid])[0]["sample"] or "{}") if rid is not None else None
@@ -815,13 +831,11 @@ def _track_key(db: LibraryDB, label: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dict:
-    """Add learning material to one section of the MIDI page (SCOPE.md §6.7), `role` "bass" or
-    "keys", from loose .mid files, MIDI zips (a track's parts) and folders of either. Every file
-    added becomes that role (copied to MIDI/Bass/ or MIDI/Keys/, indexed with bars and key); from
-    a zip with several parts only the ones named for the section are kept ("Bass", "Sub" or
-    "Chords", "Piano", "Rhodes"), the others are counted as ignored. Files already imported are
-    skipped.
+def import_midi(settings: Settings, paths: list[str]) -> dict:
+    """Add basslines to learn from (the MIDI page, SCOPE.md §6.7) from loose .mid files, MIDI zips
+    (a track's parts) and folders of either. Every file added is a bassline (copied to MIDI/Bass/,
+    indexed with bars and key); from a zip with several parts only the ones named for the bass are
+    kept ("Bass", "Sub"), the others are counted as ignored. Files already imported are skipped.
 
     A zip's part is named after the zip ("83686 Bass") and gets the key of the processed
     stem zip with the same name if there is one, else the key all the zip's parts together
@@ -829,8 +843,6 @@ def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dic
     import tempfile
     import zipfile
     from . import midi as midimod
-    if role not in ("bass", "keys"):
-        raise PipelineError("bad_role", f"MIDI goes to the bass or the keys section, not {role!r}")
     lib = Path(settings.library_path)
     th = settings.thresholds
     # Sources: (label for names, [(display name, bytes, original path)])
@@ -879,7 +891,7 @@ def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dic
                 if not info.notes:
                     failed.append(f"{name}: no notes")
                     continue
-                if label and len(members) > 1 and midimod.named_role(name) != role:
+                if label and len(members) > 1 and midimod.named_role(name) != "bass":
                     ignored += 1   # the zip's other parts (leads, strings, …) only help find its key
                     continue
                 sha1 = hashlib.sha1(data).hexdigest()
@@ -888,32 +900,31 @@ def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dic
                     continue
                 key_label = midimod.make_label(*named) if named else track_key or info.key_label
                 title = f"{label} {name}" if label else name
-                folder = {"bass": "Bass", "keys": "Keys"}.get(role, "Other")
                 base = naming.slugify(title, 60) or "midi"
-                rel, k = f"MIDI/{folder}/{base}.mid", 1
+                rel, k = f"MIDI/Bass/{base}.mid", 1
                 while db.midi_path_taken(rel) or (lib / rel).exists():
                     k += 1
-                    rel = f"MIDI/{folder}/{base}-{k}.mid"
+                    rel = f"MIDI/Bass/{base}-{k}.mid"
                 (lib / rel).parent.mkdir(parents=True, exist_ok=True)
                 (lib / rel).write_bytes(data)
                 notes = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
                 mid = db.insert_midi(file_name=f"{title}.mid", rel_path=rel, original_path=origin, file_sha1=sha1,
-                                     role=role, bars=info.bars, key_label=key_label,
+                                     role="bass", bars=info.bars, key_label=key_label,
                                      key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else None,
                                      notes=json.dumps(notes), source=label, source_code=code, created_at=now_iso())
-                imported.append({"id": mid, "file_name": f"{title}.mid", "role": role, "bars": info.bars,
+                imported.append({"id": mid, "file_name": f"{title}.mid", "role": "bass", "bars": info.bars,
                                  "key_label": key_label})
     return {"imported": imported, "skipped": skipped, "ignored": ignored, "failed": failed}
 
 
 def set_midi_meta(settings: Settings, midi_id: int, role: str | None, key_label: str | None, clear_key: bool) -> dict:
-    """Correct a MIDI file's role (bass / keys / other) or key."""
+    """Correct a MIDI file's role (bass / other) or key."""
     from . import midi as midimod
     with LibraryDB(settings.library_path) as db:
         if db.get_midi(midi_id) is None:
             raise PipelineError("not_found", f"No MIDI file with id {midi_id}")
         fields: dict = {}
-        if role in ("bass", "keys", "other"):
+        if role in ("bass", "other"):
             fields["role"] = role
         if clear_key:
             fields.update(key_label=None, key_camelot=None)
@@ -939,6 +950,8 @@ def delete_midi(settings: Settings, midi_ids: list[int]) -> dict:
 BASS_RENDER_VERSION = 2
 # Chord stab parts (their own folder): 3: the preset's arp and clip player off.
 STAB_RENDER_VERSION = 3
+# Drones (their own folder, drone.py).
+DRONE_RENDER_VERSION = 1
 
 
 def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -> None:
@@ -955,19 +968,35 @@ def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -
 
 def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, bpm: float, out_rel: str,
                 notes: list[list[float]] | None = None, bars: int | None = None,
-                groove: list[float] | None = None) -> dict:
+                groove: list[float] | None = None, drone: dict | None = None) -> dict:
     """Render a MIDI part through a Serum 2 preset as a seamless loop at `bpm`, loudness-matched,
     to `out_rel` (under .drumvault/bass/). Cached: redone only when the preset or MIDI changed.
     `notes`/`bars` (edited in the piano roll) replace the imported file's; the app names such
     renders after the notes, so the file stays a cache. A line the app generated has no file
     (`midi_id` < 1): its `notes` and `bars` are all there is. `groove` (16ths per step) moves
-    notes that start on a 16th the way the track's loops are played."""
+    notes that start on a 16th the way the track's loops are played. A drone (under .drumvault/drones/)
+    is made by `_render_drone`."""
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/vocals/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
+    if out_rel.startswith(".drumvault/vocals/"):
+        # A vocal phrase (vocal.py): its loop moved into the key, formants kept, at the track tempo.
+        from . import vocal as vocalmod
+        src = lib / preset
+        if not preset.startswith("Vocals/") or ".." in Path(preset).parts or not src.exists():
+            raise PipelineError("not_found", f"Vocal phrase not found: {preset}")
+        if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+            return {"path": out_rel, "cached": True}
+        try:
+            vocalmod.render_phrase(settings, preset, transpose, bpm, int(bars or 1), out)
+        except stretch.StretchError as e:
+            raise PipelineError("stretch", str(e)) from e
+        return {"path": out_rel, "cached": False}
+    if out_rel.startswith(".drumvault/drones/"):
+        return _render_drone(settings, preset, notes or [], transpose, bpm, int(bars or 4), drone or {}, out, out_rel)
     stab = out_rel.startswith(".drumvault/stabs/")
     _drop_stale_bass_renders(out.parent, STAB_RENDER_VERSION if stab else BASS_RENDER_VERSION)
     row = None
@@ -1008,9 +1037,131 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     return {"path": out_rel, "cached": False}
 
 
-def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int, key_label: str | None,
-              role: str = "bass") -> dict:
-    """Save an edited loop (piano roll) as a new MIDI file in the library, like an import."""
+def _render_drone(settings: Settings, source: str, notes: list[list[float]], transpose: int, bpm: float, bars: int,
+                  spec: dict, out: Path, out_rel: str) -> dict:
+    """A drone loop (drone.py) from a Drones page sample (`source` library-relative, moved
+    `transpose`, warped and started where `spec` says) or, in older tracks, a Serum 2 patch
+    (`source` an absolute preset path, holding the pitches of `notes`)."""
+    from . import drone as dronemod, serum
+    rhythm, warp, start = spec.get("rhythm", "pump"), spec.get("warp", "none"), float(spec.get("start", 0.0))
+    if rhythm not in dronemod.RHYTHMS or warp not in dronemod.WARPS:
+        raise PipelineError("bad_request", f"Unknown drone rhythm or warp: {rhythm}, {warp}")
+    _drop_stale_bass_renders(out.parent, DRONE_RENDER_VERSION)
+    lib = Path(settings.library_path)
+    th, sr = settings.thresholds, settings.output_sample_rate
+    patch = Path(source).is_absolute()
+    src = Path(source) if patch else lib / source
+    if (not patch and ".." in Path(source).parts) or not src.exists():
+        raise PipelineError("not_found", f"Drone source not found: {source}")
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return {"path": out_rel, "cached": True}
+    if patch:
+        pitches = sorted({max(0, min(127, int(p) + transpose)) for _, _, p, _ in notes})
+        if not pitches:
+            raise PipelineError("bad_request", "A drone patch needs the notes it holds")
+        try:
+            data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_held(
+                src, pitches, dronemod.serum_seconds(bpm, bars, sr, th), sr)
+        except serum.SerumError as e:
+            raise PipelineError("serum", str(e)) from e
+    else:
+        try:
+            data = dronemod.warped(dronemod.sample_source(settings, source, transpose), sr, warp, settings)
+        except stretch.StretchError as e:
+            raise PipelineError("stretch", str(e)) from e
+        data = dronemod.from_start(data, start, dronemod.source_frames(bpm, bars, sr, th))
+    if float(np.abs(data).max(initial=0.0)) <= 1e-5:
+        raise PipelineError("silent", f"The drone source is silent: {Path(source).name}")
+    loop = dronemod.make_loop(data, sr, bpm, bars, rhythm, th, seed=int(start * 1_000_000))
+    loop, _, _ = normalize.loudness_normalize(loop, sr, th.drone_lufs_target, th.drone_peak_dbfs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.part")
+    sf.write(str(tmp), loop, sr, subtype="PCM_24", format="WAV")
+    tmp.replace(out)
+    return {"path": out_rel, "cached": False}
+
+
+# What the app makes for its projects and generations, rendered again whenever it's gone: the bass,
+# keys, stab and drone parts, and FX stretched to other tempos.
+RENDER_DIRS = ("bass", "keys", "stabs", "drones", "tempo")
+
+
+def clean_renders(settings: Settings, keep: list[str], dry_run: bool = False, recent_s: float = 600.0) -> dict:
+    """Delete the renders under .drumvault/ that nothing uses: every .wav in RENDER_DIRS but those in
+    `keep` (library-relative) and those written in the last `recent_s` seconds (a render under way,
+    a generation prepared just now). With `dry_run`, only count. Returns {"files", "bytes"} of what is
+    (or would be) deleted and {"kept_files", "kept_bytes"} of what stays."""
+    import time
+    lib = Path(settings.library_path)
+    keep_set = {Path(k).as_posix() for k in keep}
+    cutoff = time.time() - recent_s
+    out = {"files": 0, "bytes": 0, "kept_files": 0, "kept_bytes": 0}
+    for d in RENDER_DIRS:
+        root = lib / ".drumvault" / d
+        if not root.is_dir():
+            continue
+        for f in root.rglob("*.wav"):
+            st = f.stat()
+            if f.relative_to(lib).as_posix() in keep_set or st.st_mtime >= cutoff:
+                out["kept_files"] += 1
+                out["kept_bytes"] += st.st_size
+                continue
+            out["files"] += 1
+            out["bytes"] += st.st_size
+            if not dry_run:
+                f.unlink(missing_ok=True)
+        if not dry_run:
+            # Tempo folders (one per BPM, one per library folder in it) left empty.
+            for sub in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                if not any(sub.iterdir()):
+                    sub.rmdir()
+    return out
+
+
+def import_vocal(settings: Settings, folder: str) -> dict:
+    """A vocal take's folder (<Library>/Vocals/<id>/, SCOPE.md §6.11): its stems.zip unpacked into
+    stems/, the vocal stem written as vocal.wav (24-bit at the library rate). Returns the
+    library-relative vocal and stems, the vocal's length and the key heard in it."""
+    import zipfile
+    lib = Path(settings.library_path)
+    d = lib / folder
+    if not folder.startswith("Vocals/") or ".." in Path(folder).parts or not (d / "stems.zip").exists():
+        raise PipelineError("bad_path", f"Not a vocal take: {folder}")
+    out = d / "stems"
+    out.mkdir(exist_ok=True)
+    stems = []
+    with zipfile.ZipFile(d / "stems.zip") as z:
+        for m in z.infolist():
+            name = Path(m.filename).name
+            if m.is_dir() or not name or name.startswith("."):
+                continue
+            (out / name).write_bytes(z.read(m))
+            stems.append(name)
+    vocal = next((s for s in stems if "vocal" in s.lower() and not any(w in s.lower() for w in ("instrumental", "no_vocal", "novocal"))), None)
+    if vocal is None:
+        raise PipelineError("no_vocal", f"No vocal stem among {stems}")
+    a = load(out / vocal)
+    data = resample(a.data, a.sr, settings.output_sample_rate)
+    write_wav(d / "vocal.wav", data, settings.output_sample_rate, "pcm24")
+    mono = data.mean(axis=1)
+    k = keymod.detect_key_audio(mono, settings.output_sample_rate, settings.thresholds)
+    from . import vocal as vocalmod
+    analysis = vocalmod.analyze(settings, folder)
+    return {"vocal": f"{folder}/vocal.wav", "stems": [f"{folder}/stems/{s}" for s in sorted(stems)],
+            "duration_s": round(len(data) / settings.output_sample_rate, 3), "key_heard": analysis["key"] or k.label,
+            "analysis": analysis}
+
+
+def analyze_vocal(settings: Settings, folder: str) -> dict:
+    """A take's phrase loop, chops and key again (vocal.py), e.g. for takes made before analysis."""
+    from . import vocal as vocalmod
+    if not folder.startswith("Vocals/") or ".." in Path(folder).parts or not (Path(settings.library_path) / folder / "vocal.wav").exists():
+        raise PipelineError("bad_path", f"Not a vocal take: {folder}")
+    return vocalmod.analyze(settings, folder)
+
+
+def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int, key_label: str | None) -> dict:
+    """Save an edited bassline (piano roll) as a new MIDI file in the library, like an import."""
     import mido
     from . import midi as midimod
     lib = Path(settings.library_path)
@@ -1031,13 +1182,12 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
         tr.append(msg.copy(time=tick - t))
         t = tick
     tr.append(mido.MetaMessage("end_of_track", time=max(0, bars * 4 * tpb - t)))
-    folder = {"bass": "Bass", "keys": "Keys"}.get(role, "Other")
     base = naming.slugify(name, 60) or "bassline"
     with LibraryDB(lib) as db:
-        rel, k = f"MIDI/{folder}/{base}.mid", 1
+        rel, k = f"MIDI/Bass/{base}.mid", 1
         while db.midi_path_taken(rel) or (lib / rel).exists():
             k += 1
-            rel = f"MIDI/{folder}/{base}-{k}.mid"
+            rel = f"MIDI/Bass/{base}-{k}.mid"
         (lib / rel).parent.mkdir(parents=True, exist_ok=True)
         mf.save(str(lib / rel))
         same = db.midi_by_sha1(zipio.sha1_file(lib / rel))
@@ -1047,7 +1197,7 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
         info = midimod.analyze(lib / rel, settings.thresholds)
         stored = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
         mid = db.insert_midi(file_name=f"{name}.mid", rel_path=rel, original_path=None,
-                             file_sha1=zipio.sha1_file(lib / rel), role=role, bars=bars,
+                             file_sha1=zipio.sha1_file(lib / rel), role="bass", bars=bars,
                              key_label=key_label or info.key_label,
                              key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else info.key_camelot,
                              notes=json.dumps(stored), created_at=now_iso())
@@ -1057,84 +1207,6 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
 def serum_presets(settings: Settings, root: str, folders: list[str] | None) -> dict:
     from . import serum
     return {"folders": serum.preset_folders(root), "presets": serum.list_presets(root, folders) if folders else []}
-
-
-# Overtones of a note, in semitones above it (its first 16 partials).
-_OVERTONES = 12 * np.log2(np.arange(1, 17))
-
-
-def plays_chord(data: np.ndarray, sr: int, note: int, settings: Settings) -> bool:
-    """Whether one held `note` sounds as a chord: strong partials that aren't overtones of the
-    note, nor of an octave below it that sounds too (a sub oscillator)."""
-    th = settings.thresholds
-    x = (data.mean(axis=1) if data.ndim > 1 else data)[int(th.stab_chord_from_s * sr): int(th.stab_chord_to_s * sr)]
-    if len(x) < 1024 or not np.any(x):
-        return False
-    mag = np.abs(np.fft.rfft(x * np.hanning(len(x))))
-    hz = np.fft.rfftfreq(len(x), 1 / sr)
-    band = (hz >= th.stab_chord_lo_hz) & (hz <= th.stab_chord_hi_hz)
-    peak = (mag[1:-1] > mag[:-2]) & (mag[1:-1] >= mag[2:])
-    idx = np.flatnonzero(np.concatenate([[False], peak, [False]]) & band)
-    if not idx.size:
-        return False
-    strong = idx[mag[idx] >= th.stab_chord_peak_rel * mag[idx].max()]
-    f0 = 440.0 * 2 ** ((note - 69) / 12)
-    at = 12 * np.log2(hz[strong] / f0)  # semitones from the note
-    near = lambda x, y: abs(x - y) <= th.stab_chord_tol  # noqa: E731
-    bases = [0.0] + [b for b in (-12.0, -24.0, -36.0) if any(near(o, b) for o in at)]
-
-    def others(base: float) -> int:
-        return len({round(o - base) for o in at if not any(near(o - base, h) for h in _OVERTONES)})
-
-    return min(others(b) for b in bases) >= th.stab_chord_min_others
-
-
-def stab_chords(settings: Settings, presets: list[str]) -> dict:
-    """Per stab patch: the chord its clip player plays (`voicings`: semitones from the key it's
-    written for, C4; Generate plays it on the step sequencer's steps, the clip player off), and
-    whether it plays a chord from one key anyway (`chords`: its oscillators stack one; then it
-    gets the root alone), measured as stab parts play it (arp and clip player off). Once per preset
-    file (cached in <Library>/.drumvault/stabs/chords.json)."""
-    from . import serum
-    from .midi import Note
-    th = settings.thresholds
-    cache_file = Path(settings.library_path) / ".drumvault" / "stabs" / "chords.json"
-    try:
-        cache = json.loads(cache_file.read_text())
-    except (OSError, ValueError):
-        cache = {}
-    out: dict[str, bool] = {}
-    voicings: dict[str, list[int] | None] = {}
-    changed = False
-    for p in presets:
-        src = Path(p)
-        if not src.exists():
-            continue
-        st = src.stat()
-        stamp = f"{STAB_RENDER_VERSION}:clip:{st.st_mtime_ns}:{st.st_size}"
-        hit = cache.get(p)
-        if hit and hit.get("stamp") == stamp:
-            out[p] = bool(hit["chord"])
-            voicings[p] = hit.get("voicing")
-            continue
-        try:
-            voicings[p] = serum.clip_chord(src)
-        except Exception:  # noqa: BLE001 - a preset that doesn't read just has no clip chord
-            log.warning("no clip chord read from %s", src, exc_info=True)
-            voicings[p] = None
-        sr = settings.output_sample_rate
-        try:
-            data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
-                src, [Note(0, 4, th.stab_chord_test_note, 112)], 124.0, 2, sr, sequencers=False)
-        except serum.SerumError as e:
-            raise PipelineError("serum", str(e)) from e
-        out[p] = plays_chord(data, sr, th.stab_chord_test_note, settings)
-        cache[p] = {"stamp": stamp, "chord": out[p], "voicing": voicings[p]}
-        changed = True
-    if changed:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps(cache, indent=1))
-    return {"chords": out, "voicings": voicings}
 
 
 def trash_files(lib: Path, removed_id: int) -> tuple[Path, Path]:
@@ -1271,11 +1343,11 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
         for i, (table, r) in enumerate(loud):
             ctx.check()
             if i % 25 == 0:
-                ctx.progress("loudness", i / total, f"Loudness ({i + 1}/{len(loud)})")
+                ctx.progress("loudness", i / total, f"Loudness and tone ({i + 1}/{len(loud)})")
             path = lib / r["rel_path"]
             if path.exists():
                 a = load(path)
-                db.set_energy(table, r["id"], k_energy_db(a.data, a.sr))
+                db.set_energy(table, r["id"], k_energy_db(a.data, a.sr), arrmod.tone(a.data, a.sr, th))
         done = len(loud)
         for i, r in enumerate(loops):
             ctx.check()
@@ -1341,8 +1413,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
                 ex = _source(lib, z, Path(d))
                 names = [n for n, c in category.items() if n in ex.files and arrmod.part_of(n, c)]
-                arr = arrmod.measure([(n, category[n], ex.audio(n).mono(), ex.audio(n).sr) for n in names],
-                                     bpm, bar_one_s, th)
+                arr = arrmod.measure([(n, category[n], _loader(ex, n), ex.sr_of(n)) for n in names], bpm, bar_one_s, th)
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "
                               f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")

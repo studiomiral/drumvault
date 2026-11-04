@@ -5,13 +5,13 @@ import { laneRole } from '../generate/generator'
 import type { ProjectFileInfo } from '../types/project'
 
 /** What the lane panel shows (Generate's, and Arrange's beside the timeline): a module, or a lane (by name). */
-export type Panel = { module: 'bass' | 'chords' | 'disco' | 'verb' } | { lane: string }
+export type Panel = { module: 'bass' | 'chords' | 'vocals' | 'drones' | 'disco' | 'verb' } | { lane: string }
 
-/** The panel a lane opens: its module (Bass, Chords, Disco Hits), else the lane itself. */
+/** The panel a lane opens: its module (Bass, Chords, Drones, Disco Hits), else the lane itself. */
 export function panelOf(laneName: string): Panel {
   const role = laneRole(laneName)
-  return role === 'bass' ? { module: 'bass' } : role === 'keys' || role === 'stab' ? { module: 'chords' }
-    : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
+  return role === 'bass' ? { module: 'bass' } : role === 'stab' ? { module: 'chords' }
+    : role === 'vocal' || role === 'vchop' ? { module: 'vocals' } : role === 'drone' ? { module: 'drones' } : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
 }
 
 export const MIN_PX_PER_BEAT = 0.5  // 192 bars fit in ~400 px

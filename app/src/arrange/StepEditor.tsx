@@ -13,8 +13,8 @@ export function BottomPanel() {
   const { project, selection, editingClip, openEditor } = useProject()
   const editing = project.clips.find((c) => c.id === editingClip)
   if (editing?.type === 'pattern') return <StepEditor clip={editing} onClose={() => openEditor(null)} />
-  // (A Serum chord stab part has no piano roll: its notes are the track's stab rhythm.)
-  if (editing?.type === 'audio' && editing.bass && editing.bass.role !== 'stab') return <BassEditor clip={editing} onClose={() => openEditor(null)} />
+  // (Only bass parts have a piano roll.)
+  if (editing?.type === 'audio' && editing.bass && (editing.bass.role ?? 'bass') === 'bass') return <BassEditor clip={editing} onClose={() => openEditor(null)} />
   const single = selection.length === 1 ? project.clips.find((c) => c.id === selection[0]) : undefined
   if (single) return <ClipInspector clip={single} />
   return (

@@ -11,6 +11,7 @@ const artwork: Record<MenuIconName, string> = {
   midi: new URL('../assets/menu-flat/midi.svg', import.meta.url).href,
   hits: new URL('../assets/menu-flat/hits.svg', import.meta.url).href,
   stabs: new URL('../assets/menu-flat/stabs.svg', import.meta.url).href,
+  drones: new URL('../assets/menu-flat/drones.svg', import.meta.url).href,
   generate: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
   arrange: new URL('../assets/menu-flat/arrange.svg', import.meta.url).href,
   settings: new URL('../assets/menu-flat/settings.svg', import.meta.url).href,

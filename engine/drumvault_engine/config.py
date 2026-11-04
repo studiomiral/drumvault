@@ -116,19 +116,6 @@ class Thresholds:
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
     bass_peak_dbfs: float = -1.0
-    # Chord stab patches (SCOPE.md §6.9): one note (C3) is rendered through the patch; partials at
-    # least stab_chord_peak_rel of the strongest (stab_chord_lo_hz–stab_chord_hi_hz, from
-    # stab_chord_from_s to stab_chord_to_s) that aren't overtones (within stab_chord_tol semitones)
-    # of the note, nor of a sub-octave sounding under it, mean it plays a chord from one key, when
-    # there are stab_chord_min_others of them.
-    stab_chord_test_note: int = 48
-    stab_chord_peak_rel: float = 0.4
-    stab_chord_tol: float = 0.35
-    stab_chord_lo_hz: float = 25.0
-    stab_chord_hi_hz: float = 1500.0
-    stab_chord_from_s: float = 0.05
-    stab_chord_to_s: float = 0.6
-    stab_chord_min_others: int = 2
     # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0
@@ -257,6 +244,55 @@ class Thresholds:
     sample_loop_max_bars: int = 16          # longer files are not loops (stems belong in a zip)
     sample_oneshot_max_s: float = 4.0       # a file this short without loop hints is a one-shot
 
+    # ---- drones (drone.py): a held note or a sample washed into an ambient loop -------
+    drone_max_len_s: float = 60.0           # a dropped-in drone keeps this much (a hit only hit_max_len_s)
+    drone_settle_s: float = 4.0             # into the washed sound before the loop starts (attack, reverb build)
+    drone_loop_fade_beats: float = 2.0      # the loop's end crossfaded into its start, equal power
+    drone_tile_overlap_s: float = 1.5       # a short sample repeated with this much crossfade to fill the loop
+    drone_hp_hz: float = 180.0              # out of the bass's way
+    drone_lp_hz: float = 7000.0             # dark: an ambience, not an instrument
+    drone_reverb_room: float = 0.95
+    drone_reverb_damping: float = 0.55
+    drone_reverb_wet: float = 0.7
+    drone_reverb_dry: float = 0.3
+    drone_reverb_passes: int = 2            # reverb into reverb: a wash with no attacks left
+    drone_gate_floor: float = 0.25          # a gated or swelling drone never goes below this (of its level)
+    drone_gate_duty: float = 0.6            # share of each 8th/16th the gate is open
+    drone_gate_edge: float = 0.2            # share of a step its gate takes to open and to close
+    drone_chop_places: int = 4              # a chopped drone plays its 16ths from this many places in the sound
+    drone_chop_fade_ms: float = 4.0         # each chopped 16th fades in and out this fast (no clicks)
+    drone_lufs_target: float = -14.0        # like the bass renders (the mix balance takes it from there)
+    drone_peak_dbfs: float = -1.0
+
+    # ---- vocals (vocal.py): a take's phrase loop, chops and key ------------------
+    vocal_hop: int = 256                    # pYIN / level frame hop at 22.05 kHz (≈ 11.6 ms)
+    vocal_fmin_hz: float = 70.0
+    vocal_fmax_hz: float = 1100.0
+    vocal_period_min_s: float = 1.5         # a repetition is at least this long (a 1-bar line at 160 BPM)
+    vocal_period_min_score: float = 0.45    # how well a take must line up with itself to have a phrase loop
+    vocal_period_tie: float = 0.05          # lags this close to the best one are repetitions too (phrase loops)
+    vocal_max_stretch: float = 0.2          # a phrase is stretched at most this much to whole bars
+    vocal_silence_db: float = -30.0         # below the take's loudest by this: a rest
+    vocal_rest_s: float = 0.15              # a line starts after a rest this long
+    vocal_preroll_s: float = 0.02           # the phrase starts this much before its line (the consonant)
+    vocal_fade_ms: float = 8.0
+    vocal_onset_delta: float = 0.12         # onset detection threshold for chops
+    vocal_chop_min_s: float = 0.08
+    vocal_chop_max_s: float = 0.6
+    vocal_chops: int = 8                    # chops kept per take: the clearest and loudest
+
+    # ---- mastering (master.py): the mixdown through Ozone 11 into mastered.wav -----
+    master_target_lufs: float = -6.5        # integrated loudness of mastered.wav (House of Tracks: -9 … -5)
+    master_ceiling_db: float = 0.0          # the Maximizer's output ceiling (House of Tracks: -2 … 0 dB)
+    master_tolerance_lu: float = 0.1        # the Maximizer's gain is solved until the result is this close
+    master_max_passes: int = 10             # passes through the chain to get there
+    master_pre_lufs: float = -14.0          # the mixdown is brought here first: the chain sees one level
+    master_glue_threshold_db: float = -12.0  # the glue compressor (Ozone Dynamics), against that level
+    master_glue_ratio: float = 1.5
+    master_glue_attack_ms: float = 30.0
+    master_glue_release_ms: float = 120.0
+    master_soft_clip_mix: float = 50.0      # % of the Maximizer's soft clip (less limiting for the loudness)
+
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200
     peaks_loop_per_bar: int = 1024
@@ -293,6 +329,9 @@ class Settings:
     # Serum 2, hosted by the engine to render basslines (SCOPE.md §6.7).
     serum_plugin: str = "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
     serum_plugin_name: str = "Serum 2"
+    # Ozone 11, hosted the same way to master the mixdown (master.py).
+    ozone_dynamics_plugin: str = "/Library/Audio/Plug-Ins/VST3/Ozone 11 Dynamics.vst3"
+    ozone_maximizer_plugin: str = "/Library/Audio/Plug-Ins/VST3/Ozone 11 Maximizer.vst3"
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     # ---------------------------------------------------------------------

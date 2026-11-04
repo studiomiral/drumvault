@@ -13,7 +13,9 @@ import { createProject, deleteCurrentProject, openProject } from './persistence'
 export function Toolbar() {
   const project = useProject((s) => s.project)
   const { past, future, undo, redo, edit, dirty } = useProject()
-  const { pxPerBeat, setView, libraryOpen, saving, projects } = useArrange()
+  const { pxPerBeat, setView, libraryOpen, saving, projects, lanePanel } = useArrange()
+  // A generated track makes its vocal here (SCOPE.md §6.11): the lane panel's Vocals module.
+  const vocalsOpen = !!lanePanel && 'module' in lanePanel && lanePanel.module === 'vocals'
   const [, force] = useState(0)
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
 
@@ -71,6 +73,12 @@ export function Toolbar() {
                const centre = (st.scrollX + 400) / st.pxPerBeat
                setView({ pxPerBeat: next, scrollX: Math.max(0, centre * next - 400) })
              }} />
+      {project.generation && (
+        <Button variant={vocalsOpen ? 'secondary' : 'ghost'} title="Make a vocal for this track (ElevenLabs), or another one"
+                onClick={() => useArrange.getState().set({ lanePanel: vocalsOpen ? null : { module: 'vocals' } })}>
+          Vocals
+        </Button>
+      )}
       <Button variant="primary" title="Export stems (⌘E)" onClick={() => useApp.getState().setModal('export')}>Export…</Button>
       <Button variant={libraryOpen ? 'secondary' : 'ghost'} onClick={() => setView({ libraryOpen: !libraryOpen })}>
         Library {libraryOpen ? '›' : '‹'}

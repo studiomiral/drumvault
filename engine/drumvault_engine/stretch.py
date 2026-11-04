@@ -118,3 +118,22 @@ def stretch_stem(data: np.ndarray, sr: int, source_bpm: float, settings: Setting
             log.warning("rubberband length %d != expected %d", y.shape[0], expected)
         y = y[:expected] if y.shape[0] > expected else np.pad(y, ((0, expected - y.shape[0]), (0, 0)))
     return np.ascontiguousarray(y), out_sr, warnings
+
+
+def stretch_by(x: np.ndarray, sr: int, factor: float, settings: Settings) -> np.ndarray:
+    """`x` (n, ch) made `factor` times as long with its pitch kept (Rubber Band): a drone slowed
+    down 2× or 4× into a smear. Exactly round(n · factor) frames."""
+    info = rubberband_info(settings.rubberband_binary, settings.rubberband_r3_flag)
+    if not info.path:
+        raise StretchError(f"Rubber Band binary not found: {settings.rubberband_binary}")
+    opts, _ = effective_options(settings)
+    expected = int(round(x.shape[0] * factor))
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = Path(d) / "in.wav", Path(d) / "out.wav"
+        sf.write(str(src), x, sr, subtype="FLOAT")
+        proc = subprocess.run([info.path, "-q", *opts, "--time", repr(factor), str(src), str(dst)], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise StretchError(f"rubberband failed ({proc.returncode}): {proc.stderr.strip()[-500:]}")
+        y, _ = sf.read(str(dst), dtype="float32", always_2d=True)
+    y = y[:expected] if y.shape[0] > expected else np.pad(y, ((0, expected - y.shape[0]), (0, 0)))
+    return np.ascontiguousarray(y)
