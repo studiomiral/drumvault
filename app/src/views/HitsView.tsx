@@ -29,22 +29,23 @@ const TEXT = {
       + '"Stab_F#_maj"), else from the sound. Every generated track plays one of them in a funky rhythm, moved into '
       + 'the track key; if one sounds off, fix the key here or the pitch in Generate.',
   },
-  drone: {
-    title: 'Drones', one: 'drone', many: 'drones', empty: 'Drop your drones here: pads, ambiences, sustained textures.',
-    drop: 'Drop drones: audio files, folders or zips',
-    about: 'Sustained sounds with a key: pads, ambiences, held vocal or string textures (up to a minute each). The key comes '
-      + 'from the file name ("Dark Drone Am"), else from the sound. Generate moves a drone into the track key (sometimes an '
-      + 'octave), warps it its own way per track (slowed down or reversed, from another part of the sound), washes it in '
-      + 'reverb and loops it, sometimes with a rhythm, under the sidechain.',
+  strings: {
+    title: 'Strings', one: 'string sample', many: 'string samples', empty: 'Drop your long string samples here: held chords and lines with a key.',
+    drop: 'Drop strings: audio files, folders or zips',
+    about: 'Long string samples with a key (up to a minute each). The key comes from the file name ("Warm Strings Am"), else '
+      + 'from the sound; a sample needs one to be used. Generate plays one in some tracks as it was recorded, starting again '
+      + 'on every 8-bar line, moved into the track key with its length kept: only samples within 3 semitones of the key, '
+      + 'so fix a key read wrong here.',
   },
 }
 
 /**
  * Samples → Disco Hits (SCOPE.md §6.8): stabs, brass hits and the like. Generate drops one or
  * two of them on the 1 at key moments of some tracks, moved into the track key. Samples → Chord
- * Stabs (§6.9) is the same page for the chord stabs every track plays.
+ * Stabs (§6.9) is the same page for the chord stabs every track plays, Samples → Strings (§6.10)
+ * for long string samples.
  */
-export function HitsView({ kind }: { kind: HitItem['kind'] }) {
+export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) {
   const { libraryVersion, engine, toast } = useApp()
   const all = useHits((s) => s.hits)
   const loaded = useHits((s) => s.loaded)

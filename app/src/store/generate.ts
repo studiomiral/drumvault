@@ -10,8 +10,8 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  applyMix, bassBars, bassRenderOf, changeKey, generate, laneRole, newLaneSound, DRONE_RULES, newDroneSound, rerollDisco, rerollDrone, rerollVocal, rerollLane as rerollSounds, rerollStabs,
-  setStabRhythm, setTrackRule, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
+  applyMix, bassBars, bassRenderOf, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  setStabRhythm, setTrackRule, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
 import { bassPath } from '../audio/schedule'
@@ -47,8 +47,8 @@ export interface GenerateSettings {
   disco: { enabled: boolean }
   /** Chord stabs on/off: when on, every track plays them (SCOPE.md §6.9). */
   stabs: { enabled: boolean }
-  /** Drones on/off (when on, some tracks get one, SCOPE.md §6.10) and the Drone lane's sidechain depth (0…1). */
-  drones: { enabled: boolean; sidechain: number }
+  /** Strings on/off (when on, some tracks get them, SCOPE.md §6.10) and the Strings lane's sidechain depth (0…1). */
+  strings: { enabled: boolean; sidechain: number }
   /** Choices locked for every next track (choices.ts), by rule. */
   locks: Rules
 }
@@ -78,10 +78,10 @@ function savedDisco(): GenerateSettings['disco'] {
   catch { return { enabled: true } }
 }
 
-const DRONES_KEY = 'drumvault.generate.drones'
+const STRINGS_KEY = 'drumvault.generate.strings'
 
-function savedDrones(): GenerateSettings['drones'] {
-  try { return { enabled: true, sidechain: 0.6, ...JSON.parse(localStorage.getItem(DRONES_KEY) ?? '{}') } }
+function savedStrings(): GenerateSettings['strings'] {
+  try { return { enabled: true, sidechain: 0.6, ...JSON.parse(localStorage.getItem(STRINGS_KEY) ?? '{}') } }
   catch { return { enabled: true, sidechain: 0.6 } }
 }
 
@@ -170,7 +170,7 @@ export const useGenerate = create<GenerateState>((set) => ({
   templates: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), drones: savedDrones(), locks: savedLocks() },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), locks: savedLocks() },
   keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
@@ -276,11 +276,14 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
   const picks: Keep['picks'] = {}
   const rules: Rules = {}
   for (const role of k.lanes) if (g.picks[role]) picks[role] = g.picks[role]
-  // A kept stab plays its rhythm on; kept disco hits come in again.
-  if (k.lanes.includes('stab') && g.picks.stab && g.rules.stabs) Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm })
-  // A kept drone plays where it did, with its rhythm.
-  if (k.lanes.includes('drone') && g.picks.drone) {
-    Object.assign(rules, { droneIn: true, ...Object.fromEntries(DRONE_RULES.map((r) => [r, g.rules[r]])) })
+  // Kept stabs (all of them) play their rhythm on, taking the same turns; kept disco hits come in again.
+  if (k.lanes.includes('stab') && g.picks.stab && g.rules.stabs) {
+    for (const role of STAB_ROLES) if (g.picks[role]) picks[role] = g.picks[role]
+    Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits' })
+  }
+  // Kept strings play where they did.
+  if (k.lanes.includes('strings') && g.picks.strings) {
+    Object.assign(rules, { stringsIn: true, ...Object.fromEntries(STRINGS_RULES.map((r) => [r, g.rules[r]])) })
   }
   if (k.lanes.includes('disco') && g.picks.disco) {
     if (g.picks.disco2) picks.disco2 = g.picks.disco2
@@ -304,12 +307,12 @@ function options(): GenerateOptions {
   const stabHits = hits.filter((h) => h.kind === 'stab')
   const disco = settings.disco.enabled && discoHits.length ? { hits: discoHits } : null
   const stabs = settings.stabs.enabled && stabHits.length ? { hits: stabHits, rhythms: stabsSettings().rhythms ?? [] } : null
-  const droneHits = hits.filter((h) => h.kind === 'drone')
-  const drones = settings.drones.enabled && droneHits.length ? { hits: droneHits, sidechain: settings.drones.sidechain } : null
+  const stringHits = hits.filter((h) => h.kind === 'strings')
+  const strings = settings.strings.enabled && stringHits.length ? { hits: stringHits, sidechain: settings.strings.sidechain } : null
   // Vocals are made in Arrange, one for the track open there (SCOPE.md §6.11): Generate sings none.
   const take = inArrange() ? projectTake(useProject.getState().project) : null
   const vocals = take ? { takes: [take] } : null
-  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, drones, vocals, templates }
+  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, vocals, templates }
 }
 
 function make(seed = randomSeed()): Generation | null {
@@ -361,7 +364,7 @@ export function rerollLane(laneId: string): boolean {
   if (!g || !samples || !lane) return false
   // The stab and disco lanes are made again with their module's rules (the stab in its rhythm).
   const role = laneRole(lane.name)
-  if (role === 'stab') return newChordStabs()
+  if (role && STAB_ROLES.includes(role)) return newChordStabs()
   if (role === 'disco' || role === 'disco2') return newDiscoHits()
   const next = rerollSounds(samples, options(), g, laneId, randomSeed())
   if (!next) return false
@@ -387,10 +390,10 @@ export function newSound(laneId: string): boolean {
     setGenerationBass({ preset: others[Math.floor(Math.random() * others.length)] }, g)
     return true
   }
-  if (role === 'drone') {
-    const next = newDroneSound(samples, options(), g, randomSeed())
+  if (role === 'strings') {
+    const next = newStringsSound(samples, options(), g, randomSeed())
     if (!next) return false
-    apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.laneId === laneId || (c.type === 'audio' && c.bass?.role === 'drone')).map((c) => c.id), 'New drone sound')
+    apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.laneId === laneId || (c.type === 'audio' && c.bass?.role === 'strings')).map((c) => c.id), 'New strings sound')
     return true
   }
   const next = newLaneSound(samples, options(), g, laneId, randomSeed())
@@ -450,9 +453,10 @@ function saveLocks(locks: Rules): void {
 
 /**
  * Lock a lane (its 🔒 in the overview): its sound stays on the next press of G. Bass keeps its
- * part and patch, the stab its rhythm, the disco lanes their hits.
+ * part and patch, the stabs (any of their lanes) their samples and rhythm, the disco lanes their hits.
  */
-export function toggleLaneKeep(role: Role): void {
+export function toggleLaneKeep(lane: Role): void {
+  const role = keepRole(lane)
   const { keep, set } = useGenerate.getState()
   const on = laneKept(role, keep)
   const lanes = keep.lanes.filter((r) => r !== role)
@@ -463,12 +467,16 @@ export function toggleLaneKeep(role: Role): void {
 }
 
 /** Whether the next press of G keeps a lane (all of it: Bass its part and patch). */
-export function laneKept(role: Role, keep: KeepToggles = useGenerate.getState().keep): boolean {
+export function laneKept(lane: Role, keep: KeepToggles = useGenerate.getState().keep): boolean {
+  const role = keepRole(lane)
   return role === 'bass' ? keep.bassline && keep.patch : keep.lanes.includes(role)
 }
 
+/** The stab lanes are kept together. */
+const keepRole = (role: Role): Role => (STAB_ROLES.includes(role) ? 'stab' : role)
+
 /** Lanes that can be kept: the ones with a main sound of their own. */
-export const LOCKABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove', 'bass', 'stab', 'drone', 'disco']
+export const LOCKABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove', 'bass', ...STAB_ROLES, 'strings', 'disco']
 
 /**
  * New disco hits for the current generation (the Disco Hits module's button): other hits and/or
@@ -624,24 +632,24 @@ function duckInArrange(lane: string, duck: number): void {
 }
 
 /**
- * Drones on/off for new generations, and the Drone lane's sidechain depth: the current, earlier and
- * prefetched generations (and a generated track in Arrange) follow it at once. Remembered.
+ * Strings on/off for new generations, and the Strings lane's sidechain depth: the current, earlier
+ * and prefetched generations (and a generated track in Arrange) follow it at once. Remembered.
  */
-export function setDroneOptions(patch: Partial<GenerateSettings['drones']>): void {
+export function setStringsOptions(patch: Partial<GenerateSettings['strings']>): void {
   const { settings, history, pending, set } = useGenerate.getState()
-  const drones = { ...settings.drones, ...patch }
-  set({ settings: { ...settings, drones } })
+  const strings = { ...settings.strings, ...patch }
+  set({ settings: { ...settings, strings } })
   for (const g of [...history, pending]) {
-    const lane = g?.project.lanes.find((l) => l.name === 'Drone')
-    if (lane) lane.duck = drones.sidechain
+    const lane = g?.project.lanes.find((l) => l.name === 'Strings')
+    if (lane) lane.duck = strings.sidechain
   }
   if (patch.sidechain !== undefined) {
-    duckInArrange('Drone', drones.sidechain)
+    duckInArrange('Strings', strings.sidechain)
     const g = current()
     if (g) playback.syncLanes(g.project.lanes)
   }
   try {
-    localStorage.setItem(DRONES_KEY, JSON.stringify(drones))
+    localStorage.setItem(STRINGS_KEY, JSON.stringify(strings))
   } catch {
     // not remembered
   }
@@ -649,16 +657,16 @@ export function setDroneOptions(patch: Partial<GenerateSettings['drones']>): voi
 }
 
 /**
- * A new drone for the current generation (the Drones module's button): another source, placement,
- * rhythm and voicing, or a drone in a track that had none. A new step in the history (← goes back).
+ * New strings for the current generation (the Strings module's button): another sample and
+ * placement, or strings in a track that had none. A new step in the history (← goes back).
  */
-export function newDrone(): boolean {
+export function newStrings(): boolean {
   const { samples } = useGenerate.getState()
   const g = current()
   if (!g || !samples) return false
-  const next = rerollDrone(samples, options(), g, randomSeed())
+  const next = rerollStrings(samples, options(), g, randomSeed())
   if (!next) return false
-  apply(next, next.project.clips.filter((c) => c.type === 'audio' && c.bass?.role === 'drone').map((c) => c.id), 'New drone')
+  apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.type === 'audio' && c.bass?.role === 'strings').map((c) => c.id), 'New strings')
   return true
 }
 

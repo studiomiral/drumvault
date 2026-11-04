@@ -2,7 +2,7 @@
 // (exposed by electron/preload.ts as `window.drumvault`).
 
 import type { Category, CleanRendersResult, EngineSettings, GridPreview, HealthResult, MasterResult, Overrides, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
-import type { BassRender, ProjectFileInfo } from './project'
+import type { ProjectFileInfo } from './project'
 import type { VocalMeta, VocalRequest } from '../vocals/plan'
 
 /** Engine settings as stored by the app (the library path is kept separately). */
@@ -80,8 +80,8 @@ export interface ElevenStatus {
 /** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
 export interface HitItem {
   id: number
-  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs) or a drone (Drones); older rows are disco hits. */
-  kind: 'disco' | 'stab' | 'drone'
+  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs) or strings (Strings); older rows are disco hits, 'drone' rows unused. */
+  kind: 'disco' | 'stab' | 'drone' | 'strings'
   file_name: string
   name: string
   rel_path: string
@@ -395,7 +395,7 @@ export interface DrumvaultAPI {
   serumPresets(root: string, folders: string[] | null): Promise<{ folders: { folder: string; count: number }[]; presets: SerumPreset[] }>
   /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
-    notes?: [number, number, number, number][]; bars?: number; groove?: number[]; drone?: BassRender['drone'] }): Promise<void>
+    notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
   /** Save an edited bassline to the MIDI library; returns its id. */
   saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
   /** Deleted samples, newest first. */
@@ -440,8 +440,9 @@ export interface DrumvaultAPI {
   /** Master `mix` (a .wav in `dir`) through Ozone 11 into `out` next to it, on the loudness target. */
   masterMixdown(dir: string, mix: string, out: string, format: 'pcm24' | 'float32'): Promise<MasterResult>
   /**
-   * The bass, keys, stab and drone renders and stretched FX that aren't in `keep` (library-relative)
-   * nor made in the last 10 minutes: deleted, or with `dryRun` only counted.
+   * The bass and strings renders (and older tracks' keys, stab and drone ones) and stretched FX
+   * that aren't in `keep` (library-relative) nor made in the last 10 minutes: deleted, or with
+   * `dryRun` only counted.
    */
   cleanRenders(keep: string[], dryRun: boolean): Promise<CleanRendersResult>
   /** ElevenLabs: whether a key is kept (in the keychain), and the plan and credits it has. */

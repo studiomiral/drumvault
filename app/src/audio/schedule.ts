@@ -69,12 +69,13 @@ export function tempoPath(relPath: string, bpm: number): string {
 }
 
 /** FNV-1a, hex: a short stable id for a preset path in render file names. */
-/** Where a part's renders go: bass, drone and vocal parts (and older tracks' keys and stab parts) each their own folder. */
-const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones' : b.role === 'vocal' ? 'vocals' : 'bass')
+/** Where a part's renders go: bass, strings and vocal parts (and older tracks' keys, stab and drone parts) each their own folder. */
+const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones'
+  : b.role === 'strings' ? 'strings' : b.role === 'vocal' ? 'vocals' : 'bass')
 
-/** The start of every render of drone source `preset` (a patch path or a sample's rel path). */
-export function droneRenderPrefix(preset: string): string {
-  return `.drumvault/drones/${shortHash(preset)}-`
+/** The start of every render of the string sample `preset` (its rel path). */
+export function stringsRenderPrefix(preset: string): string {
+  return `.drumvault/strings/${shortHash(preset)}-`
 }
 
 function shortHash(s: string): string {
@@ -90,6 +91,7 @@ function shortHash(s: string): string {
 export function bassPath(b: BassRender, bpm: number): string {
   const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
   const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
+  // (An older track's drone: its file is named after how it was made.)
   const d = b.drone
   const drone = d ? `-${d.rhythm}${d.warp && d.warp !== 'none' ? `-${d.warp}` : ''}${d.start ? `-s${Math.round(d.start * 100)}` : ''}` : ''
   return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${feel}${drone}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`

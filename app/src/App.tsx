@@ -31,7 +31,7 @@ const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = 
     { view: 'midi', label: 'MIDI' },
     { view: 'stabs', label: 'Chord Stabs' },
     { view: 'hits', label: 'Disco Hits' },
-    { view: 'drones', label: 'Drones' },
+    { view: 'strings', label: 'Strings' },
   ] },
   { label: 'Create', items: [
     { view: 'generate', label: 'Generate' },
@@ -128,7 +128,7 @@ export function App() {
         {view === 'midi' && <MidiView />}
         {view === 'hits' && <HitsView kind="disco" />}
         {view === 'stabs' && <HitsView key="stabs" kind="stab" />}
-        {view === 'drones' && <HitsView key="drones" kind="drone" />}
+        {view === 'strings' && <HitsView key="strings" kind="strings" />}
         {view === 'generate' && <GenerateView />}
         {view === 'arrange' && <ArrangeView />}
         {view === 'settings' && <SettingsView />}

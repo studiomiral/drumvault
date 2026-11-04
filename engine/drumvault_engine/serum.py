@@ -124,8 +124,8 @@ class SerumHost:
         self._lock = threading.Lock()
         # The preset loaded now (path, mtime, sequencers): rendering it again doesn't load it again.
         self._loaded: tuple[str, float, bool] | None = None
-        # Plugin states made from presets lately (most recent last): parts taking turns (bass,
-        # keys, a drone) don't convert theirs again; a preset with embedded samples is tens of MB.
+        # Plugin states made from presets lately (most recent last): parts taking turns don't
+        # convert theirs again; a preset with embedded samples is tens of MB.
         self._states: OrderedDict[tuple[str, float], bytes] = OrderedDict()
 
     def _use(self, p, preset: Path | str, sequencers: bool) -> None:
@@ -229,26 +229,6 @@ class SerumHost:
         if out.shape[0] < n:
             out = np.pad(out, ((0, n - out.shape[0]), (0, 0)))
         return np.ascontiguousarray(out)
-
-
-    def render_held(self, preset: Path | str, pitches: list[int], seconds: float, sr: int,
-                    velocity: int = 100) -> np.ndarray:
-        """`pitches` held together for `seconds` (a drone's source), (n, 2) float32. The preset's
-        arpeggiator and clip player are off: a drone holds its notes."""
-        from mido import Message
-        msgs = [Message("control_change", control=c, value=0, channel=ch, time=0.0)
-                for ch in range(16) for c in (123, 120)]
-        msgs += [Message("note_on", note=p, velocity=velocity, time=0.0) for p in pitches]
-        msgs += [Message("note_off", note=p, velocity=0, time=max(0.0, seconds - 0.01)) for p in pitches]
-        with self._lock:
-            p = self._load()
-            self._use(p, preset, False)
-            audio = p(msgs, duration=seconds, sample_rate=sr, num_channels=2, reset=False)
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.shape[0] == 2 and audio.shape[1] != 2:
-            audio = audio.T
-        n = int(round(seconds * sr))
-        return np.ascontiguousarray(np.pad(audio, ((0, max(0, n - audio.shape[0])), (0, 0)))[:n])
 
 
 _host: SerumHost | None = None

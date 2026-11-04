@@ -97,12 +97,12 @@ interface ClipBase {
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
   /**
-   * Absent on older bass projects. Drones (§6.10) and vocal phrases (§6.11) share the render
-   * pipeline; keys parts and Serum chord stabs only in tracks made before they were removed.
+   * Absent on older bass projects. Strings (§6.10) and vocal phrases (§6.11) share the render
+   * pipeline; keys parts, Serum chord stabs and drones only in tracks made before they were removed.
    */
-  role?: 'bass' | 'keys' | 'stab' | 'drone' | 'vocal'
+  role?: 'bass' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal'
   keyLabel?: string | null
-  /** Absolute path of the .SerumPreset; a drone's may be a Drones page sample (library-relative). */
+  /** Absolute path of the .SerumPreset; strings' is a Strings page sample (library-relative). */
   preset: string
   presetName: string
   midiId: number
@@ -119,16 +119,11 @@ export interface BassRender {
   groove?: number[]
   /** An older track's Serum chord stab part: the patch's own chord (semitones from the root), or its root alone. */
   stab?: { voicing?: number[]; oneKey?: boolean }
-  /** A drone: its rhythm, warp and where in the sample it starts (the engine washes it into a loop, drone.py). */
-  drone?: { rhythm: DroneRhythm; warp?: DroneWarp; start?: number }
+  /** An older track's drone: how it was made (its file is named after it; it isn't made again). */
+  drone?: { rhythm: string; warp?: string; start?: number }
   /** A vocal phrase: the key it's sung in (`transpose` moves it from there) and its take's id. */
   vocal?: { key: string | null; take: string }
 }
-
-/** A drone's rhythm: the sidechain alone, a soft 8th, 16th or dotted-8th gate, swells up to every offbeat, or chopped 16ths. */
-export type DroneRhythm = 'pump' | 'gate8' | 'gate16' | 'swell' | 'dotted' | 'chop'
-/** A drone's warp: as it is, 2× or 4× slower with its pitch kept, or reversed. */
-export type DroneWarp = 'none' | 'slow2' | 'slow4' | 'reverse'
 
 /** A loop on the bar grid; extending it repeats the loop. */
 export interface AudioClip extends ClipBase {

@@ -86,3 +86,25 @@ export function stabRhythm(rng: Rng, saved: SavedStabRhythm[] = []): Velocity[][
   const repeat = bars2.length ? bars2.filter((r) => hitsOf(r.steps[0]).join() === hitsOf(r.steps[1]).join()).length / bars2.length : REPEAT
   return [bar(a), bar(rng.chance(repeat) ? a : drawBar(rng, per, weightFor(1), gap))]
 }
+
+/** How several stabs share the rhythm: call and response a bar each (two stabs), or hit by hit. */
+export type StabTurns = 'bars' | 'hits'
+
+/**
+ * Each stab's part of the track's rhythm (bars of 16 velocities), so no two ever hit together:
+ * one stab plays it all; two taking turns by bar play a bar each (the rhythm over 2 bars); else
+ * the hits go round from the first, over 2 bars. `n` is capped by the hits there are (every stab
+ * plays some), and turns by bar need both bars to have hits.
+ */
+export function stabParts(rhythm: Velocity[][], n: number, turns: StabTurns): Velocity[][][] {
+  const two = [rhythm[0], rhythm[1 % rhythm.length]]
+  const k = Math.max(1, Math.min(n, two.flat().filter(Boolean).length))
+  if (k === 1) return [rhythm]
+  const byBar = k === 2 && turns === 'bars' && two.every((b) => b.some(Boolean))
+  const parts = Array.from({ length: k }, () => two.map(() => new Array<Velocity>(16).fill(0)))
+  let i = 0
+  two.forEach((bar, b) => bar.forEach((v, s) => {
+    if (v) parts[byBar ? b : i++ % k][b][s] = v
+  }))
+  return parts
+}

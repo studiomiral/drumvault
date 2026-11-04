@@ -305,7 +305,7 @@ function registerIpc(): void {
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
-  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'drone' = 'disco') => {
+  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' = 'disco') => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request('import_hits', { paths, kind, settings: engineSettings() }, 600_000)
     send('library-changed')
@@ -339,12 +339,12 @@ function registerIpc(): void {
     return sidecar.request('serum_presets', { root, folders, settings: engineSettings() }, 120_000)
   })
   ipcMain.handle('bass:render', async (_e, p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
-    notes?: number[][]; bars?: number; groove?: number[]; drone?: { rhythm: string; warp?: string; start?: number } }) => {
+    notes?: number[][]; bars?: number; groove?: number[] }) => {
     if (!sidecar) throw new Error('Engine is not running')
     // The first render loads Serum 2 into the engine (several seconds).
     await sidecar.request('render_bass', {
       preset: p.preset, midi_id: p.midiId, transpose: p.transpose, bpm: p.bpm, out_rel: p.outRel,
-      notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, drone: p.drone ?? null, settings: engineSettings(),
+      notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, settings: engineSettings(),
     }, 300_000)
   })
   ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
@@ -604,7 +604,7 @@ function buildMenu(): void {
         { label: 'MIDI', accelerator: 'CmdOrCtrl+6', click: () => send('menu', 'view:midi') },
         { label: 'Disco Hits', accelerator: 'CmdOrCtrl+7', click: () => send('menu', 'view:hits') },
         { label: 'Chord Stabs', click: () => send('menu', 'view:stabs') },
-        { label: 'Drones', click: () => send('menu', 'view:drones') },
+        { label: 'Strings', click: () => send('menu', 'view:strings') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

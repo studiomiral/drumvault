@@ -190,13 +190,6 @@ class ImportMidiParams(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class DroneSpec(BaseModel):
-    """How a drone part is made (drone.py): its rhythm, its warp, and where in the sound it starts."""
-    rhythm: Literal["pump", "gate8", "gate16", "swell", "dotted", "chop"] = "pump"
-    warp: Literal["none", "slow2", "slow4", "reverse"] = "none"
-    start: float = Field(default=0.0, ge=0.0, le=1.0)
-
-
 class RenderBassParams(BaseModel):
     """Render an imported MIDI part through a Serum 2 preset as a loop at `bpm`."""
     preset: str
@@ -209,8 +202,7 @@ class RenderBassParams(BaseModel):
     bars: Optional[int] = Field(default=None, ge=1, le=16)
     # The track's groove: per 16th step of the bar, how late (16ths) notes starting there play.
     groove: Optional[list[float]] = Field(default=None, min_length=16, max_length=16)
-    # A drone part (out_rel under .drumvault/drones/): `preset` a Serum patch or a library sample.
-    drone: Optional[DroneSpec] = None
+    # A strings part (out_rel under .drumvault/strings/): `preset` is the Strings page sample.
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -272,9 +264,9 @@ class SaveMidiParams(BaseModel):
 
 
 class ImportHitsParams(BaseModel):
-    """Add disco hits (SCOPE.md §6.8), chord stabs (§6.9) or drones (§6.10) from audio files, folders and zips."""
+    """Add disco hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
     paths: list[str]
-    kind: Literal["disco", "stab", "drone"] = "disco"
+    kind: Literal["disco", "stab", "strings"] = "disco"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

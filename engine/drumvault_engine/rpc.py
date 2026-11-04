@@ -214,7 +214,7 @@ class RpcServer:
                 self._reply(req_id, pipeline.import_midi(settings, p.paths))
             elif method == "render_bass":
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
-                                                         p.notes, p.bars, p.groove, p.drone.model_dump() if p.drone else None))
+                                                         p.notes, p.bars, p.groove))
             elif method == "save_midi":
                 self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label))
             elif method == "set_midi_meta":

@@ -244,25 +244,11 @@ class Thresholds:
     sample_loop_max_bars: int = 16          # longer files are not loops (stems belong in a zip)
     sample_oneshot_max_s: float = 4.0       # a file this short without loop hints is a one-shot
 
-    # ---- drones (drone.py): a held note or a sample washed into an ambient loop -------
-    drone_max_len_s: float = 60.0           # a dropped-in drone keeps this much (a hit only hit_max_len_s)
-    drone_settle_s: float = 4.0             # into the washed sound before the loop starts (attack, reverb build)
-    drone_loop_fade_beats: float = 2.0      # the loop's end crossfaded into its start, equal power
-    drone_tile_overlap_s: float = 1.5       # a short sample repeated with this much crossfade to fill the loop
-    drone_hp_hz: float = 180.0              # out of the bass's way
-    drone_lp_hz: float = 7000.0             # dark: an ambience, not an instrument
-    drone_reverb_room: float = 0.95
-    drone_reverb_damping: float = 0.55
-    drone_reverb_wet: float = 0.7
-    drone_reverb_dry: float = 0.3
-    drone_reverb_passes: int = 2            # reverb into reverb: a wash with no attacks left
-    drone_gate_floor: float = 0.25          # a gated or swelling drone never goes below this (of its level)
-    drone_gate_duty: float = 0.6            # share of each 8th/16th the gate is open
-    drone_gate_edge: float = 0.2            # share of a step its gate takes to open and to close
-    drone_chop_places: int = 4              # a chopped drone plays its 16ths from this many places in the sound
-    drone_chop_fade_ms: float = 4.0         # each chopped 16th fades in and out this fast (no clicks)
-    drone_lufs_target: float = -14.0        # like the bass renders (the mix balance takes it from there)
-    drone_peak_dbfs: float = -1.0
+    # ---- strings (strings.py): a long string sample, restarting on every 8-bar line --------
+    strings_max_len_s: float = 60.0         # a dropped-in string sample keeps this much (a hit only hit_max_len_s)
+    strings_fade_s: float = 0.25            # where a part cuts the sample (the next 8-bar line), it fades out over this
+    strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)
+    strings_peak_dbfs: float = -1.0
 
     # ---- vocals (vocal.py): a take's phrase loop, chops and key ------------------
     vocal_hop: int = 256                    # pYIN / level frame hop at 22.05 kHz (≈ 11.6 ms)

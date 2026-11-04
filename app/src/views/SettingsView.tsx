@@ -267,7 +267,7 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * Storage: the renders the app keeps (bass and drone parts, FX stretched to other
+ * Storage: the renders the app keeps (bass and strings parts, FX stretched to other
  * tempos), and a cleanup of the ones nothing plays any more (they're made again when needed).
  */
 function StorageSection() {
@@ -304,7 +304,7 @@ function StorageSection() {
   return (
     <section>
       <SectionTitle>Storage</SectionTitle>
-      <Field label="Renders" hint="bass and drone parts, and FX stretched to other tempos: made again whenever they're needed">
+      <Field label="Renders" hint="bass and strings parts, and FX stretched to other tempos: made again whenever they're needed">
         <span className="text-[12.5px] flex items-center gap-3">
           {!ready ? <span className="text-muted">Waiting for the engine…</span>
             : error ? <span className="text-bad select-text">{error}</span>

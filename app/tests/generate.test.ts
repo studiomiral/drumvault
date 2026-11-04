@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isGenerated } from '../src/generate/bassline'
 import {
-  applyMix, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newDroneSound, newLaneSound, rerollDisco, rerollDrone, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
+  applyMix, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newLaneSound, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
   transposeTo, type GenerateOptions, type Generation,
 } from '../src/generate/generator'
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
@@ -13,7 +13,7 @@ import { parseKey } from '../src/generate/bassline'
 import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
 import { readSections, templateFrom } from '../src/generate/template'
-import { SAVED_EXACT, stabRhythm } from '../src/generate/stabs'
+import { SAVED_EXACT, stabParts, stabRhythm } from '../src/generate/stabs'
 import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
 import { bassy } from '../src/generate/eq'
@@ -1244,13 +1244,23 @@ describe('generator: chord stabs', () => {
     }
   })
 
-  it('plays one stab per track, mostly 2 hits a bar, sometimes 1 or 3', () => {
+  it('plays one to three different stabs per track, mostly 2 hits a bar, sometimes 1 or 3', () => {
     const perBar = [0, 0, 0, 0, 0]
+    const counts = [0, 0, 0, 0]
     for (const g of gs.filter((x) => x.rules.stabs)) {
-      expect(stabLanes(g).map((l) => l.name)).toEqual(['Stab'])
-      expect(new Set(stabClips(g).map((c) => c.sample.relPath)).size).toBe(1)
+      const names = stabLanes(g).map((l) => l.name)
+      expect(names).toEqual(['Stab', 'Stab 2', 'Stab 3'].slice(0, names.length))
+      counts[names.length]++
+      // One sample a lane, a different one on each.
+      const perLane = stabLanes(g).map((l) => new Set(stabClips(g).filter((c) => c.laneId === l.id).map((c) => c.sample.relPath)))
+      for (const s of perLane) expect(s.size).toBe(1)
+      expect(new Set(perLane.map((s) => [...s][0])).size).toBe(names.length)
       for (const bar of g.rules.stabRhythm as number[][]) perBar[bar.filter(Boolean).length]++
     }
+    // Mostly one or two, sometimes three.
+    expect(counts[1]).toBeGreaterThan(counts[3])
+    expect(counts[2]).toBeGreaterThan(counts[3])
+    expect(counts[3]).toBeGreaterThan(0)
     expect(perBar[0]).toBe(0)
     expect(perBar[4]).toBe(0)
     expect(perBar[2]).toBeGreaterThan(perBar[1] + perBar[3])
@@ -1283,6 +1293,41 @@ describe('generator: chord stabs', () => {
     // Often no more than 2 stabs per bar.
     expect(perBar / bars).toBeLessThanOrEqual(2.2)
     expect(perBar / bars).toBeGreaterThanOrEqual(1)
+  })
+
+  it('never plays two stabs on the same step: they take turns in the rhythm', () => {
+    let turnsByBar = 0
+    for (const g of gs.filter((x) => stabLanes(x).length > 1)) {
+      const rhythm = g.rules.stabRhythm as number[][]
+      const d = g.sections.find((s) => s.kind === 'drop')!
+      for (let b = d.start; b < d.start + 4; b++) {
+        const hits = new Array(16).fill(0)
+        for (const l of stabLanes(g)) {
+          for (const c of stabClips(g).filter((x) => x.laneId === l.id && x.start <= b * 4 && x.start + x.length > b * 4)) {
+            const from = ((b * 4 - c.start) * 4) % c.steps.length
+            c.steps.slice(from, from + 16).forEach((v, i) => (hits[i] += v ? 1 : 0))
+          }
+        }
+        expect(Math.max(...hits)).toBeLessThanOrEqual(1)                                   // never together
+        expect(hits.map(Boolean)).toEqual(rhythm[(b - d.start) % rhythm.length].map(Boolean))  // the whole rhythm
+      }
+      if (g.choices.some((c) => c.includes('taking turns bar by bar'))) turnsByBar++
+    }
+    expect(turnsByBar).toBeGreaterThan(0)
+  })
+
+  it('splits a rhythm into turns: a bar each, or hit by hit, as many as there are hits', () => {
+    const on = (...h: number[]) => Array.from({ length: 16 }, (_, i) => (h.includes(i) ? 3 : 0)) as Velocity[]
+    const r = [on(2, 10), on(6)]
+    const hitsOf = (p: Velocity[][]) => p.map((b) => b.flatMap((v, i) => (v ? [i] : [])))
+    expect(stabParts(r, 1, 'bars')).toEqual([r])
+    expect(stabParts(r, 2, 'bars').map(hitsOf)).toEqual([[[2, 10], []], [[], [6]]])
+    expect(stabParts(r, 2, 'hits').map(hitsOf)).toEqual([[[2], [6]], [[10], []]])
+    expect(stabParts(r, 3, 'hits').map(hitsOf)).toEqual([[[2], []], [[10], []], [[], [6]]])
+    // A 1-bar rhythm takes turns over two bars; never more stabs than hits.
+    expect(stabParts([on(4)], 3, 'hits').map(hitsOf)).toEqual([[[4], []], [[], [4]]])
+    // Three stabs always go hit by hit.
+    expect(stabParts(r, 3, 'bars').length).toBe(3)
   })
 
   it('plays in the drops only, or also in breakdowns: the same rhythm low-passed, or nothing there', () => {
@@ -1676,103 +1721,110 @@ describe('generator: the mix balance', () => {
   })
 })
 
-describe('generator: drones', () => {
-  const droneHit = (id: number, key: string, name: string): HitItem => ({ id, kind: 'drone', file_name: `${name} ${key}.wav`, name,
-    rel_path: `Drones/${name.toLowerCase()}.wav`, key_label: key, key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 12, channels: 2 })
-  const HITS = [droneHit(41, 'Am', 'Air'), droneHit(42, 'F', 'Choir'), droneHit(43, 'Dm', 'Strings')]
-  const opts: GenerateOptions = { ...OPTS, drones: { hits: HITS, sidechain: 0.7 } }
+describe('generator: strings', () => {
+  const str = (id: number, key: string | null, name: string): HitItem => ({ id, kind: 'strings', file_name: `${name} ${key ?? ''}.wav`, name,
+    rel_path: `Strings/${name.toLowerCase()}.wav`, key_label: key, key_camelot: null, key_source: key ? 'name' : null, pitch_fix: 0, duration_s: 30, channels: 2 })
+  // A minor third apart: every key has one within 3 semitones; the keyless one is never used.
+  const HITS = [str(41, 'Am', 'Warm'), str(42, 'Cm', 'Lush'), str(43, 'Ebm', 'Wide'), str(44, 'F#m', 'Dark'), str(45, null, 'Unknown')]
+  const opts: GenerateOptions = { ...OPTS, strings: { hits: HITS, sidechain: 0.7 } }
   const gs = Array.from({ length: 80 }, (_, i) => generate(LIB, opts, 7700 + i))
-  const droneClips = (g: Generation) => g.project.clips.filter((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'drone')
-  const withDrone = gs.filter((g) => g.picks.drone)
-  const hitOf = (g: Generation) => HITS.find((h) => h.rel_path === droneClips(g)[0].bass!.preset)!
+  const stringClips = (g: Generation) => g.project.clips.filter((c): c is AudioClip => c.type === 'audio' && c.bass?.role === 'strings')
+  const withStrings = gs.filter((g) => g.picks.strings)
+  const hitOf = (g: Generation) => HITS.find((h) => h.rel_path === stringClips(g)[0].bass!.preset)!
 
-  it('runs a drone under some tracks, from the Drones page samples, with a random stream of its own', () => {
-    expect(withDrone.length).toBeGreaterThan(gs.length * 0.4)
-    expect(withDrone.length).toBeLessThan(gs.length * 0.9)
-    expect(generate(LIB, OPTS, 7700).project.lanes.some((l) => l.name === 'Drone')).toBe(false)
-    expect(generate(LIB, { ...OPTS, drones: { hits: [] } }, 7700).project.lanes.some((l) => l.name === 'Drone')).toBe(false)
-    // The rest of the track is the same with or without drones.
+  it('plays strings under some tracks, from the Strings page samples, with a random stream of its own', () => {
+    expect(withStrings.length).toBeGreaterThan(gs.length * 0.4)
+    expect(withStrings.length).toBeLessThan(gs.length * 0.9)
+    expect(generate(LIB, OPTS, 7700).project.lanes.some((l) => l.name === 'Strings')).toBe(false)
+    expect(generate(LIB, { ...OPTS, strings: { hits: [] } }, 7700).project.lanes.some((l) => l.name === 'Strings')).toBe(false)
+    // The rest of the track is the same with or without strings.
     for (const g of gs.slice(0, 12)) {
       const bare = generate(LIB, OPTS, g.seed)
-      const others = (x: Generation) => strip({ ...x, project: { ...x.project, clips: x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'drone')) } })
+      const others = (x: Generation) => strip({ ...x, project: { ...x.project, clips: x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'strings')) } })
       expect(others(g)).toBe(others(bare))
     }
   })
 
-  it('plays it in the drops, all through, or between the intro and the outro', () => {
+  it('plays them in the drops, all through, or between the intro and the outro', () => {
     const seen = new Set<string>()
-    for (const g of withDrone) {
-      seen.add(String(g.rules.droneAt))
+    for (const g of withStrings) {
+      seen.add(String(g.rules.stringsAt))
       const intro = g.sections[0]
       const outro = g.sections.at(-1)!
       const mid = (s: Generation['sections'][number]) => (s.start + s.bars / 2) * 4
-      for (const d of g.sections.filter((s) => s.kind === 'drop')) expect(covers(g, 'Drone', mid(d))).toBe(true)
-      if (g.rules.droneAt === 'all') {
-        expect(covers(g, 'Drone', 0)).toBe(true)
-        expect(covers(g, 'Drone', mid(outro))).toBe(true)
+      for (const d of g.sections.filter((s) => s.kind === 'drop')) expect(covers(g, 'Strings', mid(d))).toBe(true)
+      if (g.rules.stringsAt === 'all') {
+        expect(covers(g, 'Strings', 0)).toBe(true)
+        expect(covers(g, 'Strings', mid(outro))).toBe(true)
       } else {
-        expect(covers(g, 'Drone', mid(intro))).toBe(false)
-        expect(covers(g, 'Drone', mid(outro))).toBe(false)
+        expect(covers(g, 'Strings', mid(intro))).toBe(false)
+        expect(covers(g, 'Strings', mid(outro))).toBe(false)
       }
-      if (g.rules.droneAt === 'inner') expect(covers(g, 'Drone', (intro.start + intro.bars) * 4)).toBe(true)
-      if (g.rules.droneAt === 'drops') for (const b of g.sections.filter((s) => s.kind === 'break')) expect(covers(g, 'Drone', mid(b))).toBe(false)
+      if (g.rules.stringsAt === 'inner') expect(covers(g, 'Strings', (intro.start + intro.bars) * 4)).toBe(true)
+      if (g.rules.stringsAt === 'drops') for (const b of g.sections.filter((s) => s.kind === 'break')) expect(covers(g, 'Strings', mid(b))).toBe(false)
       // Ducking under the kick, by the module's sidechain.
-      expect(g.project.lanes.find((l) => l.name === 'Drone')!.duck).toBe(0.7)
-      expect(g.choices.some((c) => c.startsWith('drone from '))).toBe(true)
+      expect(g.project.lanes.find((l) => l.name === 'Strings')!.duck).toBe(0.7)
+      expect(g.choices.some((c) => c.startsWith('strings from '))).toBe(true)
     }
     expect([...seen].sort()).toEqual(['all', 'drops', 'inner'])
   })
 
-  it('takes the sample its own way per track: in the key, an octave, a warp, a start, sometimes a rhythm', () => {
-    const rhythms = new Set<string>()
-    const warps = new Set<string>()
-    const octaves = new Set<number>()
-    const starts = new Set<number>()
-    for (const g of withDrone) {
-      const cs = droneClips(g)
+  it('plays the sample as it is, moved at most 3 semitones into the key, starting again every 8 bars', () => {
+    for (const g of withStrings) {
+      const cs = stringClips(g)
       const r = cs[0].bass!
-      expect(cs.every((c) => JSON.stringify(c.bass) === JSON.stringify(r))).toBe(true)  // one drone, one render
-      expect(r.preset.startsWith('Drones/')).toBe(true)  // a sample, never a Serum patch
-      expect(r.notes).toBeUndefined()
-      expect(r.transpose).toBe(Math.max(-24, Math.min(24, hitPitch(hitOf(g), g.key) + Number(g.rules.droneOctave))))
-      expect(r.drone).toEqual({ rhythm: g.rules.droneRhythm, warp: g.rules.droneWarp, start: g.rules.droneStart })
-      expect(cs[0].sample.relPath).toBe(bassPath(r, g.project.bpm))
-      expect(cs[0].sample.relPath.startsWith('.drumvault/drones/')).toBe(true)
-      rhythms.add(r.drone!.rhythm)
-      warps.add(r.drone!.warp!)
-      octaves.add(Number(g.rules.droneOctave))
-      starts.add(r.drone!.start!)
+      expect(cs.every((c) => JSON.stringify(c.bass) === JSON.stringify(r))).toBe(true)  // one sample, one render
+      expect(r.preset.startsWith('Strings/')).toBe(true)
+      expect(hitOf(g).key_label).not.toBeNull()
+      expect(r.transpose).toBe(hitPitch(hitOf(g), g.key))
+      expect(Math.abs(r.transpose)).toBeLessThanOrEqual(3)
+      expect(r.drone).toBeUndefined()
+      expect(r.bars).toBe(8)
+      for (const c of cs) {
+        expect(c.sample.bars).toBe(8)
+        expect(c.sample.relPath).toBe(bassPath(r, g.project.bpm))
+        expect(c.sample.relPath.startsWith('.drumvault/strings/')).toBe(true)
+      }
     }
-    expect(rhythms.size).toBeGreaterThanOrEqual(5)
-    expect([...warps].sort()).toEqual(['none', 'reverse', 'slow2', 'slow4'])
-    expect([...octaves].sort((a, b) => a - b)).toEqual([-12, 0, 12])
-    expect(starts.size).toBeGreaterThan(withDrone.length / 2)
-    // Mostly just the sidechain pump: a rhythm is the exception.
-    expect(withDrone.filter((g) => g.rules.droneRhythm === 'pump').length).toBeGreaterThan(withDrone.length * 0.25)
   })
 
-  it('makes a new drone, or another sample for it where it plays, the rest as it is', () => {
-    const none = gs.find((g) => !g.picks.drone)!
-    const added = rerollDrone(LIB, opts, none, 5)!
-    expect(added.picks.drone).toBeTruthy()
-    expect(droneClips(added).length).toBeGreaterThan(0)
-    const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'drone')).map(({ id: _i, laneId: _l, ...c }) => c))
+  it('leaves out samples without a key or further than 3 semitones from it', () => {
+    const far = { ...OPTS, strings: { hits: [str(51, 'Ebm', 'Far'), str(52, null, 'Unknown')] } }  // 6 from A minor
+    for (let i = 0; i < 20; i++) expect(generate(LIB, far, 7900 + i, { key: 'Am' }).picks.strings).toBeUndefined()
+    const near = { ...OPTS, strings: { hits: [str(53, 'Bm', 'Near')] } }
+    const got = Array.from({ length: 20 }, (_, i) => generate(LIB, near, 7900 + i, { key: 'Am' })).filter((g) => g.picks.strings)
+    expect(got.length).toBeGreaterThan(0)
+    for (const g of got) expect(stringClips(g)[0].bass!.transpose).toBe(-2)
+  })
+
+  it('makes new strings, or another sample where they play, the rest as it is', () => {
+    const none = gs.find((g) => !g.picks.strings)!
+    const added = rerollStrings(LIB, opts, none, 5)!
+    expect(added.picks.strings).toBeTruthy()
+    expect(stringClips(added).length).toBeGreaterThan(0)
+    const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'strings')).map(({ id: _i, laneId: _l, ...c }) => c))
     expect(rest(added)).toBe(rest(none))
-    const g = withDrone[0]
-    const other = newDroneSound(LIB, opts, g, 9)!
-    expect(other.picks.drone!.id).not.toBe(g.picks.drone!.id)
-    for (const r of ['droneAt', 'droneRhythm', 'droneWarp', 'droneOctave', 'droneStart']) expect(other.rules[r]).toBe(g.rules[r])
+    const g = withStrings.find((x) => HITS.filter((h) => h.key_label && Math.abs(hitPitch(h, x.key)) <= 3).length > 1)!
+    const other = newStringsSound(LIB, opts, g, 9)!
+    expect(other.picks.strings!.id).not.toBe(g.picks.strings!.id)
+    expect(other.rules.stringsAt).toBe(g.rules.stringsAt)
     expect(rest(other)).toBe(rest(g))
   })
 
-  it('moves the drone into another key, keeping its octave', () => {
-    const g = withDrone.find((x) => Number(x.rules.droneOctave) !== 0) ?? withDrone[0]
-    const to = g.key === 'Dm' ? 'F' : 'Dm'
-    const r = changeKey(LIB, opts, g, to, 3)
-    const b = droneClips(r)[0].bass!
-    expect(b.keyLabel).toBe(to)
-    expect(b.transpose).toBe(Math.max(-24, Math.min(24, hitPitch(hitOf(g), to) + Number(g.rules.droneOctave))))
-    expect(droneClips(r)[0].sample.relPath).toBe(bassPath(b, r.project.bpm))
+  it('moves the strings into another key, or another sample when theirs is too far, or none', () => {
+    const g = withStrings[0]
+    const own = hitOf(g).key_label!
+    const r = changeKey(LIB, opts, g, own, 3)
+    const b = stringClips(r)[0].bass!
+    expect([b.keyLabel, b.transpose, b.preset]).toEqual([own, 0, hitOf(g).rel_path])
+    expect(stringClips(r)[0].sample.relPath).toBe(bassPath(b, r.project.bpm))
+    // Only one sample, and the new key more than 3 semitones from it: no strings.
+    const single = { ...OPTS, strings: { hits: [hitOf(g)] } }
+    const far = ['Cm', 'C#m', 'Dm', 'Ebm', 'Em', 'Fm', 'F#m', 'Gm', 'G#m', 'Am', 'Bbm', 'Bm'].find((k) => Math.abs(transposeTo(own, k)) > 3)!
+    const gone = changeKey(LIB, single, g, far, 3)
+    expect(stringClips(gone)).toEqual([])
+    expect(gone.picks.strings).toBeUndefined()
+    expect(gone.project.lanes.some((l) => l.name === 'Strings')).toBe(false)
   })
 })
 

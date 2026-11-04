@@ -1,7 +1,7 @@
-// Cleaning up renders (Settings → Storage): every bass, keys, stab and drone part and every FX
-// stretched to a tempo is kept on disk, also for generations prepared and never played. What no
-// saved project, shortlisted track or generation of this session plays can go; it's rendered
-// again whenever it's needed.
+// Cleaning up renders (Settings → Storage): every bass and strings part (and older tracks' keys,
+// stab and drone parts) and every FX stretched to a tempo is kept on disk, also for generations
+// prepared and never played. What no saved project, shortlisted track or generation of this
+// session plays can go; it's rendered again whenever it's needed.
 
 import { api } from '../api'
 import { forgetRenders } from '../audio/tempo'

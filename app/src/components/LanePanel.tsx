@@ -5,11 +5,11 @@ import { laneRole, type Generation, type Role } from '../generate/generator'
 import { useApp } from '../store/app'
 import type { Panel } from '../store/arrange'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setDroneOptions, setStabOptions, setVerbOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setStringsOptions, setVerbOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
-import { DronePanel } from './DronePanel'
+import { StringsPanel } from './StringsPanel'
 import { VocalPanel } from './VocalPanel'
 import { IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
 import { VerbPanel } from './VerbPanel'
@@ -19,21 +19,21 @@ import { cx, Toggle } from './ui'
 /** The lanes a module plays on. */
 const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   bass: () => ['Bass'],
-  chords: () => ['Stab'],
-  drones: () => ['Drone'],
+  chords: () => ['Stab', 'Stab 2', 'Stab 3'],
+  strings: () => ['Strings'],
   vocals: () => ['Vocal', 'Vocal Chops'],
   disco: () => ['Disco Hit', 'Disco Hit 2'],
   verb: () => [],
 }
 
-type ModuleId = 'bass' | 'chords' | 'vocals' | 'drones' | 'disco' | 'verb'
+type ModuleId = 'bass' | 'chords' | 'vocals' | 'strings' | 'disco' | 'verb'
 
 /** The modules' pills; `only` the view one shows in (vocals are made in Arrange, reverb builds are G's). */
 const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?: 'generate' | 'arrange' }[] = [
   { module: 'bass', label: 'Bass', on: 'On: G writes a bass for every new generation', off: 'Off: new generations have no bass' },
   { module: 'chords', label: 'Chords', on: 'On: G writes chord stabs for every new generation', off: 'Off: new generations have no chord stabs' },
   { module: 'vocals', label: 'Vocals', only: 'arrange' },
-  { module: 'drones', label: 'Drones', on: 'On: some new generations run a drone under the track', off: 'Off: new generations have no drone' },
+  { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
   { module: 'disco', label: 'Disco Hits', on: 'On: some new generations drop one or two disco hits', off: 'Off: new generations have no disco hits' },
   { module: 'verb', label: 'Reverb', on: 'On: new generations get reverb builds', off: 'Off: new generations have no reverb builds', only: 'generate' },
 ]
@@ -41,19 +41,19 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?
 /** Whether G writes each module into new generations (the pills' switches, Generate only). */
 function useModulesOn(): Partial<Record<ModuleId, boolean>> {
   const s = useGenerate((x) => x.settings)
-  return { bass: s.bass.enabled, chords: s.stabs.enabled, drones: s.drones.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
+  return { bass: s.bass.enabled, chords: s.stabs.enabled, strings: s.strings.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
 }
 
 function setModuleOn(module: ModuleId, on: boolean): void {
   if (module === 'bass') setBassOptions({ enabled: on })
   else if (module === 'chords') setStabOptions({ enabled: on })
-  else if (module === 'drones') setDroneOptions({ enabled: on })
+  else if (module === 'strings') setStringsOptions({ enabled: on })
   else if (module === 'disco') setDiscoOptions({ enabled: on })
   else setVerbOptions({ enabled: on })
 }
 
 /**
- * The lane panel (SCOPE.md §6.6): the modules of the track (Bass, Chords, Drones, Disco Hits, Reverb
+ * The lane panel (SCOPE.md §6.6): the modules of the track (Bass, Chords, Strings, Disco Hits, Reverb
  * builds), one at a time, or a lane's sounds and the choices that shape it. Each lane on it can
  * get a new sound where it plays, be made again, and (in Generate) be kept for the next track.
  * In Generate it acts on the generation on screen, in Arrange on the open project.
@@ -94,7 +94,7 @@ export function LanePanel({ g, panel, onPanel, where }: {
       {'module' in panel && panel.module === 'bass' && <BassPanel g={g} fixed />}
       {'module' in panel && panel.module === 'chords' && <ChordsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'vocals' && <VocalPanel g={g} where={where} fixed />}
-      {'module' in panel && panel.module === 'drones' && <DronePanel g={g} fixed />}
+      {'module' in panel && panel.module === 'strings' && <StringsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'disco' && <DiscoPanel g={g} fixed />}
       {'module' in panel && panel.module === 'verb' && <VerbPanel fixed />}
       {'lane' in panel && !shown.length && <p className="text-muted text-[12.5px]">This track has no {panel.lane} lane.</p>}

@@ -4,7 +4,7 @@
 // A layer lane (Clap 2, Perc 2, Tops 4, …) is listed only where the rule moves it: most layers
 // play in drops only, so not in the intro, the outro, breakdowns or the bars before a drop.
 
-import { BUILDUP_ROLES, type Generation, type Role } from './generator'
+import { BUILDUP_ROLES, STAB_ROLES, type Generation, type Role } from './generator'
 
 export interface Choice {
   rule: string
@@ -24,7 +24,7 @@ const HATS: Role[] = ['hats', 'hats2']
 /** The top loops of builds (a fourth plays only in peak drops). */
 const BUILD_TOPS: Role[] = ['top', 'top2', 'top3']
 /** What plays in the bars before drops (the layers that play in drops only, and the ride, start with them). */
-const LEAD_IN: Role[] = ['kick', 'clap', ...HATS, 'perc', ...BUILD_TOPS, 'groove', 'bass', 'stab']
+const LEAD_IN: Role[] = ['kick', 'clap', ...HATS, 'perc', ...BUILD_TOPS, 'groove', 'bass', ...STAB_ROLES]
 /** Everything that stops for the silence before drops (fills, FX, crashes and hits ring through). */
 const SILENCED: Role[] = [...LEAD_IN, 'disco', 'disco2', 'atmos']
 /** What the mix high-pass before drops rides: the loops (not the moments: risers, fills, impacts, atmos, hits). */
@@ -61,14 +61,14 @@ export const CHOICES: Choice[] = [
   { rule: 'hatsInBreaks', label: 'Hats', group: 'Breakdowns', roles: ['hats'], when: has('break'), options: yesNo('high-passed', 'out') },
   { rule: 'bassBreaks', label: 'Bass', group: 'Breakdowns', roles: ['bass'], when: (g) => !!g.bass && has('break')(g),
     options: [{ value: 'filtered', label: 'high-passed' }, { value: 'none', label: 'out' }] },
-  { rule: 'stabsIn', label: 'Stabs', group: 'Breakdowns', roles: ['stab'], when: (g) => !!g.rules.stabs,
+  { rule: 'stabsIn', label: 'Stabs', group: 'Breakdowns', roles: STAB_ROLES, when: (g) => !!g.rules.stabs,
     options: [{ value: 'drops', label: 'in drops only' }, { value: 'keys', label: 'also breaks & builds' }] },
-  { rule: 'stabsBreaks', label: 'Stabs in breaks', group: 'Breakdowns', roles: ['stab'],
+  { rule: 'stabsBreaks', label: 'Stabs in breaks', group: 'Breakdowns', roles: STAB_ROLES,
     when: (g) => !!g.rules.stabs && g.rules.stabsIn === 'keys' && has('break')(g),
     options: [{ value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
   { rule: 'bassBuild', label: 'Bass', group: 'Builds', roles: ['bass'], when: (g) => !!g.bass && has('build')(g),
     options: [{ value: 'filtered', label: 'high-passed' }, { value: 'sweep', label: 'sub sweeps in' }, { value: 'none', label: 'out' }] },
-  { rule: 'stabsBuild', label: 'Stabs', group: 'Builds', roles: ['stab'],
+  { rule: 'stabsBuild', label: 'Stabs', group: 'Builds', roles: STAB_ROLES,
     when: (g) => !!g.rules.stabs && g.rules.stabsIn === 'keys' && has('build')(g),
     options: [{ value: 'sweep', label: 'filter opens' }, { value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
   { rule: 'introHats', label: 'Hats in the intro', group: 'Intro & outro', roles: ['hats'],
@@ -89,7 +89,11 @@ export const CHOICES: Choice[] = [
     options: [{ value: 'none', label: 'none' }, { value: '16', label: 'every 16 bars' }, { value: '8', label: 'every 8 bars' }] },
   { rule: 'ride', label: 'Ride', group: 'Sound', roles: ['ride', 'crash'],
     options: [{ value: 'late', label: 'later in drop 1' }, { value: 'second', label: 'from drop 2' }, { value: 'both', label: 'late in drop 1, then all through' }] },
-  { rule: 'droneAt', label: 'Drone', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone,
+  { rule: 'stabCount', label: 'Stab sounds', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs && !!g.picks.stab, unset: 1,
+    options: [{ value: 1, label: 'one' }, { value: 2, label: 'two, taking turns' }, { value: 3, label: 'three, taking turns' }] },
+  { rule: 'stabTurns', label: 'Stabs take turns', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.picks.stab2 && !g.picks.stab3, unset: 'hits',
+    options: [{ value: 'bars', label: 'bar by bar' }, { value: 'hits', label: 'hit by hit' }] },
+  { rule: 'stringsAt', label: 'Strings', group: 'Sound', roles: ['strings'], when: (g) => !!g.picks.strings,
     options: [{ value: 'drops', label: 'in the drops' }, { value: 'all', label: 'all through' }, { value: 'inner', label: 'all but intro and outro' }] },
   { rule: 'vocalUse', label: 'Vocal', group: 'Sound', roles: ['vocal', 'vchop'], when: (g) => !!g.picks.vocal,
     options: [{ value: 'phrase', label: 'its phrase' }, { value: 'chops', label: 'chopped' }, { value: 'both', label: 'phrase and chops' }] },
@@ -98,13 +102,6 @@ export const CHOICES: Choice[] = [
       { value: 'drops_breaks', label: 'drops and breakdowns' }, { value: 'breaks', label: 'breakdowns, last drop' }] },
   { rule: 'vocalLoop', label: 'Vocal loop', group: 'Sound', roles: ['vocal'], when: (g) => !!g.picks.vocal && g.rules.vocalUse !== 'chops',
     options: [{ value: 'long', label: 'the long one' }, { value: 'short', label: 'the short one' }] },
-  { rule: 'droneRhythm', label: 'Drone rhythm', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone,
-    options: [{ value: 'pump', label: 'sidechain pump' }, { value: 'gate8', label: 'gated 8ths' }, { value: 'gate16', label: 'gated 16ths' },
-      { value: 'dotted', label: 'gated dotted 8ths' }, { value: 'swell', label: 'offbeat swells' }, { value: 'chop', label: 'chopped 16ths' }] },
-  { rule: 'droneWarp', label: 'Drone warp', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone, unset: 'none',
-    options: [{ value: 'none', label: 'as it is' }, { value: 'slow2', label: 'slowed down 2×' }, { value: 'slow4', label: 'slowed down 4×' }, { value: 'reverse', label: 'reversed' }] },
-  { rule: 'droneOctave', label: 'Drone octave', group: 'Sound', roles: ['drone'], when: (g) => !!g.picks.drone, unset: 0,
-    options: [{ value: -12, label: 'down' }, { value: 0, label: 'in the key' }, { value: 12, label: 'up' }] },
   { rule: 'fx', label: 'FX', group: 'Sound', roles: ['fx', 'fx2', 'hits'],
     options: [{ value: 'sparse', label: 'sparse' }, { value: 'normal', label: 'normal' }, { value: 'busy', label: 'busy' }] },
 ]

@@ -950,8 +950,8 @@ def delete_midi(settings: Settings, midi_ids: list[int]) -> dict:
 BASS_RENDER_VERSION = 2
 # Chord stab parts (their own folder): 3: the preset's arp and clip player off.
 STAB_RENDER_VERSION = 3
-# Drones (their own folder, drone.py).
-DRONE_RENDER_VERSION = 1
+# Strings (their own folder, strings.py).
+STRINGS_RENDER_VERSION = 1
 
 
 def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -> None:
@@ -968,18 +968,19 @@ def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -
 
 def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, bpm: float, out_rel: str,
                 notes: list[list[float]] | None = None, bars: int | None = None,
-                groove: list[float] | None = None, drone: dict | None = None) -> dict:
+                groove: list[float] | None = None) -> dict:
     """Render a MIDI part through a Serum 2 preset as a seamless loop at `bpm`, loudness-matched,
     to `out_rel` (under .drumvault/bass/). Cached: redone only when the preset or MIDI changed.
     `notes`/`bars` (edited in the piano roll) replace the imported file's; the app names such
     renders after the notes, so the file stays a cache. A line the app generated has no file
     (`midi_id` < 1): its `notes` and `bars` are all there is. `groove` (16ths per step) moves
-    notes that start on a 16th the way the track's loops are played. A drone (under .drumvault/drones/)
-    is made by `_render_drone`."""
+    notes that start on a 16th the way the track's loops are played. Strings (under
+    .drumvault/strings/) are made by `_render_strings`; older tracks' drones (.drumvault/drones/)
+    are only played from the files they have."""
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/vocals/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
     if out_rel.startswith(".drumvault/vocals/"):
@@ -995,8 +996,12 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
         except stretch.StretchError as e:
             raise PipelineError("stretch", str(e)) from e
         return {"path": out_rel, "cached": False}
+    if out_rel.startswith(".drumvault/strings/"):
+        return _render_strings(settings, preset, transpose, bpm, int(bars or 8), out, out_rel)
     if out_rel.startswith(".drumvault/drones/"):
-        return _render_drone(settings, preset, notes or [], transpose, bpm, int(bars or 4), drone or {}, out, out_rel)
+        if out.exists():
+            return {"path": out_rel, "cached": True}
+        raise PipelineError("not_found", f"An older track's drone can't be made again: {out_rel}")
     stab = out_rel.startswith(".drumvault/stabs/")
     _drop_stale_bass_renders(out.parent, STAB_RENDER_VERSION if stab else BASS_RENDER_VERSION)
     row = None
@@ -1037,53 +1042,34 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     return {"path": out_rel, "cached": False}
 
 
-def _render_drone(settings: Settings, source: str, notes: list[list[float]], transpose: int, bpm: float, bars: int,
-                  spec: dict, out: Path, out_rel: str) -> dict:
-    """A drone loop (drone.py) from a Drones page sample (`source` library-relative, moved
-    `transpose`, warped and started where `spec` says) or, in older tracks, a Serum 2 patch
-    (`source` an absolute preset path, holding the pitches of `notes`)."""
-    from . import drone as dronemod, serum
-    rhythm, warp, start = spec.get("rhythm", "pump"), spec.get("warp", "none"), float(spec.get("start", 0.0))
-    if rhythm not in dronemod.RHYTHMS or warp not in dronemod.WARPS:
-        raise PipelineError("bad_request", f"Unknown drone rhythm or warp: {rhythm}, {warp}")
-    _drop_stale_bass_renders(out.parent, DRONE_RENDER_VERSION)
-    lib = Path(settings.library_path)
-    th, sr = settings.thresholds, settings.output_sample_rate
-    patch = Path(source).is_absolute()
-    src = Path(source) if patch else lib / source
-    if (not patch and ".." in Path(source).parts) or not src.exists():
-        raise PipelineError("not_found", f"Drone source not found: {source}")
+def _render_strings(settings: Settings, source: str, transpose: int, bpm: float, bars: int, out: Path, out_rel: str) -> dict:
+    """A strings part (strings.py) from a Strings page sample (`source` library-relative), moved
+    `transpose` semitones with its length kept, `bars` bars at `bpm`."""
+    from . import strings as stringsmod
+    _drop_stale_bass_renders(out.parent, STRINGS_RENDER_VERSION)
+    th = settings.thresholds
+    src = Path(settings.library_path) / source
+    if ".." in Path(source).parts or not src.exists():
+        raise PipelineError("not_found", f"String sample not found: {source}")
     if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
         return {"path": out_rel, "cached": True}
-    if patch:
-        pitches = sorted({max(0, min(127, int(p) + transpose)) for _, _, p, _ in notes})
-        if not pitches:
-            raise PipelineError("bad_request", "A drone patch needs the notes it holds")
-        try:
-            data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_held(
-                src, pitches, dronemod.serum_seconds(bpm, bars, sr, th), sr)
-        except serum.SerumError as e:
-            raise PipelineError("serum", str(e)) from e
-    else:
-        try:
-            data = dronemod.warped(dronemod.sample_source(settings, source, transpose), sr, warp, settings)
-        except stretch.StretchError as e:
-            raise PipelineError("stretch", str(e)) from e
-        data = dronemod.from_start(data, start, dronemod.source_frames(bpm, bars, sr, th))
+    try:
+        data = stringsmod.make_part(settings, source, transpose, bpm, bars)
+    except stretch.StretchError as e:
+        raise PipelineError("stretch", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) <= 1e-5:
-        raise PipelineError("silent", f"The drone source is silent: {Path(source).name}")
-    loop = dronemod.make_loop(data, sr, bpm, bars, rhythm, th, seed=int(start * 1_000_000))
-    loop, _, _ = normalize.loudness_normalize(loop, sr, th.drone_lufs_target, th.drone_peak_dbfs)
+        raise PipelineError("silent", f"The string sample is silent: {Path(source).name}")
+    data, _, _ = normalize.loudness_normalize(data, settings.output_sample_rate, th.strings_lufs_target, th.strings_peak_dbfs)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f".{out.name}.part")
-    sf.write(str(tmp), loop, sr, subtype="PCM_24", format="WAV")
+    sf.write(str(tmp), data, settings.output_sample_rate, subtype="PCM_24", format="WAV")
     tmp.replace(out)
     return {"path": out_rel, "cached": False}
 
 
-# What the app makes for its projects and generations, rendered again whenever it's gone: the bass,
-# keys, stab and drone parts, and FX stretched to other tempos.
-RENDER_DIRS = ("bass", "keys", "stabs", "drones", "tempo")
+# What the app makes for its projects and generations, rendered again whenever it's gone: the bass
+# and strings parts, and FX stretched to other tempos (and older tracks' keys, stab and drone parts).
+RENDER_DIRS = ("bass", "keys", "stabs", "drones", "strings", "tempo")
 
 
 def clean_renders(settings: Settings, keep: list[str], dry_run: bool = False, recent_s: float = 600.0) -> dict:

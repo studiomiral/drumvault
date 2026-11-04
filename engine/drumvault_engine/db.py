@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS midi_files (
 -- chord stabs (v12) the same way, in <Library>/Chord Stabs/.
 CREATE TABLE IF NOT EXISTS hits (
   id INTEGER PRIMARY KEY,
-  kind TEXT DEFAULT 'disco',        -- "disco" (a Disco Hits page sample) | "stab" (Chord Stabs)
+  kind TEXT DEFAULT 'disco',        -- "disco" (a Disco Hits page sample) | "stab" (Chord Stabs) | "strings" (Strings; "drone": older, unused)
   file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, file_sha1 TEXT UNIQUE,
   key_label TEXT, key_camelot TEXT,
   key_source TEXT,                  -- "name" (in the file name) | "detected" (from the audio) | "manual"

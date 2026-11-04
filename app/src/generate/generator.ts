@@ -10,14 +10,14 @@
 import { expandCompatible } from '../lib/camelot'
 import { BEATS_PER_BAR, makeLane, makeMarker, newProject, replaceSample, sampleRef, STEPS_PER_BAR, uid } from '../lib/project'
 import type { Category, SampleKind } from '../types/engine'
-import { bassPath, droneRenderPrefix } from '../audio/schedule'
+import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
-import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, DroneRhythm, DroneWarp, PatternClip, Project, StepGroove, Velocity } from '../types/project'
+import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated } from './bassline'
 import { hitPitch, hitSample } from './disco'
-import { DRONE_CHANCE, droneInKey, droneItem, droneRender, droneSample, type DroneLook } from './drones'
+import { STRINGS_CHANCE, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { chopPitch, chopSample, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
-import { stabRhythm } from './stabs'
+import { stabParts, stabRhythm, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
@@ -28,7 +28,7 @@ import { bassy, eqLanes } from './eq'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
-  | 'disco' | 'disco2' | 'stab' | 'drone' | 'vocal' | 'vchop'
+  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'strings' | 'vocal' | 'vchop'
 
 /** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -57,7 +57,9 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'groove', name: 'Groove', startDb: -8, color: '#a3e635' },
   { role: 'bass', name: 'Bass', startDb: -4, color: '#fda4af' },
   { role: 'stab', name: 'Stab', startDb: -7, color: '#fcd34d' },
-  { role: 'drone', name: 'Drone', startDb: -12, color: '#99f6e4' },
+  { role: 'stab2', name: 'Stab 2', startDb: -7, color: '#fde68a' },
+  { role: 'stab3', name: 'Stab 3', startDb: -7, color: '#fef3c7' },
+  { role: 'strings', name: 'Strings', startDb: -12, color: '#99f6e4' },
   { role: 'vocal', name: 'Vocal', startDb: -3, color: '#f9a8d4' },
   { role: 'vchop', name: 'Vocal Chops', startDb: -6, color: '#fbcfe8' },
   { role: 'disco', name: 'Disco Hit', startDb: -6, color: '#f0abfc' },
@@ -71,10 +73,10 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
 ]
 /** Lanes that keep playing in the beat or two of silence before a drop. */
 const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'hits'])
-/** The Drone lane's sidechain depth when Generate doesn't set one. */
-const DRONE_SIDECHAIN = 0.6
-/** The rules a drone's lane owns, kept with a kept drone. */
-export const DRONE_RULES = ['droneAt', 'droneRhythm', 'droneWarp', 'droneOctave', 'droneStart'] as const
+/** The Strings lane's sidechain depth when Generate doesn't set one. */
+const STRINGS_SIDECHAIN = 0.6
+/** The rules the Strings lane owns, kept with kept strings. */
+export const STRINGS_RULES = ['stringsAt'] as const
 
 export function laneRole(laneName: string): Role | undefined {
   return LANES.find((x) => x.name === laneName)?.role
@@ -85,8 +87,8 @@ const CLAP_ROLES: Role[] = ['clap', 'clap2', 'clap3']
 type LiftRole = 'hats' | 'perc' | 'top2' | 'clap'
 /** Bars an intro (or outro) of `bars` fills up over (thins out over): 8, or 16 from 32 bars. */
 export const liftBars = (bars: number) => (bars >= 32 ? 16 : 8)
-/** The chord stab lane (SCOPE.md §6.9): one sample playing the track's stab rhythm. */
-export const STAB_ROLES: Role[] = ['stab']
+/** The chord stab lanes (SCOPE.md §6.9): one to three samples taking turns in the track's stab rhythm. */
+export const STAB_ROLES: Role[] = ['stab', 'stab2', 'stab3']
 /** What stops with the tops in a full breath before drops. */
 const BREATH_DRUMS: Role[] = [...CLAP_ROLES, 'hats', 'hats2', 'perc', 'perc2', 'bass']
 /** A bass build's high-pass ends here: the sub coming in towards the drop. */
@@ -119,7 +121,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', droneIn: false, vocalIn: false }
+const LATER_RULES: Rules = { buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits' }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -176,10 +178,10 @@ export interface GenerateOptions {
     rhythms?: SavedStabRhythm[]
   } | null
   /**
-   * Drones (SCOPE.md §6.10) some tracks run under them: the Drones page's samples, and the Drone
-   * lane's sidechain depth; null or empty = none.
+   * Strings (SCOPE.md §6.10) some tracks play under them: the Strings page's samples, and the
+   * Strings lane's sidechain depth; null or empty = none.
    */
-  drones?: { hits: HitItem[]; sidechain?: number } | null
+  strings?: { hits: HitItem[]; sidechain?: number } | null
   /**
    * Vocals (SCOPE.md §6.11): the Vocals page's analysed takes, one sung in every track (one not
    * used in an export yet while there are some); null or empty = none.
@@ -675,7 +677,7 @@ class Lanes {
 
   /**
    * Silence [from, to) beats on every lane but `keep`: pattern steps are cleared, loops end
-   * early (a drop's moment of silence); one running on past it (a drone all through) plays on
+   * early (a drop's moment of silence); one running on past it (strings all through) play on
    * after it, from where its loop is there.
    */
   silence(from: number, to: number, keep: Set<Role>): void {
@@ -911,9 +913,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const snare = keptSnare ?? drawnSnare ?? clap
   const hitItems = opts.disco?.hits ?? []
   const hitPool = hitItems.map(hitSample)
-  // ---- drones (SCOPE.md §6.10): the Drones page's samples. An RNG of their own, like the disco hits ----
-  const orng = new Rng(seed ^ 0x44524f4e)
-  const droneHits = opts.drones?.hits ?? []
+  // ---- strings (SCOPE.md §6.10): the Strings page's samples close enough to the key. An RNG of
+  // their own, like the disco hits ----
+  const trng = new Rng(seed ^ 0x53545247)
+  const stringHits = (opts.strings?.hits ?? []).filter((h) => stringsShift(h, key) != null)
   // ---- vocals (SCOPE.md §6.11): the Vocals page's takes. An RNG of their own too ----
   const vrng = new Rng(seed ^ 0x564f434c)
   const takes = opts.vocals?.takes ?? []
@@ -1047,16 +1050,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     discoIn: hitPool.length > 0 && drng.chance(0.6),
     discoCount: drng.weighted([[1, 2], [2, 1]] as const) as number,
     discoAt: drng.weighted([['drops', 3], ['16', 2], ['8', 1], ['all', 2]] as const),
-    // A drone in some tracks: in the drops, all through, or all but the intro and outro. Its own
-    // take on the sample, so the same one sounds new: an octave down or up sometimes, a warp
-    // (slowed down 2× or 4×, reversed), the part of it the loop starts from, and sometimes a
-    // rhythm (a soft 8th, 16th or dotted gate, swells to the offbeats, chopped 16ths).
-    droneIn: droneHits.length > 0 && orng.chance(DRONE_CHANCE),
-    droneAt: orng.weighted([['drops', 3], ['all', 2], ['inner', 3]] as const),
-    droneRhythm: orng.weighted([['pump', 5], ['gate8', 1.5], ['gate16', 1.5], ['swell', 1.5], ['dotted', 1], ['chop', 1]] as const) as DroneRhythm,
-    droneWarp: orng.weighted([['none', 3], ['slow2', 2], ['slow4', 1.5], ['reverse', 1]] as const) as DroneWarp,
-    droneOctave: orng.weighted([[0, 4], [-12, 2], [12, 1]] as const) as number,
-    droneStart: orng.int(0, 99) / 100,
+    // Strings in some tracks: in the drops, all through, or all but the intro and outro.
+    stringsIn: stringHits.length > 0 && trng.chance(STRINGS_CHANCE),
+    stringsAt: trng.weighted([['drops', 3], ['all', 2], ['inner', 3]] as const),
     // A vocal in every track: its phrase loop, its chops, or both; the long or the short loop; the
     // phrase in the drops, in their second halves, in drops and breakdowns, or in breakdowns (a
     // reverb build on it there); the chops in the drops (where the phrase isn't), also into them.
@@ -1082,6 +1078,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     stabsBreaks: srng.weighted([['filtered', 2], ['none', 1]] as const),
     stabsBuild: srng.weighted([['sweep', 2], ['filtered', 1], ['none', 1]] as const),
     stabsCutoff: srng.int(700, 1800),
+    // How many stab samples take turns in the rhythm (as many as the page has), and how: a bar
+    // each (two of them), or hit by hit.
+    stabCount: srng.weighted([[1, 4], [2, 4], [3, 2]] as const) as number,
+    stabTurns: srng.weighted([['bars', 1], ['hits', 1]] as const) as StabTurns,
   }
   const rules: typeof drawn = { ...drawn, ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined) }
@@ -1183,8 +1183,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
   }
 
-  /** What each stab lane plays of the track's stab rhythm (all of it), and its pitch in the track key. */
-  const stabSteps = stabs.map(() => rules.stabRhythm)
+  /** What each stab lane plays of the track's stab rhythm (their turns in it), and its pitch in the track key. */
+  const stabSteps = stabs.length ? stabParts(rules.stabRhythm, Math.min(Number(rules.stabCount ?? 1), stabs.length), rules.stabTurns) : []
+  stabs.splice(stabSteps.length)
+  for (const role of STAB_ROLES.slice(stabs.length)) delete picks[role]
   const stabPitch = stabs.map((x) => (stabOf.has(x.rel_path) ? hitPitch(stabOf.get(x.rel_path)!, key) : 0))
   /** The stab rhythm over [from, to) bars, a bar at a time (a sweeping filter moving bar by bar). */
   const stabBars = (from: number, to: number, filter?: ClipFilter) => {
@@ -1610,34 +1612,32 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (disco2) picks.disco2 = disco2
   }
 
-  // ---- a drone under the track (after the 8-bar variations, like the disco hits): one source,
-  // washed into a loop, in the drops, all through, or between the intro and the outro ----
-  const keptDrone = keep.picks?.drone ? droneHits.find((h) => droneItem(h).id === keep.picks!.drone!.id) ?? null : null
-  let drone: HitItem | null = keptDrone
-  if (!drone && rules.droneIn && droneHits.length) {
-    const fresh = droneHits.filter((h) => !keep.avoid?.some((a) => a.startsWith(droneRenderPrefix(h.rel_path))))
-    drone = orng.pick(fresh.length ? fresh : droneHits)
+  // ---- strings under the track (after the 8-bar variations, like the disco hits): one sample in
+  // the key, starting again on every 8-bar line, in the drops, all through, or between the intro
+  // and the outro ----
+  const keptStrings = keep.picks?.strings ? stringHits.find((h) => stringsItem(h).id === keep.picks!.strings!.id) ?? null : null
+  let strings: HitItem | null = keptStrings
+  if (!strings && rules.stringsIn && stringHits.length) {
+    const fresh = stringHits.filter((h) => !keep.avoid?.some((a) => a.startsWith(stringsRenderPrefix(h.rel_path))))
+    strings = trng.pick(fresh.length ? fresh : stringHits)
   }
-  if (drone) {
-    const look: DroneLook = {
-      rhythm: rules.droneRhythm as DroneRhythm, warp: (rules.droneWarp ?? 'none') as DroneWarp,
-      octave: Number(rules.droneOctave ?? 0), start: Number(rules.droneStart ?? 0),
-    }
-    const render = droneRender(drone, key, look)
-    const item = droneItem(drone)
-    const sample = droneSample(item, render, bpm)
+  const stringsMove = strings ? stringsShift(strings, key)! : 0
+  if (strings) {
+    const render = stringsRender(strings, key, stringsMove)
+    const item = stringsItem(strings)
+    const sample = stringsSample(item, render, bpm)
     const first = sections[0]
     const last = sections[sections.length - 1]
-    const spans: [number, number][] = rules.droneAt === 'drops' ? sections.filter((x) => x.kind === 'drop').map((x) => [x.start, x.start + x.bars])
-      : rules.droneAt === 'all' ? [[0, total]]
+    const spans: [number, number][] = rules.stringsAt === 'drops' ? sections.filter((x) => x.kind === 'drop').map((x) => [x.start, x.start + x.bars])
+      : rules.stringsAt === 'all' ? [[0, total]]
         : [[first.kind === 'intro' ? first.start + first.bars : 0, last.kind === 'outro' ? last.start : total]]
     for (const [a, z] of spans) {
-      if (z > a) lanes.add('drone', { sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render })
+      if (z > a) lanes.add('strings', { sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render })
     }
-    picks.drone = item
+    picks.strings = item
   }
 
-  // ---- a vocal (after the 8-bar variations, like the drone): one take, its phrase loop where the
+  // ---- a vocal (after the 8-bar variations, like the strings): one take, its phrase loop where the
   // track's rule says, its chops on the key's chord tones in a rhythm ----
   const keptTake = keep.picks?.vocal ? takes.find((t) => vocalItem(t).id === keep.picks!.vocal!.id) ?? null : null
   let take: VocalTake | null = keptTake
@@ -1783,8 +1783,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   applyMix(project, opts.mix ?? {})
   const bassLane = project.lanes.find((l) => l.name === 'Bass')
   if (bassLane && bo) bassLane.duck = bo.sidechain
-  const droneLane = project.lanes.find((l) => l.name === 'Drone')
-  if (droneLane) droneLane.duck = opts.drones?.sidechain ?? DRONE_SIDECHAIN
+  const stringsLane = project.lanes.find((l) => l.name === 'Strings')
+  if (stringsLane) stringsLane.duck = opts.strings?.sidechain ?? STRINGS_SIDECHAIN
   const laneIds = new Map(LANES.map((l, i) => [l.role, project.lanes[i].id]))
   project.clips = lanes.clips(laneIds)
   const used = new Set(project.clips.map((c) => c.laneId))
@@ -1836,13 +1836,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   if (hpDrops) choices.push(`the mix high-passed in the ${hpBars === 1 ? 'bar' : `${hpBars} bars`} before drops`)
   if (vocalNote) choices.push(vocalNote)
-  if (drone) {
-    const at = { drops: 'in the drops', all: 'all through', inner: 'between the intro and the outro' }[rules.droneAt as string]
-    const how = { pump: 'pumping with the kick', gate8: 'gated in 8ths', gate16: 'gated in 16ths', swell: 'swelling to the offbeats',
-      dotted: 'gated in dotted 8ths', chop: 'chopped in 16ths' }[rules.droneRhythm as DroneRhythm]
-    const warp = { none: '', slow2: ', slowed down 2×', slow4: ', slowed down 4×', reverse: ', reversed' }[(rules.droneWarp ?? 'none') as DroneWarp]
-    const oct = rules.droneOctave ? `, an octave ${Number(rules.droneOctave) < 0 ? 'down' : 'up'}` : ''
-    choices.push(`drone from ${drone.name} ${at}, ${how}${warp}${oct}`)
+  if (strings) {
+    const at = { drops: 'in the drops', all: 'all through', inner: 'between the intro and the outro' }[rules.stringsAt as string]
+    const moved = stringsMove ? `, moved ${Math.abs(stringsMove)} st ${stringsMove > 0 ? 'up' : 'down'}` : ''
+    choices.push(`strings from ${strings.name} ${at}, every 8 bars${moved}`)
   }
   if (discoHits.length) {
     const where = { drops: 'where drops start and halfway', 16: 'every 16 bars of drops', 8: 'every 8 bars of drops', all: 'where drops and breaks start, halfway through drops' }[rules.discoAt]
@@ -1851,7 +1848,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
       : `in drops, ${rules.stabsBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`
-    choices.push(`chord stab${stabs.length > 1 ? 's' : ''} ${stabs.map((x) => x.name).join(', ')}, ${where}`)
+    const turns = stabs.length < 2 ? '' : stabs.length === 2 && !stabSteps[0][1].some(Boolean) && !stabSteps[1][0].some(Boolean)
+      ? ' taking turns bar by bar' : ' taking turns hit by hit'
+    choices.push(`chord stab${stabs.length > 1 ? 's' : ''} ${stabs.map((x) => x.name).join(stabs.length > 2 ? ', ' : ' and ')}${turns}, ${where}`)
   }
   if (vo && builds.into + builds.phrase) {
     choices.push(`reverb builds on tops${builds.into ? ' into drops and breaks' : ''}${builds.phrase ? `${builds.into ? ',' : ''} every ${vo.every} bars` : ''}`)
@@ -1998,15 +1997,15 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
   bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassHp'],
   disco: ['discoIn', 'discoCount', 'discoAt'],
-  // A drone lane made again: another sample, placement and take on it (it stays a drone).
-  drone: [...DRONE_RULES],
+  // The Strings lane made again: another sample and placement (it stays strings).
+  strings: [...STRINGS_RULES],
   // The vocal lanes made again: another take, and how and where it's sung (it stays a vocal).
   vocal: ['vocalUse', 'vocalLoop', 'vocalAt', 'chopsAt', 'chopRhythm'],
   // A stab lane made again: another sample in the same rhythm (the others play their turns in it).
   stab: [],
 }
 const LAYER_OF: Partial<Record<Role, Role>> = {
-  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', disco2: 'disco', vchop: 'vocal',
+  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', disco2: 'disco', stab2: 'stab', stab3: 'stab', vchop: 'vocal',
 }
 
 /**
@@ -2067,6 +2066,14 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
     ...b, transpose: Math.max(-24, Math.min(24, b.transpose - transposeTo(b.midi.key_label, g.key) + transposeTo(b.midi.key_label, key))),
   }
   const bass = move(g.bass)
+  // The strings: their sample moved into the new key when it's close enough, else another one that
+  // is (the same places); none is: they go.
+  const stringHits = opts.strings?.hits ?? []
+  const was = g.picks.strings && stringHits.find((h) => stringsItem(h).id === g.picks.strings!.id)
+  const fitting = stringHits.filter((h) => stringsShift(h, key) != null)
+  const stringsHit = !g.picks.strings ? null : was && stringsShift(was, key) != null ? was
+    : fitting.length ? new Rng(seed ^ 0x53545247).pick(fitting) : null
+  const strings = stringsHit && { hit: stringsHit, shift: stringsShift(stringsHit, key)! }
   const hitOf = new Map([...opts.disco?.hits ?? [], ...opts.stabs?.hits ?? []].map((h) => [h.rel_path, h]))
   const byPath = new Map(all.map((s) => [s.rel_path, s]))
   const fits = new Set(expandCompatible([key]))
@@ -2100,11 +2107,11 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
       const pitch = chopPitch(chop.note, key)
       return pitch ? { ...rest, pitch } : rest
     }
-    if (c.type === 'audio' && c.bass?.role === 'drone') {
-      const render = droneInKey(c.bass, key, opts.drones?.hits ?? [])
-      return { ...c, bass: render, sample: { ...c.sample, relPath: bassPath(render, project.bpm) } }
+    if (c.type === 'audio' && c.bass?.role === 'strings' && strings) {
+      const render = stringsRender(strings.hit, key, strings.shift)
+      return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(stringsSample(stringsItem(strings.hit), render, project.bpm)) } }
     }
-    // (Keys parts and stab patches of older tracks stay as they are.)
+    // (Keys parts, stab patches and drones of older tracks stay as they are.)
     if (c.type === 'audio' && c.bass) {
       if (!bass || (c.bass.role ?? 'bass') !== 'bass') return c
       const render = bassRenderOf(bass)
@@ -2129,10 +2136,17 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
     // An event plays once: no longer than the new one (a longer clip would repeat it).
     return looped ? next : { ...next, length: Math.min(c.length, (x.bars ?? 1) * BEATS_PER_BAR) }
   })
+  const picks = { ...g.picks }
+  if (strings) picks.strings = stringsItem(strings.hit)
+  else if (g.picks.strings) {
+    delete picks.strings
+    project.clips = project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'strings'))
+    project.lanes = project.lanes.filter((l) => l.name !== 'Strings' || project.clips.some((c) => c.laneId === l.id))
+  }
   const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((z): z is string => !!z))].sort()
   const note = `in ${key} (made in ${g.key ?? 'no key'})${swapped ? `, ${swapped} FX swapped for ones in key` : ''}${kept ? `, ${kept} kept: nothing else in key` : ''}`
   const choices = [...g.choices.filter((c) => !KEY_NOTE.test(c)), note]
-  return { ...g, project, key, bass, zips, choices }
+  return { ...g, project, key, bass, zips, choices, picks }
 }
 
 /**
@@ -2156,20 +2170,20 @@ export function rerollStabs(all: SampleListItem[], opts: GenerateOptions, g: Gen
 }
 
 /** The rules the stab reroll draws again. */
-const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff']
+const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff', 'stabCount', 'stabTurns']
 
 /**
  * The lanes of `roles` made again (with their rules `own`, `force` set), the rest of the track
  * as it is: a lane the result doesn't have goes, one the track didn't have comes in its place.
  */
 /**
- * A new drone for the same track (the Generate view's Drones module): another sample, placement
- * and take on it, or a drone in a track that had none; everything else exactly as it is. Null when
- * the Drones page has no samples, or nothing new comes out.
+ * New strings for the same track (the Generate view's Strings module): another sample and
+ * placement, or strings in a track that had none; everything else exactly as it is. Null when the
+ * Strings page has no sample close enough to the key, or nothing new comes out.
  */
-export function rerollDrone(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
-  if (!opts.drones?.hits.length) return null
-  return rerollGroup(all, opts, g, seed, new Set<Role>(['drone']), new Set(LANE_RULES.drone), { droneIn: true }, 'drone')
+export function rerollStrings(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
+  if (!opts.strings?.hits.length) return null
+  return rerollGroup(all, opts, g, seed, new Set<Role>(['strings']), new Set(LANE_RULES.strings), { stringsIn: true }, 'strings')
 }
 
 /**
@@ -2182,10 +2196,10 @@ export function rerollVocal(all: SampleListItem[], opts: GenerateOptions, g: Gen
   return rerollGroup(all, opts, g, seed, new Set<Role>(['vocal', 'vchop']), new Set(LANE_RULES.vocal), { vocalIn: true }, 'vocal')
 }
 
-/** Another drone sample for the same track (the Drone lane's "New sound"): where it plays and its take on it (rhythm, warp, octave, start) stay. */
-export function newDroneSound(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
-  if (!g.picks.drone || !opts.drones?.hits.length) return null
-  return rerollGroup(all, opts, g, seed, new Set<Role>(['drone']), new Set(), { droneIn: true }, 'drone')
+/** Another string sample for the same track (the Strings lane's "New sound"): where it plays stays. */
+export function newStringsSound(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
+  if (!g.picks.strings || !opts.strings?.hits.length) return null
+  return rerollGroup(all, opts, g, seed, new Set<Role>(['strings']), new Set(), { stringsIn: true }, 'strings')
 }
 
 function rerollGroup(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number, roles: Set<Role>,
@@ -2298,7 +2312,7 @@ function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generati
   })
   // A part the remake can't play again (its module off since, its samples gone) stays as it is.
   const gone = (role: Role) => (role === 'bass' && g.bass && !r.bass)
-    || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs) || (role === 'drone' && !!g.picks.drone && !r.picks.drone)
+    || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs) || (role === 'strings' && !!g.picks.strings && !r.picks.strings)
   const own = new Set(Object.keys(values).flatMap((k) => [k, ...COUPLED[k] ?? []]))
   const next = swapGroup(g, r, new Set(roles.filter((x) => !gone(x))), own, picks, null)
   sameRenders(g, next.project)

@@ -24,7 +24,7 @@ from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "drone": "Drones"}
+FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "strings": "Strings"}
 KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
@@ -105,8 +105,8 @@ def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[s
 
 
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
-    """Add disco hits (or chord stabs, or drones) from files, folders and zips. Files already
-    imported (on any of the pages) are skipped. A drone keeps up to drone_max_len_s."""
+    """Add disco hits (or chord stabs, or strings) from files, folders and zips. Files already
+    imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s."""
     if kind not in FOLDERS:
         raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
     folder = FOLDERS[kind]
@@ -131,7 +131,7 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             except Exception as e:  # noqa: BLE001 - one bad file doesn't stop the rest
                 failed.append(f"{name}: {e}")
                 continue
-            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.drone_max_len_s if kind == "drone" else None)
+            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind == "strings" else None)
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue

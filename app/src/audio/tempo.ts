@@ -25,12 +25,13 @@ const renderState = {
   bass: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   keys: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   stab: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
-  drone: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  drone: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },  // older tracks' drones
+  strings: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   vocal: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
 }
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */
-export function onBassRendering(fn: (rendering: boolean) => void, role: 'bass' | 'keys' | 'stab' | 'drone' | 'vocal' = 'bass'): () => void {
+export function onBassRendering(fn: (rendering: boolean) => void, role: NonNullable<BassRender['role']> = 'bass'): () => void {
   const state = renderState[role]
   state.listeners.add(fn)
   fn(state.pending > 0)
@@ -45,8 +46,7 @@ export function renderBass(b: BassRender, bpm: number): Promise<void> {
   if (!p) {
     const state = renderState[b.role ?? 'bass']
     if (state.pending++ === 0) for (const fn of state.listeners) fn(true)
-    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove,
-      ...(b.drone ? { drone: b.drone } : {}) })
+    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove })
       .then(() => {
         bassReady.add(path)
       })
