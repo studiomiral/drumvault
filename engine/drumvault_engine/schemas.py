@@ -108,7 +108,7 @@ class Overrides(BaseModel):
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
                  "render_bass", "serum_presets", "save_midi", "set_midi_meta",
-                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
+                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "preflight", "scan_references", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -240,6 +240,29 @@ class MasterResult(BaseModel):
     peak_db: float
     gain_db: float
     passes: int
+
+
+class PreflightSection(BaseModel):
+    kind: str
+    start: int                      # bars from the file's start
+    bars: int
+
+
+class PreflightParams(BaseModel):
+    """Check an export's masters before they go out (preflight.py)."""
+    mix_path: str
+    master_path: Optional[str] = None
+    bpm: float
+    sections: Optional[list[PreflightSection]] = None   # a generated track's: its drops are then known
+    key_label: Optional[str] = None
+    whole: bool = True              # the file is the whole track (not a loop region)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScanReferencesParams(BaseModel):
+    """The reference tracks in <Library>/References (references.py); with `analyze`, new files are measured first."""
+    analyze: bool = False
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class SetMidiMetaParams(BaseModel):

@@ -22,11 +22,11 @@ from typing import Any, Callable, TextIO
 
 from pydantic import ValidationError
 
-from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, splice as splicemod, stretch
+from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, preflight as preflightmod, references as referencesmod, splice as splicemod, stretch
 from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
-    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams,
+    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, PreflightParams, ScanReferencesParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams,
     ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
     ScanSpliceParams, SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
@@ -44,7 +44,8 @@ DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSam
                   "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
                   "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams, "scan_splice": ScanSpliceParams,
                   "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams,
-                  "master_mixdown": MasterMixdownParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams}
+                  "master_mixdown": MasterMixdownParams, "preflight": PreflightParams,
+                  "scan_references": ScanReferencesParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams}
 
 
 @dataclass
@@ -237,9 +238,15 @@ class RpcServer:
                 self._reply(req_id, pipeline.clean_renders(settings, p.keep, p.dry_run))
             elif method == "master_mixdown":
                 self._reply(req_id, mastermod.master_mixdown(settings, p.mix_path, p.out_path, p.format))
+            elif method == "preflight":
+                self._reply(req_id, preflightmod.run(settings, p.mix_path, p.master_path, p.bpm,
+                                                     [s.model_dump() for s in p.sections] if p.sections is not None else None,
+                                                     p.key_label, p.whole))
+            elif method == "scan_references":
+                self._reply(req_id, referencesmod.scan(settings, p.analyze))
             else:
                 self._reply(req_id, pipeline.serum_presets(settings, p.root, p.folders))
-        except (pipeline.PipelineError, hitsmod.HitError, mastermod.MasterError) as e:
+        except (pipeline.PipelineError, hitsmod.HitError, mastermod.MasterError, preflightmod.PreflightError) as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
             log.error("%s failed:\n%s", method, traceback.format_exc())

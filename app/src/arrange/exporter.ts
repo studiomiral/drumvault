@@ -11,7 +11,8 @@ import { renderLanes, type RenderRange } from '../audio/render'
 import { encodeWav, peakOf, type WavFormat } from '../audio/wav'
 import { formatBpm } from '../lib/format'
 import { bassNotes, notesMidi } from '../lib/midi'
-import type { MasterResult } from '../types/engine'
+import { BEATS_PER_BAR } from '../lib/project'
+import type { MasterResult, PreflightResult, PreflightSection } from '../types/engine'
 import type { Project } from '../types/project'
 
 export interface ExportOptions {
@@ -51,6 +52,9 @@ export interface ExportResult {
   /** How mastered.wav came out, or why it wasn't made. */
   mastered?: MasterResult
   masterError?: string
+  /** The pre-flight of the masters (SCOPE.md §6.5a), or why there is none. */
+  preflight?: PreflightResult
+  preflightError?: string
 }
 
 export const MIXDOWN_FILE = 'mixdown.wav'
@@ -117,6 +121,22 @@ export function midiParts(project: Project): { role: 'bass'; file: string }[] {
   return [{ role: 'bass', file: `${safeName(lane?.name ?? 'Bass')}.mid` }]
 }
 
+/** Whether the range is the whole track (the pre-flight asks a DJ intro and outro of that only). */
+export function wholeTrack(project: Project, range: RenderRange): boolean {
+  return range.startBeat === 0 && range.endBeat === project.lengthBars * BEATS_PER_BAR
+}
+
+/**
+ * The sections the pre-flight takes its drops from: a generated track's, when the whole track is
+ * exported and they still cover it (a track made longer or shorter in Arrange: its drops are found).
+ */
+export function preflightSections(project: Project, range: RenderRange): PreflightSection[] | null {
+  const sections = project.generation?.sections
+  if (!sections?.length || !wholeTrack(project, range)) return null
+  if (sections.reduce((n, s) => n + s.bars, 0) !== project.lengthBars) return null
+  return sections.map((s) => ({ kind: s.kind, start: s.start, bars: s.bars }))
+}
+
 /** Absolute path of a subfolder of the export. */
 export const exportDir = (o: Pick<ExportOptions, 'dir' | 'folder'>, sub: ExportSub) => `${o.dir}/${safeName(o.folder)}/${sub}`
 
@@ -152,6 +172,18 @@ export async function exportStems(project: Project, o: ExportOptions,
         result.written.push(`masters/${out}`)
       } catch (e) {
         result.masterError = (e as Error).message
+      }
+      if (t.key === 'master' && !isCancelled()) {
+        // The pre-flight: the masters as written, measured before they go out. It changes nothing.
+        onProgress('Checking the masters', (i + 0.95) / targets.length)
+        try {
+          result.preflight = await api.preflight(exportDir(o, 'masters'), t.file, result.mastered ? out : null, {
+            bpm: project.bpm, sections: preflightSections(project, o.range), key: project.generation?.key ?? null,
+            whole: wholeTrack(project, o.range),
+          })
+        } catch (e) {
+          result.preflightError = (e as Error).message
+        }
       }
     }
   }

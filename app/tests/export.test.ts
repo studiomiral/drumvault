@@ -5,7 +5,7 @@ vi.hoisted(() => {
   ;(globalThis as { window?: unknown }).window = { drumvault: {} }
 })
 
-import { exportDir, exportFolderName, exportTargets, hasVocals, midiParts, vocalTakes } from '../src/arrange/exporter'
+import { exportDir, exportFolderName, exportTargets, hasVocals, midiParts, preflightSections, vocalTakes, wholeTrack } from '../src/arrange/exporter'
 import { newProject } from '../src/lib/project'
 import type { AudioClip, Project } from '../src/types/project'
 
@@ -52,5 +52,21 @@ describe('export layout', () => {
     expect(vocalTakes(p)).toEqual(['2026-11-02_10-00-00'])
     const t = exportTargets(p, { laneIds: p.lanes.map((l) => l.id), master: true })
     expect(t.filter((x) => x.sub === 'masters').map((x) => x.file)).toEqual(['mixdown.wav', 'mixdown instrumental.wav'])
+  })
+
+  it('gives the pre-flight the sections of a generated track only while they are the whole track', () => {
+    const p = track()
+    p.lengthBars = 48
+    const whole = { startBeat: 0, endBeat: 48 * 4 }
+    expect(wholeTrack(p, whole)).toBe(true)
+    expect(preflightSections(p, whole)).toBeNull()   // not a generation: its drops are found
+    const sections = [{ kind: 'intro', label: 'Intro', start: 0, bars: 16 }, { kind: 'drop', label: 'Drop', start: 16, bars: 32 }]
+    p.generation = { key: 'Em', sections } as Project['generation']
+    expect(preflightSections(p, whole)).toEqual([{ kind: 'intro', start: 0, bars: 16 }, { kind: 'drop', start: 16, bars: 32 }])
+    // A loop region is not the track, and a track made longer in Arrange has outgrown its sections.
+    expect(wholeTrack(p, { startBeat: 64, endBeat: 128 })).toBe(false)
+    expect(preflightSections(p, { startBeat: 64, endBeat: 128 })).toBeNull()
+    p.lengthBars = 56
+    expect(preflightSections(p, { startBeat: 0, endBeat: 56 * 4 })).toBeNull()
   })
 })

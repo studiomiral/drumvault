@@ -326,3 +326,15 @@ def test_stretch_samples_to_a_project_tempo(engine, fixtures, tmp_path):
     assert pipeline.stretch_samples(s, [rel], 128)["paths"][rel] == out
     assert os.stat(lib / out).st_mtime_ns == mtime                     # cached
     assert pipeline.stretch_samples(s, [rel], s.library_bpm)["paths"][rel] == rel  # native: the file itself
+
+
+def test_preflight_and_references_answer_directly(engine, tmp_path):
+    settings = {"library_path": str(tmp_path)}
+    engine.send(id="r1", method="scan_references", params={"settings": settings})
+    r = engine.until(lambda o: o.get("id") == "r1")["result"]
+    assert r["tracks"] == [] and r["pending"] == 0 and r["summary"] is None
+    assert Path(r["folder"]) == tmp_path / "References" and Path(r["folder"]).is_dir()
+    engine.send(id="p1", method="preflight", params={"mix_path": str(tmp_path / "mixdown.wav"), "bpm": 124, "settings": settings})
+    assert engine.until(lambda o: o.get("id") == "p1")["error"]["code"] == "not_found"
+    engine.send(id="p2", method="preflight", params={"mix_path": str(tmp_path / "mixdown.wav"), "settings": settings})
+    assert engine.until(lambda o: o.get("id") == "p2")["error"]["code"] == "bad_params"
