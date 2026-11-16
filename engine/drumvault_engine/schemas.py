@@ -76,6 +76,8 @@ class SampleCounts(BaseModel):
     oneshots: int = 0
     loops: int = 0
     events: int = 0
+    # Atmos cut from the stems, filed on the Ambience page instead (SCOPE.md §6.10a).
+    ambience: int = 0
 
 
 class ProcessResult(BaseModel):

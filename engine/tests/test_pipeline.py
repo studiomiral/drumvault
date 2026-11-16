@@ -399,3 +399,63 @@ def test_analyze_writes_nothing(fixtures, tmp_path):
     a = pipeline.analyze_zip(fixtures.zip("sunrise"), settings)
     assert a.tempo.bpm == 126.0 and a.key.label == "D"
     assert not (tmp_path / "lib").exists()
+
+
+# ---------------------------------------------------------------------------
+# Atmosphere goes to the Ambience page (SCOPE.md §6.10a)
+# ---------------------------------------------------------------------------
+
+def _hits(lib: Path, kind: str) -> list:
+    with LibraryDB(lib) as db:
+        return [h for h in db.list_hits() if h["kind"] == kind]
+
+
+def test_an_atmos_stem_goes_to_the_ambience_page_not_the_library(small_lib):
+    settings, r = small_lib
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        fill = next(s for s in db.stems_for_zip(r.zip_id) if s["file_name"].endswith("08 Drum Fill.wav"))
+        before = len([s for s in db.samples_for_zip(r.zip_id, "event") if s["stem_id"] == fill["id"]])
+    assert before > 0
+    r2 = pipeline.process_zip(None, settings, zip_id=r.zip_id, overrides=Overrides(stems={str(fill["id"]): "fx_atmos"}))
+    assert r2.counts.ambience == before
+    with LibraryDB(lib) as db:
+        assert db.conn.execute("SELECT COUNT(*) FROM samples WHERE category = 'fx_atmos'").fetchone()[0] == 0
+    tex = _hits(lib, "ambience")
+    assert len(tex) == before
+    for h in tex:
+        assert h["rel_path"].startswith("Ambience/") and (lib / h["rel_path"]).exists()
+        assert h["key_label"] is None and h["energy_db"] is not None and h["voices"] == 0
+    # Processed again: the same cuts are there already, not added twice.
+    r3 = pipeline.process_zip(None, settings, zip_id=r.zip_id, overrides=Overrides(stems={str(fill["id"]): "fx_atmos"}))
+    assert r3.counts.ambience == 0
+    assert len(_hits(lib, "ambience")) == before
+
+
+def test_atmos_already_in_the_library_moves_to_ambience_and_is_deleted_for_good(small_lib):
+    settings, r = small_lib
+    lib = Path(settings.library_path)
+    with LibraryDB(lib) as db:
+        evs = db.samples_for_zip(r.zip_id, "event")
+        shots = db.samples_for_zip(r.zip_id, "oneshot")
+        a, b = evs[0], shots[0]
+        # A library from before: two atmos samples, one of them deleted (in the trash).
+        db.conn.execute("UPDATE samples SET category = 'fx_atmos' WHERE id IN (?, ?)", (a["id"], b["id"]))
+    pipeline.delete_samples(settings, [b["id"]])
+    with LibraryDB(lib) as db:
+        [trashed] = [x for x in db.conn.execute("SELECT id FROM removed_samples").fetchall()]
+    wav, _ = pipeline.trash_files(lib, trashed["id"])
+    assert wav.exists()
+    other = len(evs) - 1
+
+    out = pipeline.analyze_library(settings)
+    assert out["atmos"] == {"moved": 1, "deleted": 1, "purged": 1}
+    assert not (lib / a["rel_path"]).exists() and not wav.exists()
+    with LibraryDB(lib) as db:
+        assert db.conn.execute("SELECT COUNT(*) FROM samples WHERE category = 'fx_atmos'").fetchone()[0] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM removed_samples").fetchone()[0] == 0
+        assert len(db.samples_for_zip(r.zip_id, "event")) == other
+    [h] = _hits(lib, "ambience")
+    assert h["key_label"] is None and Path(h["file_name"]).stem == Path(a["rel_path"]).stem
+    # Nothing left to move.
+    assert pipeline.analyze_library(settings)["atmos"] == {"moved": 0, "deleted": 0, "purged": 0}

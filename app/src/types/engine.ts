@@ -70,6 +70,8 @@ export interface SampleCounts {
   oneshots: number;
   loops: number;
   events: number;
+  /** Atmos cut from the stems, filed on the Ambience page instead (SCOPE.md §6.10a). */
+  ambience?: number;
 }
 
 export interface ProcessResult {

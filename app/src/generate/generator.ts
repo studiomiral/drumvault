@@ -488,7 +488,7 @@ const KICK_PHRASE_ENDS: [Steps, number][] = [
 // ---------------------------------------------------------------------------
 
 const of = (kind: SampleKind, ...cats: Category[]) => (s: SampleListItem) => s.kind === kind && cats.includes(s.category)
-const TONAL: Category[] = ['fx_riser', 'fx_downlifter', 'fx_atmos', 'fx']
+const TONAL: Category[] = ['fx_riser', 'fx_downlifter', 'fx']
 
 const PITCH: Record<string, number> = {
   C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11,
@@ -1110,9 +1110,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const lifts = pool((s) => s.kind === 'event' && rising(s) && s.category !== 'fx_riser')
   const downs = pool((s) => s.kind === 'event' && falling(s))
   const impacts = pool(of('event', 'fx_impact'))
-  const atmoses = pool(of('event', 'fx_atmos'))
   const crash = picker.pick(pool(of('oneshot', 'cymbal')))
-  const atmos = picker.pick(atmoses, { tonal: true })
 
   // ---- the producer's own FX into a drop ----
   // Events of one track that lead into the same bar (bodies ending there) or start on it (an
@@ -1826,8 +1824,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       else if (sec.kind === 'outro') { if (rules.bassIO === 'filtered') bassPart(a, phraseAt(0.5), hp()) }
     }
 
-    // ---- atmos in breakdowns ----
-    if (sec.kind === 'break' && atmos && rng.chance(0.85)) loop('atmos', atmos, a, z)
+    // (No atmos in breakdowns any more: atmosphere lives on the Ambience page, the bed under the
+    // track, SCOPE.md §6.10a. Tracks made before keep their Atmos clips.)
 
     // ---- transitions: the track's own way into drops, breakdowns and the outro ----
     if (next) {

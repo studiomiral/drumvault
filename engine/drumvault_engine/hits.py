@@ -163,6 +163,33 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 
 
+def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, sr: int, origin: str) -> str | None:
+    """A texture straight onto the Ambience page (an atmos cut from a stem, SCOPE.md §6.10a): written
+    to <Library>/Ambience/ at the library rate, no key (a texture is never moved), measured like an
+    imported one. The same audio already there (by its bytes): nothing new, None. Else its path."""
+    lib = Path(settings.library_path)
+    out_sr = settings.output_sample_rate
+    y = resample(np.asarray(data, dtype=np.float32), sr, out_sr)
+    base = naming.slugify(name, 60) or "texture"
+    rel, k = f"{FOLDERS['ambience']}/{base}.wav", 1
+    while db.hit_path_taken(rel) or (lib / rel).exists():
+        k += 1
+        rel = f"{FOLDERS['ambience']}/{base}-{k}.wav"
+    path = lib / rel
+    write_wav(path, y, out_sr, settings.output_format)
+    sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
+    if db.hit_by_sha1(sha1):
+        path.unlink(missing_ok=True)
+        return None
+    peak = float(np.max(np.abs(y))) if y.size else 0.0
+    db.insert_hit(kind="ambience", file_name=f"{name}.wav", rel_path=rel, original_path=origin, file_sha1=sha1,
+                  key_label=None, key_camelot=None, key_source=None, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
+                  channels=y.shape[1], peak_db=20 * np.log10(peak) if peak > 0 else -240.0, energy_db=k_energy_db(y, out_sr),
+                  punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000), voices=0,
+                  tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())
+    return rel
+
+
 def set_hit_meta(settings: Settings, hit_id: int, key_label: str | None = None, clear_key: bool = False,
                  pitch_fix: int | None = None) -> dict:
     """Correct a hit's key (then marked "manual") or its pitch fix (semitones on top of the move into

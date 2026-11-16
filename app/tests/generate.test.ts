@@ -144,8 +144,12 @@ describe('generator: rules every generation keeps', () => {
         const how = s === intro ? g.rules.introHats : g.rules.outroHats
         const half = s.start + Math.floor(s.bars / 2 / 8) * 8
         const lift = s === intro ? s.start + s.bars - liftBars(s.bars) : s.start + liftBars(s.bars)
+        // (A kick roll building into the first drop takes the Kick lane's place over the intro's last bars.)
+        const roll = s === intro && intoDrop && g.rules.buildup === 'kickRoll'
+          ? (s.start + s.bars - Math.min(Number(g.rules.buildupBars), Math.max(1, Math.floor(s.bars / 4)))) * 4 : Infinity
         for (let beat = s.start * 4; beat < end; beat++) {
-          expect(hitAt(g, 'Kick', beat * 4)).toBe(3)
+          if (beat < roll) expect(hitAt(g, 'Kick', beat * 4)).toBe(3)
+          else expect(hitAt(g, 'Build-up', beat * 4)).toBe(3)
           const inHalf = s === intro ? beat >= half * 4 : beat < half * 4
           const inLift = !!g.rules.ioLift && (s === intro ? beat >= lift * 4 : beat < lift * 4)
           if (beat < hatsEnd) expect(covers(g, 'Hats', beat)).toBe(how === 'all' || (how === 'half' && inHalf) || (how === 'none' && inLift))
@@ -283,11 +287,15 @@ describe('generator: rules every generation keeps', () => {
     for (const g of gens) {
       const intro = g.sections[0]
       const outro = g.sections[g.sections.length - 1]
+      // (A build-up of claps into the first drop takes the claps' place over the intro's last bars,
+      // or brings them in where the intro had none: the outro has no build-up to mirror.)
+      if (g.rules.buildup === 'claps' && g.sections[1].kind === 'drop') continue
       const lanesIn = (s: Generation['sections'][number]) => g.project.lanes
         .filter((l) => ['Tops', 'Tops 2', 'Clap', 'Perc'].includes(l.name)
           && g.project.clips.some((c) => c.laneId === l.id && c.start < (s.start + s.bars) * 4 && c.start + c.length > s.start * 4))
-        .map((l) => l.name).sort()
-      expect(lanesIn(outro)).toEqual(lanesIn(intro))
+        .map((l) => l.name)
+      const sorted = (xs: string[]) => [...new Set(xs)].sort()
+      expect(sorted(lanesIn(outro))).toEqual(sorted(lanesIn(intro)))
     }
   })
 

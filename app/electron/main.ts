@@ -143,7 +143,7 @@ async function submit(method: JobMethod, params: Record<string, unknown>, label:
 async function analyzeLibraryIfNeeded(): Promise<void> {
   try {
     if (!reader.needsAnalysis() || jobs.list().some((j) => j.method === 'analyze_library' && !j.finished)) return
-    await submit('analyze_library', {}, 'Measure grooves and track structures, keep originals')
+    await submit('analyze_library', {}, 'Measure grooves and track structures, keep originals, move atmosphere to Ambience')
   } catch (e) {
     engineLog(`analyze_library not started: ${e}`)
   }

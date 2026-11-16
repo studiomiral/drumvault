@@ -266,6 +266,8 @@ export class LibraryReader {
   /** Loops without a measured groove, events without a shape, or tracks without an arrangement (older libraries). */
   needsAnalysis(): boolean {
     if (!this.conn()) return false
+    // Atmosphere still in the drum library: it moves to the Ambience page (SCOPE.md §6.10a).
+    if ((this.all<{ n: number }>("SELECT COUNT(*) AS n FROM samples WHERE category = 'fx_atmos'")[0]?.n ?? 0) > 0) return true
     const loops = this.all<{ n: number }>(
       `SELECT COUNT(*) AS n FROM samples WHERE kind = 'loop'${this.hasColumn('samples', 'groove') ? ' AND groove IS NULL' : ''}`)[0]?.n ?? 0
     if (loops) return true

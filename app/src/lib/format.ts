@@ -5,7 +5,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   hat_open: 'Open hat', ride: 'Ride', cymbal: 'Cymbal', shaker: 'Shaker', perc: 'Perc',
   top: 'Top', groove: 'Groove', drums: 'Full drums', fill: 'Drum fill', roll: 'Snare roll',
   fx_riser: 'Riser', fx_downlifter: 'Downlifter', fx_impact: 'Impact', fx_sweep: 'Sweep',
-  fx_atmos: 'Atmos', fx: 'FX (other)', melodic: 'Melodic (key only)',
+  fx_atmos: 'Atmos (to Ambience)', fx: 'FX (other)', melodic: 'Melodic (key only)',
   full_mix: 'Full mix (key only)', ignore: 'Ignore', disco_hit: 'Disco hit', chord_stab: 'Chord stab',
 }
 
@@ -15,8 +15,9 @@ export const STEM_CATEGORIES: Category[] = [
   'fx_atmos', 'fx', 'melodic', 'full_mix', 'ignore',
 ]
 
+/** The library's FX and fills (atmos isn't one: an atmos stem's cuts go to the Ambience page, SCOPE.md §6.10a). */
 export const EVENT_CATEGORIES: Category[] = [
-  'fill', 'roll', 'fx_riser', 'fx_downlifter', 'fx_impact', 'fx_sweep', 'fx_atmos', 'fx',
+  'fill', 'roll', 'fx_riser', 'fx_downlifter', 'fx_impact', 'fx_sweep', 'fx',
 ]
 
 export const KIND_LABELS: Record<SampleKind, string> = {

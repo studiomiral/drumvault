@@ -440,7 +440,7 @@ def _process(db: LibraryDB, lib: Path, zid: int, code: str, zip_path: Path, sett
             settings_hash=settings.processing_hash())
         _write_log(lib, code, zip_path, analysis, counts, status, warnings, settings)
         ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops, "
-                                  f"{counts.events} FX/fills")
+                                  f"{counts.events} FX/fills" + (f", {counts.ambience} textures to Ambience" if counts.ambience else ""))
         return ProcessResult(zip_id=zid, source_code=code, file_name=zip_path.name, status=status,
                              counts=counts, analysis=analysis, warnings=warnings)
 
@@ -569,6 +569,16 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                                         pk_db, gain)
                 for ev in o.events:
                     data, pk_db, gain = normalize.peak_normalize(ev.data, settings.event_peak_dbfs)
+                    if o.category == "fx_atmos":
+                        # Atmosphere isn't a drum library sound: straight onto the Ambience page (§6.10a).
+                        from . import hits as hitsmod
+                        label = key_of.get(o.name, (k.label, k.camelot))[0] or key_label
+                        name = Path(naming.event_rel_path(o.category, settings.library_bpm, label, tag, ev.bars or 0, counts.ambience + 1)).stem
+                        rel = hitsmod.add_texture(db, settings, name, data, ev.sr, f"{tag}:{o.name}")
+                        if rel:
+                            written.append(lib / rel)
+                            counts.ambience += 1
+                        continue
                     offset_s = ev.start / ev.sr / o.loop_factor
                     counts.events += add(o.name, "event", o.category, data, ev.bars, offset_s, ev.fingerprint,
                                          pk_db, gain, ev.body_bars, ev.bar)
@@ -708,7 +718,8 @@ def _process_pack(db: LibraryDB, lib: Path, row, names: list[str], settings: Set
         db.update_zip(zid, file_name=root.name, status=status, warnings=warnings, processed_at=now_iso(),
                       settings_hash=settings.processing_hash())
         _write_log(lib, code, root, analysis, counts, status, warnings, settings)
-        ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops, {counts.events} FX/fills")
+        ctx.progress("done", 1.0, f"{counts.oneshots} one-shots, {counts.loops} loops, {counts.events} FX/fills"
+                     + (f", {counts.ambience} textures to Ambience" if counts.ambience else ""))
         return ProcessResult(zip_id=zid, source_code=code, file_name=root.name, status=status, counts=counts,
                              warnings=warnings)
     except Cancelled:
@@ -1361,6 +1372,36 @@ def _punch(data: np.ndarray, sr: int, th) -> float:
     return -240.0 if p is None else p
 
 
+def atmos_to_ambience(settings: Settings) -> dict:
+    """Atmosphere out of the drum library (SCOPE.md §6.10a): every atmos sample is copied onto the
+    Ambience page (no key; one there already by its bytes isn't copied twice) and deleted from the
+    library for good (its row, file and peaks); atmos samples in the library's trash are deleted for
+    good too. Nothing else changes. How many were moved and purged."""
+    from . import hits as hitsmod
+    lib = Path(settings.library_path)
+    moved = purged = 0
+    with LibraryDB(lib) as db:
+        rows = db.conn.execute("SELECT s.*, z.source_code FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.category = 'fx_atmos'").fetchall()
+        for r in rows:
+            path = lib / r["rel_path"]
+            if path.exists():
+                a = load(path)
+                if hitsmod.add_texture(db, settings, Path(r["rel_path"]).stem, a.data, a.sr, f"{r['source_code']}:{r['rel_path']}"):
+                    moved += 1
+        if rows:
+            ids = [r["id"] for r in rows]
+            with db.transaction():
+                db.conn.execute(f"DELETE FROM samples WHERE id IN ({', '.join('?' for _ in ids)})", ids)
+            _delete_sample_files(lib, rows)
+        for r in db.conn.execute("SELECT id, sample FROM removed_samples").fetchall():
+            if json.loads(r["sample"] or "{}").get("category") == "fx_atmos":
+                db.conn.execute("DELETE FROM removed_samples WHERE id = ?", (r["id"],))
+                for p in trash_files(lib, r["id"]):
+                    p.unlink(missing_ok=True)
+                purged += 1
+    return {"moved": moved, "deleted": len(rows), "purged": purged}
+
+
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
@@ -1369,6 +1410,8 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)
+    # Atmosphere first: off the drum library, onto the Ambience page (§6.10a).
+    atmos = atmos_to_ambience(settings)
     with LibraryDB(lib) as db:
         loops = db.loops_without_groove()
         events = db.events_without_shape()
@@ -1455,7 +1498,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "
                               f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")
-    return {"loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
+    return {"atmos": atmos, "loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
             "arrangements": len(zips) - len(missing), "missing": missing}
 
 
