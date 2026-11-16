@@ -25,6 +25,7 @@ import type { VocalRequest } from '../vocals/plan'
 import { hitSampleId, hitTranspose } from '../generate/disco'
 import { bassModel, generateBassline, generatedMidi, isGenerated } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
+import { bestOf, bestOfSteps, CANDIDATES } from '../generate/score'
 import { newProject, uid } from '../lib/project'
 import type { HitItem, SampleListItem, SavedStabRhythm, TrackArrangement } from '../types/api'
 import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
@@ -350,12 +351,36 @@ function options(): GenerateOptions {
   return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates }
 }
 
-function make(seed = randomSeed()): Generation | null {
+/**
+ * A new track. With a seed (typed in), exactly that one; otherwise the best of CANDIDATES made
+ * from a random one, each listened back to (score.ts).
+ */
+function make(seed?: number): Generation | null {
   const { samples, keep } = useGenerate.getState()
   if (!samples?.length) return null
-  const g = listenBack(generate(samples, options(), seed, keepFrom(generated(), keep)), { locked: keep.lanes })
+  const opts = options()
+  const kept = keepFrom(generated(), keep)
+  const one = (s: number) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes })
+  const g = seed != null ? one(seed) : bestOf(samples, randomSeed(), CANDIDATES, one)
   applyLaneToggles(g.project, useGenerate.getState().lanes)
   return g
+}
+
+/** As make(), a candidate per tick: the screen and the playing track get the thread between them. */
+async function makeSoon(): Promise<Generation | null> {
+  const { samples, keep } = useGenerate.getState()
+  if (!samples?.length) return null
+  const opts = options()
+  const kept = keepFrom(generated(), keep)
+  const it = bestOfSteps(samples, randomSeed(), CANDIDATES, (s) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }))
+  for (;;) {
+    const r = it.next()
+    if (r.done) {
+      applyLaneToggles(r.value.project, useGenerate.getState().lanes)
+      return r.value
+    }
+    await new Promise((ok) => setTimeout(ok, 0))
+  }
 }
 
 /** The track as the critic leaves it (critic.ts): its clashing loops swapped; as it is with "Listen back" off. */
@@ -563,10 +588,16 @@ function writeBassClips(g: Generation): void {
 }
 
 /** Compute the next generation now and decode its samples, so the next press is instant. */
+let prefetching = 0
 function prefetch(): void {
-  const next = make()
-  useGenerate.getState().set({ pending: next })
-  if (next) void playback.preload(next.project)
+  // (Only the latest one is kept: a change of settings meanwhile starts another.)
+  const token = ++prefetching
+  useGenerate.getState().set({ pending: null })
+  void makeSoon().then((next) => {
+    if (token !== prefetching) return
+    useGenerate.getState().set({ pending: next })
+    if (next) void playback.preload(next.project)
+  })
 }
 
 /**
