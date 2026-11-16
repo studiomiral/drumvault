@@ -217,8 +217,8 @@ export function SettingsView() {
 function SerumSettingsSection() {
   const { libraryVersion, toast, setView } = useApp()
   const rootNow = serumPresetRoot()
-  const pools = { bass: useBass((s) => s.presets.length) }
-  const parts = { bass: useBass((s) => s.basslines.length) }
+  const pools = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length) }
+  const parts = { bass: useBass((s) => s.basslines.length), pads: null }
   useEffect(() => {
     void loadBass()
   }, [libraryVersion])
@@ -251,8 +251,8 @@ function SerumSettingsSection() {
       {SERUM_MODULES.map((m) => (
         <Field key={m.id} label={m.label} hint="MIDI and patch folders on the MIDI page">
           <span className="text-[12.5px] flex items-center gap-2">
-            {`${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from`}
-            {' · '}{pools[m.id]} patches in the pool
+            {parts[m.id] != null && `${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from · `}
+            {pools[m.id]} patches in the pool
             <Button variant="ghost" onClick={() => setView('midi')}>Pick folders</Button>
           </span>
         </Field>

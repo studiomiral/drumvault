@@ -251,6 +251,11 @@ function Options() {
                onChange={(e) => update({ useRatings: e.target.checked })} />
         Prefer favourites
       </label>
+      <label className="flex items-center gap-1.5 ml-2" title="Every track is listened back to: loops that play the same hits with the same tone, or have a kick in them, are swapped for ones that fit">
+        <input type="checkbox" className="accent-[#e2c35f]" checked={settings.listenBack}
+               onChange={(e) => update({ listenBack: e.target.checked })} />
+        Listen back
+      </label>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />

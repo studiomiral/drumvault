@@ -6,20 +6,25 @@ import { BarSlider } from '../arrange/LaneHeaders'
 import { isGenerated } from '../generate/bassline'
 import { bassBars, transposeTo, type Generation } from '../generate/generator'
 import { attempt, useApp } from '../store/app'
-import { loadBass, toggleFavoritePreset, useBass } from '../store/bass'
+import { bassPatches, loadBass, toggleFavoritePreset, useBass, type BassSource } from '../store/bass'
+import { useHits } from '../store/hits'
 import { newBassline, setBassOptions, setGenerationBass, shiftOctave, useGenerate } from '../store/generate'
 import { IconStar } from './icons'
 import { Module } from './Module'
 import { PatchOctave } from './PatchOctave'
 import { PianoRoll, type RollNote } from './PianoRoll'
-import { Button, cx, inputClass } from './ui'
+import { Button, cx, inputClass, Segmented } from './ui'
 
 const NO_FAVORITES: string[] = []
 
 /** Bass (SCOPE.md §6.7): the generation's bassline through a Serum 2 patch, browsable in place. */
 export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
-  const { basslines, presets, loaded, error } = useBass()
+  const { basslines, presets: serum, loaded, error } = useBass()
+  const hits = useHits((s) => s.hits)
   const opts = useGenerate((s) => s.settings.bass)
+  // What the bass can play through: Serum patches, bass samples, or both (the module's Source).
+  const presets = bassPatches(opts.source, serum, hits)
+  const samples = bassPatches('samples', serum, hits).length
   const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a bass change
   // Default outside the selector: a new [] on every read makes the store re-render forever.
@@ -41,7 +46,8 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   }
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
   const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips under Bass on the MIDI page.'
-    : !presets.length ? 'No Serum 2 patches for Bass yet: tick their folders under Bass on the MIDI page.' : null
+    : !presets.length ? (opts.source === 'samples' ? 'No bass samples with a note yet: add one-shots on the Bass Samples page, or set Source to Serum.'
+      : 'No Serum 2 patches for Bass yet: tick their folders under Bass on the MIDI page, or add one-shots on the Bass Samples page.') : null
 
   const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
   const summary = !opts.enabled ? 'Off: G generates without bass'
@@ -55,7 +61,7 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
             enabledTitle={opts.enabled ? 'On: G writes a bass for every new generation' : 'Off: new generations have no bass'}
             summary={summary}
             status={<>
-              {rendering && <span className="text-[11.5px] text-accent">Rendering with Serum 2…</span>}
+              {rendering && <span className="text-[11.5px] text-accent">{b?.preset.sample ? 'Rendering the bass sample…' : 'Rendering with Serum 2…'}</span>}
               {error && <span className="text-[11.5px] text-bad" title={error}>Engine: {error.slice(0, 80)}</span>}
             </>}>
       {!loaded ? <p className="text-muted text-[12.5px]">Loading basslines and patches…</p>
@@ -67,7 +73,16 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
           <p className="text-muted text-[12.5px]">{opts.enabled ? 'Press G for a generation with bass.' : 'Bass is off for new generations.'}</p>
         ) : (
           <div className="grid grid-cols-[86px_1fr] gap-y-2 items-center text-[12.5px]">
-            <span className="text-muted">Patch</span>
+            <span className="text-muted">Source</span>
+            <span className="flex flex-wrap items-center gap-2 min-w-0">
+              <Segmented<BassSource> value={opts.source} onChange={(source) => setBassOptions({ source })}
+                                     options={[{ value: 'serum', label: 'Serum' }, { value: 'samples', label: 'Samples' }, { value: 'both', label: 'Both' }]} />
+              <span className="text-faint text-[11.5px]">
+                {opts.source === 'both' ? 'new tracks get a Serum patch or a bass sample, even chances' : opts.source === 'samples' ? 'new tracks play a bass sample' : 'new tracks play a Serum patch'}
+                {' · '}{serum.length} patch{serum.length === 1 ? '' : 'es'}, {samples} sample{samples === 1 ? '' : 's'}
+              </span>
+            </span>
+            <span className="text-muted">{b.preset.sample ? 'Sample' : 'Patch'}</span>
             <span className="flex flex-wrap items-center gap-1.5 min-w-0">
               <button className={btn} title="Previous patch" onClick={() => setGenerationBass({ preset: step(presets, b.preset, -1, (x, y) => x.path === y.path) })}>‹</button>
               <span className="truncate font-medium" title={b.preset.path}>{b.preset.name}</span>
@@ -78,7 +93,7 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
                       onClick={() => toggleFavoritePreset(b.preset.path)}>
                 <IconStar className="w-3.5 h-3.5" filled={favorites.includes(b.preset.path)} />
               </button>
-              <span className="text-faint text-[11.5px] ml-1">{presets.length} patches</span>
+              <span className="text-faint text-[11.5px] ml-1">{presets.length} to choose from</span>
             </span>
             <span className="text-muted">Bassline</span>
             <span className="flex flex-wrap items-center gap-1.5 min-w-0">

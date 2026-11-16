@@ -5,11 +5,13 @@ import { laneRole, type Generation, type Role } from '../generate/generator'
 import { useApp } from '../store/app'
 import type { Panel } from '../store/arrange'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setStringsOptions, setVerbOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
 import { StringsPanel } from './StringsPanel'
+import { PadsPanel } from './PadsPanel'
+import { AmbiencePanel } from './AmbiencePanel'
 import { VocalPanel } from './VocalPanel'
 import { IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
 import { VerbPanel } from './VerbPanel'
@@ -21,12 +23,14 @@ const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   bass: () => ['Bass'],
   chords: () => ['Stab', 'Stab 2', 'Stab 3'],
   strings: () => ['Strings'],
+  pads: () => ['Pad'],
+  ambience: () => ['Ambience'],
   vocals: () => ['Vocal', 'Vocal Chops'],
   disco: () => ['Disco Hit', 'Disco Hit 2'],
   verb: () => [],
 }
 
-type ModuleId = 'bass' | 'chords' | 'vocals' | 'strings' | 'disco' | 'verb'
+type ModuleId = 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb'
 
 /** The modules' pills; `only` the view one shows in (vocals are made in Arrange, reverb builds are G's). */
 const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?: 'generate' | 'arrange' }[] = [
@@ -34,6 +38,8 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?
   { module: 'chords', label: 'Chords', on: 'On: G writes chord stabs for every new generation', off: 'Off: new generations have no chord stabs' },
   { module: 'vocals', label: 'Vocals', only: 'arrange' },
   { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
+  { module: 'pads', label: 'Pads', on: 'On: new generations may get a pad or a reese in their breakdowns', off: 'Off: new generations have no breakdown layer' },
+  { module: 'ambience', label: 'Ambience', on: 'On: most new generations get a very quiet texture under them', off: 'Off: new generations have no ambience bed' },
   { module: 'disco', label: 'Disco Hits', on: 'On: some new generations drop one or two disco hits', off: 'Off: new generations have no disco hits' },
   { module: 'verb', label: 'Reverb', on: 'On: new generations get reverb builds', off: 'Off: new generations have no reverb builds', only: 'generate' },
 ]
@@ -41,13 +47,15 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?
 /** Whether G writes each module into new generations (the pills' switches, Generate only). */
 function useModulesOn(): Partial<Record<ModuleId, boolean>> {
   const s = useGenerate((x) => x.settings)
-  return { bass: s.bass.enabled, chords: s.stabs.enabled, strings: s.strings.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
+  return { bass: s.bass.enabled, chords: s.stabs.enabled, strings: s.strings.enabled, pads: s.pads.enabled, ambience: s.ambience.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
 }
 
 function setModuleOn(module: ModuleId, on: boolean): void {
   if (module === 'bass') setBassOptions({ enabled: on })
   else if (module === 'chords') setStabOptions({ enabled: on })
   else if (module === 'strings') setStringsOptions({ enabled: on })
+  else if (module === 'pads') setPadsOptions({ enabled: on })
+  else if (module === 'ambience') setAmbienceOptions({ enabled: on })
   else if (module === 'disco') setDiscoOptions({ enabled: on })
   else setVerbOptions({ enabled: on })
 }
@@ -95,6 +103,8 @@ export function LanePanel({ g, panel, onPanel, where }: {
       {'module' in panel && panel.module === 'chords' && <ChordsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'vocals' && <VocalPanel g={g} where={where} fixed />}
       {'module' in panel && panel.module === 'strings' && <StringsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'pads' && <PadsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'ambience' && <AmbiencePanel g={g} fixed />}
       {'module' in panel && panel.module === 'disco' && <DiscoPanel g={g} fixed />}
       {'module' in panel && panel.module === 'verb' && <VerbPanel fixed />}
       {'lane' in panel && !shown.length && <p className="text-muted text-[12.5px]">This track has no {panel.lane} lane.</p>}

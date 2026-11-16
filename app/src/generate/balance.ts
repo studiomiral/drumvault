@@ -34,7 +34,7 @@ export const PART: Partial<Record<Role, string>> = {
 /** House defaults (dB against the kick, all of a part's lanes together). */
 const DEFAULT_DB: Record<string, number> = {
   clap: -4, hats: -10, ride: -12, perc: -10, top: -7, bass: -2, music: -8, crash: -12, fills: -6, fx: -9,
-  hits: -8, atmos: -14, disco: -7, buildup: -9, strings: -13, vocal: -3, vchop: -6,
+  hits: -8, atmos: -14, disco: -7, buildup: -9, strings: -18, pad: -11, bed: -26, vocal: -3, vchop: -6,
 }
 
 /** The lanes that sound together as one part: their sum sits where the part does. */
@@ -70,8 +70,58 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
-/** Mean square (linear) of a clip while it plays, before the lane; null when its sample isn't measured. */
-export function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number): number | null {
+/** The window the engine measures a sample's punch over (seconds; config.py `punch_window_ms`). */
+const PUNCH_WINDOW_S = 0.2
+/**
+ * How much of a hit's punch counts in the balance: loudness is measured as the references' is (the
+ * average over the bar), and a hit that is snappier than is usual for its kind sounds louder than
+ * that says, a washier one quieter. Half of the difference is taken (a nudge: the average still leads).
+ */
+const PUNCH_WEIGHT = 0.5
+/** The most a hit's punch moves its level either way (dB). */
+const MAX_PUNCH_DB = 4
+/** A kind of one-shot's usual compactness needs this many measured samples. */
+const MIN_PUNCH_SAMPLES = 4
+
+/**
+ * How compact a sample is (dB, 0 at most): its punch against its whole energy played within the
+ * punch window. 0: all of it within 200 ms (a snappy hit); −6: spread over four times that.
+ * Null when not measured.
+ */
+export function compactness(s: Pick<SampleListItem, 'energy_db' | 'punch_db'> | undefined): number | null {
+  if (s?.energy_db == null || s.punch_db == null || s.energy_db <= -200 || s.punch_db <= -200) return null
+  return Math.min(0, s.punch_db - (s.energy_db - 10 * Math.log10(PUNCH_WINDOW_S)))
+}
+
+/** What is usual for each kind of one-shot in the library: the median compactness per category. */
+export type PunchRefs = Map<string, number>
+
+export function punchRefs(samples: Iterable<SampleListItem>): PunchRefs {
+  const by = new Map<string, number[]>()
+  for (const s of samples) {
+    const c = s.kind === 'oneshot' ? compactness(s) : null
+    if (c == null) continue
+    if (!by.has(s.category)) by.set(s.category, [])
+    by.get(s.category)!.push(c)
+  }
+  const out: PunchRefs = new Map()
+  for (const [cat, xs] of by) if (xs.length >= MIN_PUNCH_SAMPLES) out.set(cat, median(xs))
+  return out
+}
+
+/** dB a one-shot counts louder (snappier than usual for its kind) or quieter (washier) than its average says. */
+export function punchDb(s: SampleListItem | undefined, refs?: PunchRefs): number {
+  const c = compactness(s)
+  const ref = s && refs?.get(s.category)
+  if (c == null || ref == null) return 0
+  return Math.max(-MAX_PUNCH_DB, Math.min(MAX_PUNCH_DB, PUNCH_WEIGHT * (c - ref)))
+}
+
+/**
+ * Mean square (linear) of a clip while it plays, before the lane; null when its sample isn't
+ * measured. With `punch`, a one-shot pattern counts for how hard its sample hits too.
+ */
+export function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number, punch?: PunchRefs): number | null {
   const gain = 10 ** (((c.gainDb ?? 0) + (c.gainTo ?? c.gainDb ?? 0)) / 20)
   if (c.type === 'audio' && c.bass) return 10 ** (RENDER_LEVEL_DB / 10) * gain
   const e = s?.energy_db
@@ -79,7 +129,7 @@ export function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number): 
   const energy = 10 ** (e / 10)
   if (c.type === 'pattern') {
     const hits = c.steps.reduce<number>((n, v) => n + VELOCITY_GAIN[v] ** 2, 0)
-    return (energy * hits) / beatToSec(c.patternBars * BEATS_PER_BAR, bpm) * gain
+    return (energy * hits) / beatToSec(c.patternBars * BEATS_PER_BAR, bpm) * gain * 10 ** (punchDb(s, punch) / 10)
   }
   const seconds = Math.max(0.05, s!.duration_s)
   // A loop plays its energy every time round; an event or a one-shot once, over what of it is heard.
@@ -88,7 +138,7 @@ export function clipPower(c: Clip, s: SampleListItem | undefined, bpm: number): 
 }
 
 /** A lane's loudness (dB) where it plays in [ranges] beats (else wherever it plays); null when nothing on it is measured. */
-export function laneLoudness(clips: Clip[], samples: Map<string, SampleListItem>, bpm: number, ranges: [number, number][]): number | null {
+export function laneLoudness(clips: Clip[], samples: Map<string, SampleListItem>, bpm: number, ranges: [number, number][], punch?: PunchRefs): number | null {
   const over = (c: Clip) => ranges.reduce((n, [a, z]) => n + Math.max(0, Math.min(z, c.start + c.length) - Math.max(a, c.start)), 0)
   const inRanges = clips.some((c) => over(c) > 0)
   let acc = 0
@@ -96,7 +146,7 @@ export function laneLoudness(clips: Clip[], samples: Map<string, SampleListItem>
   for (const c of clips) {
     const d = inRanges ? over(c) : c.length
     if (d <= 0) continue
-    const p = clipPower(c, samples.get(c.sample.relPath), bpm)
+    const p = clipPower(c, samples.get(c.sample.relPath), bpm, punch)
     if (p == null) continue
     acc += p * d
     dur += d
@@ -111,7 +161,7 @@ export function laneLoudness(clips: Clip[], samples: Map<string, SampleListItem>
  * these lanes (the rest keep theirs). The number of lanes levelled from their measured samples.
  */
 export function levelLanes(project: Project, samples: Map<string, SampleListItem>, balance: Balance, drops: [number, number][],
-                           roleOf: (laneName: string) => Role | undefined, starting: (role: Role) => number, only?: Set<string>): number {
+                           roleOf: (laneName: string) => Role | undefined, starting: (role: Role) => number, only?: Set<string>, punch?: PunchRefs): number {
   const roles = new Map(project.lanes.map((l) => [l.id, roleOf(l.name)]))
   const present = new Set([...roles.values()].filter((r): r is Role => !!r))
   const partOf = (r: Role) => PART[r] ?? (GROUP[r] ?? r)
@@ -120,11 +170,26 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
   let measured = 0
   const together = (head: Role) => 10 * Math.log10([...present].filter((r) => (GROUP[r] ?? r) === head)
     .reduce((n, r) => n + 10 ** ((starting(r) - starting(head)) / 10), 0) || 1)
+  /** A lane's main sample (the one on most of its clips), and one hit of it as the lane plays it (its level on top). */
+  const mainOf = (laneId: string) => {
+    const n = new Map<string, number>()
+    for (const c of project.clips) {
+      if (c.laneId === laneId && !(c.type === 'audio' && c.bass)) n.set(c.sample.relPath, (n.get(c.sample.relPath) ?? 0) + c.length)
+    }
+    const path = [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+    return path ? samples.get(path) : undefined
+  }
+  const laneOf = (r: Role) => project.lanes.find((l) => roles.get(l.id) === r)
+  const hitOf = (r: Role) => {
+    const lane = laneOf(r)
+    const loud = lane && hitLoudness(mainOf(lane.id))
+    return lane && loud != null ? loud + (lane.levelDb ?? 0) : null
+  }
   for (const lane of project.lanes) {
     if (only && !only.has(lane.id)) continue
     const role = roles.get(lane.id)
-    if (!role) continue
-    const loud = laneLoudness(project.clips.filter((c) => c.laneId === lane.id), samples, project.bpm, drops)
+    if (!role || HIT_DB[role] != null) continue
+    const loud = laneLoudness(project.clips.filter((c) => c.laneId === lane.id), samples, project.bpm, drops, punch)
     if (loud == null) {
       lane.levelDb = starting(role)
       continue
@@ -136,7 +201,118 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
     const level = Math.max(-MAX_LEVEL_DB, Math.min(MAX_LEVEL_DB, target - loud))
     lane.levelDb = Math.round(level * 2) / 2
   }
+  // Hit for hit (after the lanes they go by): stabs, and the moments (disco hits, fills, impacts,
+  // crashes, FX). Each hit as loud as the clap's hits less its part's step (else under the kick's),
+  // and never above the kick; how many hits a bar has doesn't come into it. A lane that plays
+  // several samples (the fills, the FX) gets each one trimmed on its clips to the main one's hits.
+  const clap = hitOf('clap')
+  const kick = hitOf('kick')
+  const ceiling = (laneOf('kick')?.levelDb ?? MAX_LEVEL_DB) - STAB_UNDER_KICK_DB
+  for (const lane of project.lanes) {
+    if (only && !only.has(lane.id)) continue
+    const role = roles.get(lane.id)
+    const step = role && HIT_DB[role]
+    if (!role || step == null) continue
+    const main = mainOf(lane.id)
+    const own = hitLoudness(main)
+    const want = clap != null ? clap + step : kick != null ? kick + step + (STAB_VS_KICK_DB - STAB_VS_CLAP_DB) : null
+    if (own == null || want == null) {
+      lane.levelDb = starting(role)
+      continue
+    }
+    measured++
+    lane.levelDb = Math.round(Math.max(-MAX_LEVEL_DB, Math.min(MAX_LEVEL_DB, ceiling, want - own)) * 2) / 2
+    if (!TRIMMED.has(role)) continue
+    for (const c of project.clips) {
+      if (c.laneId !== lane.id || c.type !== 'audio' || c.bass) continue
+      const h = hitLoudness(samples.get(c.sample.relPath))
+      // Its own hits at the main sample's level, and with that never above the kick either.
+      const trim = h == null ? 0 : Math.max(-MAX_TRIM_DB, Math.min(MAX_TRIM_DB, own - h, ceiling - lane.levelDb))
+      const was = c.gainDb
+      c.gainDb = Math.round(trim * 2) / 2 || 0
+      if (c.gainTo != null) c.gainTo += c.gainDb - was
+    }
+  }
   return measured
+}
+
+/** A stab hits this much under the clap's hits (dB); without a measured clap, this much under the kick's. Never past the kick's own gain less this. */
+export const STAB_VS_CLAP_DB = -3
+export const STAB_VS_KICK_DB = -9
+export const STAB_UNDER_KICK_DB = 1
+/**
+ * The lanes levelled hit for hit, and how far under the clap's hits one of theirs sits (dB): the
+ * stabs and the moments. Few, short sounds: an average over the bar (how the references' parts are
+ * measured) says nothing of how loud each one is, and turned a lone disco hit or a short fill far up.
+ */
+export const HIT_DB: Partial<Record<Role, number>> = {
+  stab: STAB_VS_CLAP_DB, stab2: STAB_VS_CLAP_DB, stab3: STAB_VS_CLAP_DB,
+  disco: -1, disco2: -1, fills: -1, hits: -2, crash: -6, fx: -5, fx2: -7,
+}
+/** The lanes whose clips play different samples, each trimmed to the lane's main one (dB at most). */
+const TRIMMED = new Set<Role>(['fills', 'hits', 'fx', 'fx2'])
+const MAX_TRIM_DB = 9
+
+/**
+ * How loud one hit of a sample is (dB, as LUFS): its punch (the loudest 200 ms); before that is
+ * measured, its energy over its length (200 ms at least). Null when not measured at all.
+ */
+export function hitLoudness(s: Pick<SampleListItem, 'energy_db' | 'punch_db' | 'duration_s'> | undefined): number | null {
+  if (!s) return null
+  if (s.punch_db != null && s.punch_db > -200) return s.punch_db
+  if (s.energy_db == null || s.energy_db <= -200) return null
+  return s.energy_db - 10 * Math.log10(Math.max(PUNCH_WINDOW_S, s.duration_s))
+}
+
+/** The lanes whose samples are evened out: the drums (FX, fills and hits are moments, each its own sound). */
+const EVEN_ROLES = new Set<Role>(['kick', 'clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4', 'groove'])
+/** The most a sample is trimmed to its lane's main one (dB), and the least worth doing. */
+const MAX_EVEN_DB = 6
+const MIN_EVEN_DB = 0.5
+
+/**
+ * Even levels within a lane (SCOPE.md §6.6): a drum lane that plays more than one sample (the
+ * groove swapped in a later drop, a loop switched halfway) gets each other sample trimmed, on its
+ * clips, to the loudness of the lane's main one (the one that plays longest in the drops), so the
+ * change of sample isn't a jump in level. Measured on clips playing plainly (no ride, no filter).
+ * Doing it again changes nothing. The number of samples trimmed.
+ */
+export function evenClips(project: Project, samples: Map<string, SampleListItem>, drops: [number, number][],
+                          roleOf: (laneName: string) => Role | undefined, only?: Set<string>, punch?: PunchRefs): number {
+  const over = (c: Clip) => drops.reduce((n, [a, z]) => n + Math.max(0, Math.min(z, c.start + c.length) - Math.max(a, c.start)), 0)
+  let trimmed = 0
+  for (const lane of project.lanes) {
+    const role = roleOf(lane.name)
+    if (!role || !EVEN_ROLES.has(role) || (only && !only.has(lane.id))) continue
+    const clips = project.clips.filter((c) => c.laneId === lane.id && !(c.type === 'audio' && c.bass))
+    const by = new Map<string, { clips: Clip[]; loud: number | null; inDrops: number; type: string }>()
+    for (const c of clips) {
+      const id = `${c.type}|${c.sample.relPath}`
+      if (!by.has(id)) by.set(id, { clips: [], loud: null, inDrops: 0, type: c.type })
+      const x = by.get(id)!
+      x.clips.push(c)
+      x.inDrops += over(c)
+    }
+    for (const x of by.values()) {
+      const plain = x.clips.filter((c) => c.gainTo == null && !c.filter)
+      x.loud = laneLoudness(plain, samples, project.bpm, [], punch)
+    }
+    const measured = [...by.values()].filter((x) => x.loud != null)
+    if (measured.length < 2) continue
+    const main = measured.reduce((a, b) => (b.inDrops > a.inDrops ? b : a))
+    for (const x of measured) {
+      // One-shot patterns and loops aren't compared with each other: a pattern's loudness is its steps'.
+      if (x === main || x.type !== main.type) continue
+      const d = Math.round(Math.max(-MAX_EVEN_DB, Math.min(MAX_EVEN_DB, main.loud! - x.loud!)) * 2) / 2
+      if (Math.abs(d) < MIN_EVEN_DB) continue
+      for (const c of x.clips) {
+        c.gainDb += d
+        if (c.gainTo != null) c.gainTo += d
+      }
+      trimmed++
+    }
+  }
+  return trimmed
 }
 
 /** The drops of a structure, in beats. */

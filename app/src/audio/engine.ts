@@ -7,7 +7,7 @@ import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
-import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, playEvent, resetDuck, type LaneNodes } from './graph'
+import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, playEvent, resetDuck, setLaneMono, type LaneNodes } from './graph'
 import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
 import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
@@ -76,6 +76,7 @@ class PlaybackEngine {
     }
     for (const [id, n] of this.lanes) {
       if (!lanes.some((l) => l.id === id)) {
+        setLaneMono(ctx, n, undefined)
         n.pan.disconnect()
         this.lanes.delete(id)
       }
@@ -251,7 +252,7 @@ class PlaybackEngine {
       const hits = kickHits(p, from, to)
       for (const l of ducking) {
         const n = this.lanes.get(l.id)
-        if (n) for (const t of hits) duckAt(n, this.ctxAt(t), l.duck!, duckRelease(p.bpm))
+        if (n) for (const t of hits) duckAt(n, this.ctxAt(t), l.duck!, duckRelease(p.bpm, l.duckBeats))
       }
     }
   }

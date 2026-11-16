@@ -116,6 +116,16 @@ class Thresholds:
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
     bass_peak_dbfs: float = -1.0
+    # Bass from a one-shot sample (basssample.py): a note fades out over bass_sample_release_ms once
+    # let go, and over bass_sample_cut_ms where the next note cuts it; the softest note plays at
+    # bass_sample_min_velocity of full; the sample's own note is read from its first
+    # bass_sample_pitch_window_s, between these frequencies.
+    bass_sample_release_ms: float = 30.0
+    bass_sample_cut_ms: float = 5.0
+    bass_sample_min_velocity: float = 0.4
+    bass_sample_pitch_window_s: float = 1.0
+    bass_sample_min_hz: float = 27.0
+    bass_sample_max_hz: float = 260.0
     # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0
@@ -123,6 +133,14 @@ class Thresholds:
     hit_tail_hold_ms: float = 50.0
     hit_fade_out_ms: float = 10.0
     hit_peak_dbfs: float = -1.0
+    # How many notes a hit plays (key.count_voices): the pitch classes within hit_voice_rel of the
+    # strongest, over its first hit_voice_window_s, between these frequencies. A single note shows one
+    # or two (its fifth rings in its harmonics); from hit_chord_voices it is a chord.
+    hit_voice_window_s: float = 0.6
+    hit_voice_rel: float = 0.35
+    hit_voice_lo_hz: float = 55.0
+    hit_voice_hi_hz: float = 5000.0
+    hit_chord_voices: int = 3
     tempo_confidence_window_ms: float = 10.0
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak
@@ -204,6 +222,7 @@ class Thresholds:
     # An event's shape (events.shape): where its sound ends before the body's last bar line
     # (the producer's silence before the drop), where it peaks and which way it goes. A 16th
     # still sounds within this of the event's loudest 16th...
+    punch_window_ms: float = 200.0          # a sample's punch: the level of its loudest window this long
     shape_sound_rel_db: float = -24.0
     # ...and it rises (falls) when it gets this much louder (quieter) from its first to its last
     # 16ths of sound, or this many octaves brighter (darker) in spectral centroid.
@@ -245,7 +264,20 @@ class Thresholds:
     sample_oneshot_max_s: float = 4.0       # a file this short without loop hints is a one-shot
 
     # ---- strings (strings.py): a long string sample, restarting on every 8-bar line --------
+    # The Splice scan (splice.py): a sound shorter than splice_min_len_s is a click, not a stab; a string
+    # sound from splice_strings_min_len_s goes to the Strings page; a number in this range in a name is a tempo.
+    splice_min_len_s: float = 0.15
+    splice_strings_min_len_s: float = 3.0
+    splice_ambience_min_len_s: float = 4.0  # a texture for the bed lies under a section: no shorter than this
+    splice_stab_max_len_s: float = 12.0     # a one-shot or stab by name may ring this long (the import trims it to hit_max_len_s)
+    splice_bpm_min: float = 70.0
+    splice_bpm_max: float = 180.0
     strings_max_len_s: float = 60.0         # a dropped-in string sample keeps this much (a hit only hit_max_len_s)
+    # The ambience bed (ambience.py): its loop's end crossfades into its start over this; loudness-matched like strings.
+    ambience_xfade_s: float = 1.5
+    ambience_lufs_target: float = -14.0
+    ambience_peak_dbfs: float = -1.0
+    strings_tail_fade_s: float = 0.02       # a sample ending before its part does fades out over this (no click)
     strings_fade_s: float = 0.25            # where a part cuts the sample (the next 8-bar line), it fades out over this
     strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)
     strings_peak_dbfs: float = -1.0

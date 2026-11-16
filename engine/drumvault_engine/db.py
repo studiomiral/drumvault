@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 16
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS samples (
   shape TEXT,                       -- events: how it plays (events.shape) and the source bar its body ends on, JSON (v9)
   energy_db REAL,                   -- K-weighted energy, dB (LUFS + 10·log10 s): how loud it plays (v13)
   tone TEXT,                        -- JSON [24 dB]: power per arrangement band against the total, the EQ's measure (v14)
+  punch_db REAL,                    -- K-weighted level (as LUFS) of its loudest 200 ms: how hard it hits (v15)
   created_at TEXT
 );
 
@@ -110,6 +111,8 @@ CREATE TABLE IF NOT EXISTS hits (
   duration_s REAL, sample_rate INTEGER, channels INTEGER, peak_db REAL,
   energy_db REAL,                   -- as samples.energy_db (v13)
   tone TEXT,                        -- as samples.tone (v14)
+  punch_db REAL,                    -- as samples.punch_db (v16): the level a stab is set by, hit for hit
+  voices INTEGER,                   -- how many notes it plays (v16): 1–2 a single note, 3 or more a chord
   created_at TEXT
 );
 
@@ -164,6 +167,8 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE samples ADD COLUMN energy_db REAL")
         if "tone" not in cols:  # v14: tone for the EQ (filled by analyze_library or a reprocess)
             self.conn.execute("ALTER TABLE samples ADD COLUMN tone TEXT")
+        if "punch_db" not in cols:  # v15: punch for the balance (filled by analyze_library or a reprocess)
+            self.conn.execute("ALTER TABLE samples ADD COLUMN punch_db REAL")
         removed_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(removed_samples)")}
         for col, typ in (("sample", "TEXT"), ("fingerprint", "BLOB"), ("removed_at", "TEXT")):
             if col not in removed_cols:  # v4: restorable deleted samples
@@ -189,6 +194,10 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE hits ADD COLUMN energy_db REAL")
         if "tone" not in hit_cols:  # v14: tone (filled by analyze_library)
             self.conn.execute("ALTER TABLE hits ADD COLUMN tone TEXT")
+        if "punch_db" not in hit_cols:  # v16: punch and voices (filled by analyze_library)
+            self.conn.execute("ALTER TABLE hits ADD COLUMN punch_db REAL")
+        if "voices" not in hit_cols:
+            self.conn.execute("ALTER TABLE hits ADD COLUMN voices INTEGER")
 
     def close(self) -> None:
         self.conn.close()
@@ -351,6 +360,9 @@ class LibraryDB:
         with self._lock:
             self.conn.execute("DELETE FROM hits WHERE id = ?", (hit_id,))
 
+    def hit_by_path(self, rel_path: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM hits WHERE rel_path = ?", (rel_path,)).fetchone()
+
     def hit_path_taken(self, rel_path: str) -> bool:
         return self.conn.execute("SELECT 1 FROM hits WHERE rel_path = ?", (rel_path,)).fetchone() is not None
 
@@ -362,17 +374,22 @@ class LibraryDB:
             "SELECT id, rel_path, bpm FROM samples WHERE kind = 'loop' AND groove IS NULL").fetchall()
 
     def samples_without_energy(self) -> list[sqlite3.Row]:
-        return self.conn.execute("SELECT id, rel_path FROM samples WHERE energy_db IS NULL OR tone IS NULL").fetchall()
+        return self.conn.execute("SELECT id, rel_path FROM samples WHERE energy_db IS NULL OR tone IS NULL OR punch_db IS NULL").fetchall()
 
     def hits_without_energy(self) -> list[sqlite3.Row]:
-        return self.conn.execute("SELECT id, rel_path FROM hits WHERE energy_db IS NULL OR tone IS NULL").fetchall()
+        return self.conn.execute("SELECT id, rel_path FROM hits WHERE energy_db IS NULL OR tone IS NULL OR punch_db IS NULL OR voices IS NULL").fetchall()
 
-    def set_energy(self, table: str, row_id: int, energy_db: float | None, tone: list[float] | None) -> None:
-        """A sample's or hit's loudness and tone (a silent one: -240 and [], so it isn't measured again)."""
+    def set_energy(self, table: str, row_id: int, energy_db: float | None, tone: list[float] | None,
+                   punch_db: float | None = None, voices: int | None = None) -> None:
+        """A sample's or hit's loudness, tone and punch, and a hit's voices (a silent one: -240, []
+        and 0, so it isn't measured again)."""
         assert table in ("samples", "hits"), table
         with self._lock:
             self.conn.execute(f"UPDATE {table} SET energy_db = ?, tone = ? WHERE id = ?",
                               (-240.0 if energy_db is None else energy_db, json.dumps(tone or []), row_id))
+            self.conn.execute(f"UPDATE {table} SET punch_db = ? WHERE id = ?", (-240.0 if punch_db is None else punch_db, row_id))
+            if table == "hits":
+                self.conn.execute("UPDATE hits SET voices = ? WHERE id = ?", (voices or 0, row_id))
 
     def set_groove(self, sample_id: int, groove: dict | None) -> None:
         with self._lock:
@@ -486,7 +503,7 @@ def _kind_filter(kind: Kinds, column: str = "kind") -> tuple[str, tuple[str, ...
 
 # Sample columns kept for a restore (ids, the stem link and the fingerprint are handled apart).
 RESTORE_COLUMNS = ("kind", "category", "rel_path", "bpm", "bars", "body_bars", "key_label", "key_camelot",
-                   "duration_s", "sample_rate", "channels", "peak_db", "gain_applied_db", "source_offset_s", "energy_db", "tone",
+                   "duration_s", "sample_rate", "channels", "peak_db", "gain_applied_db", "source_offset_s", "energy_db", "tone", "punch_db",
                    "favorite", "rating", "tags", "shift_beats", "created_at")
 
 

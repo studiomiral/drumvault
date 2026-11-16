@@ -28,6 +28,8 @@ const renderState = {
   drone: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },  // older tracks' drones
   strings: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   vocal: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  pad: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  ambience: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
 }
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */

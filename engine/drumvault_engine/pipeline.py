@@ -19,7 +19,7 @@ import soundfile as sf
 from . import arrangement as arrmod, classify, events as eventmod, groove as groovemod, key as keymod, loops as loopmod
 from . import naming, normalize, originals, samples as samplemod
 from . import oneshots as osmod, peaks as peakmod, stretch, tempo as tempomod, zipio
-from .audioutil import Audio, info as audio_info, k_energy_db, load, resample, write_wav
+from .audioutil import Audio, info as audio_info, k_energy_db, k_punch_db, load, resample, write_wav
 from .config import DRUM_CATEGORIES, EVENT_CATEGORIES, ONESHOT_CATEGORIES, Settings
 from .db import LibraryDB, SampleMatcher, library_dir, now_iso
 from .schemas import GridPreview, KeyInfo, Overrides, ProcessResult, SampleCounts, StemInfo, TempoInfo, ZipAnalysis
@@ -514,6 +514,7 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                     key_label=label, key_camelot=camelot, duration_s=len(data) / out_sr,
                     sample_rate=out_sr, channels=int(data.shape[1]), peak_db=peak_db,
                     gain_applied_db=gain_db, source_offset_s=offset_s, energy_db=_energy(data, out_sr),
+                    punch_db=_punch(data, out_sr, th),
                     tone=json.dumps(arrmod.tone(data, out_sr, th) or []), created_at=created)
                 fingerprint = fp.astype(np.float32).tobytes()
                 rid = removed.find(stem_name, kind, bars, offset_s)
@@ -974,13 +975,15 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     `notes`/`bars` (edited in the piano roll) replace the imported file's; the app names such
     renders after the notes, so the file stays a cache. A line the app generated has no file
     (`midi_id` < 1): its `notes` and `bars` are all there is. `groove` (16ths per step) moves
-    notes that start on a 16th the way the track's loops are played. Strings (under
+    notes that start on a 16th the way the track's loops are played. A breakdown layer (under
+    .drumvault/pads/: a pad's held chord or a reese's held note, SCOPE.md §6.7b) is rendered the
+    same way through its own patch. Strings (under
     .drumvault/strings/) are made by `_render_strings`; older tracks' drones (.drumvault/drones/)
     are only played from the files they have."""
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/", ".drumvault/pads/", ".drumvault/ambience/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
     if out_rel.startswith(".drumvault/vocals/"):
@@ -998,12 +1001,16 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
         return {"path": out_rel, "cached": False}
     if out_rel.startswith(".drumvault/strings/"):
         return _render_strings(settings, preset, transpose, bpm, int(bars or 8), out, out_rel)
+    if out_rel.startswith(".drumvault/ambience/"):
+        return _render_ambience(settings, preset, bpm, int(bars or 8), out, out_rel)
     if out_rel.startswith(".drumvault/drones/"):
         if out.exists():
             return {"path": out_rel, "cached": True}
         raise PipelineError("not_found", f"An older track's drone can't be made again: {out_rel}")
     stab = out_rel.startswith(".drumvault/stabs/")
     _drop_stale_bass_renders(out.parent, STAB_RENDER_VERSION if stab else BASS_RENDER_VERSION)
+    from . import basssample
+    sampled = out_rel.startswith(".drumvault/bass/") and basssample.is_sample(preset)
     row = None
     if midi_id >= 1:
         with LibraryDB(lib) as db:
@@ -1012,9 +1019,11 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
             raise PipelineError("not_found", f"No MIDI file with id {midi_id}")
     elif notes is None or not bars:
         raise PipelineError("bad_request", "A generated bassline needs its notes and bars")
-    src = Path(preset)
+    src = lib / preset if sampled else Path(preset)
+    if sampled and ".." in Path(preset).parts:
+        raise PipelineError("bad_path", f"Bad bass sample path: {preset}")
     if not src.exists():
-        raise PipelineError("not_found", f"Serum preset not found: {preset}")
+        raise PipelineError("not_found", f"{'Bass sample' if sampled else 'Serum preset'} not found: {preset}")
     midi_file = lib / row["rel_path"] if row is not None else None
     newest = max(src.stat().st_mtime, midi_file.stat().st_mtime if midi_file is not None and midi_file.exists() else 0)
     if out.exists() and out.stat().st_mtime >= newest:
@@ -1025,19 +1034,54 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     if groove:
         parts = midimod.apply_groove(parts, groove)
     sr = settings.output_sample_rate
-    try:
-        # A chord stab part plays exactly the step sequencer's notes: the preset's own arp and
-        # clip player (their own notes, on their own grid) stay off.
-        data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
-            src, parts, bpm, loop_bars, sr, sequencers=not stab)
-    except serum.SerumError as e:
-        raise PipelineError("serum", str(e)) from e
+    if sampled:
+        # A Bass Samples page one-shot plays the line like a sampler (basssample.py): its own note
+        # is its key's root (corrected by its pitch fix), else read from its sound.
+        with LibraryDB(lib) as db:
+            hit = db.hit_by_path(preset)
+        pc = None
+        if hit is not None and hit["key_label"]:
+            pc = (keymod.parse_label(hit["key_label"])[0] - int(hit["pitch_fix"] or 0)) % 12
+        if pc is None:
+            a = load(src)
+            pc = basssample.sample_pitch_class(a.data.mean(axis=1), a.sr, settings)
+        if pc is None:
+            raise PipelineError("no_pitch", f"The bass sample has no note to play from: {Path(preset).name} (set its key on the Bass Samples page)")
+        data = basssample.render(settings, preset, parts, pc, bpm, loop_bars)
+    else:
+        try:
+            # A chord stab part plays exactly the step sequencer's notes: the preset's own arp and
+            # clip player (their own notes, on their own grid) stay off.
+            data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
+                src, parts, bpm, loop_bars, sr, sequencers=not stab)
+        except serum.SerumError as e:
+            raise PipelineError("serum", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) > 1e-5:
         data, _, _ = normalize.loudness_normalize(data, sr, settings.thresholds.bass_lufs_target,
                                                   settings.thresholds.bass_peak_dbfs)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f".{out.name}.part")
     sf.write(str(tmp), data, sr, subtype="PCM_24", format="WAV")
+    tmp.replace(out)
+    return {"path": out_rel, "cached": False}
+
+
+def _render_ambience(settings: Settings, source: str, bpm: float, bars: int, out: Path, out_rel: str) -> dict:
+    """The ambience bed's loop (ambience.py) from an Ambience page sample, `bars` bars at `bpm`."""
+    from . import ambience as ambmod
+    th = settings.thresholds
+    src = Path(settings.library_path) / source
+    if not source.startswith("Ambience/") or ".." in Path(source).parts or not src.exists():
+        raise PipelineError("not_found", f"Ambience sample not found: {source}")
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return {"path": out_rel, "cached": True}
+    data = ambmod.make_loop(settings, source, bpm, bars)
+    if float(np.abs(data).max(initial=0.0)) <= 1e-5:
+        raise PipelineError("silent", f"The ambience sample is silent: {Path(source).name}")
+    data, _, _ = normalize.loudness_normalize(data, settings.output_sample_rate, th.ambience_lufs_target, th.ambience_peak_dbfs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.part")
+    sf.write(str(tmp), data, settings.output_sample_rate, subtype="PCM_24", format="WAV")
     tmp.replace(out)
     return {"path": out_rel, "cached": False}
 
@@ -1311,6 +1355,12 @@ def _energy(data: np.ndarray, sr: int) -> float:
     return -240.0 if e is None else e
 
 
+def _punch(data: np.ndarray, sr: int, th) -> float:
+    """A sample's punch as stored (silent: -240, so it isn't measured again)."""
+    p = k_punch_db(data, sr, th.punch_window_ms / 1000)
+    return -240.0 if p is None else p
+
+
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
@@ -1333,7 +1383,9 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             path = lib / r["rel_path"]
             if path.exists():
                 a = load(path)
-                db.set_energy(table, r["id"], k_energy_db(a.data, a.sr), arrmod.tone(a.data, a.sr, th))
+                db.set_energy(table, r["id"], k_energy_db(a.data, a.sr), arrmod.tone(a.data, a.sr, th),
+                              k_punch_db(a.data, a.sr, th.punch_window_ms / 1000),
+                              keymod.count_voices(a.data.mean(axis=1), a.sr, th) if table == "hits" else None)
         done = len(loud)
         for i, r in enumerate(loops):
             ctx.check()

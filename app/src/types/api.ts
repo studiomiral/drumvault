@@ -25,6 +25,10 @@ export interface AppSettings {
   serumPresetRoot?: string
   /** Bass (SCOPE.md §6.7): Serum 2 presets to draw patches from, and the ones you starred. */
   bass?: BassSettings
+  /** The Splice folder the Splice page looks through (SCOPE.md §6.12); ~/Splice when not set. */
+  spliceFolder?: string | null
+  /** The breakdown layer (SCOPE.md §6.7b): the Serum 2 folders with pad and reese patches. */
+  pads?: { folders: string[] }
   /** Chord stabs (SCOPE.md §6.9): what Generate's step sequencer saved. */
   stabs?: StabsSettings
 }
@@ -80,8 +84,8 @@ export interface ElevenStatus {
 /** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
 export interface HitItem {
   id: number
-  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs) or strings (Strings); older rows are disco hits, 'drone' rows unused. */
-  kind: 'disco' | 'stab' | 'drone' | 'strings'
+  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs), strings (Strings) or a bass one-shot (Bass Samples); older rows are disco hits, 'drone' rows unused. */
+  kind: 'disco' | 'stab' | 'drone' | 'strings' | 'bass' | 'ambience'
   file_name: string
   name: string
   rel_path: string
@@ -97,6 +101,40 @@ export interface HitItem {
   energy_db?: number | null
   /** As SampleListItem.tone. */
   tone?: number[] | null
+  /** As SampleListItem.punch_db (schema v16; null until measured): the level a stab is set by, hit for hit. */
+  punch_db?: number | null
+  /** How many notes it plays (schema v16; null until measured): 1–2 a single note, 3 or more a chord. */
+  voices?: number | null
+}
+
+/** A sound in the Splice folder that could go on one of the music pages (SCOPE.md §6.12). */
+export interface SpliceCandidate {
+  /** Absolute path of the file in the Splice folder. */
+  path: string
+  name: string
+  /** The pack it is from (its folder under "packs"). */
+  pack: string
+  duration_s: number
+  channels: number
+  /** The key in its name ("Dm"), or only its root ("F": the scale is read from the sound on import). */
+  key_label: string | null
+  key_source: 'name' | 'root' | null
+  /** A tempo in its name. */
+  bpm: number | null
+  /** The page it is suggested for, and why. */
+  kind: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience'
+  why: string
+  /** The page it is on already. */
+  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | null
+}
+
+export interface SpliceScan {
+  folder: string
+  /** False when the folder doesn't exist. */
+  found: boolean
+  /** Audio files looked at. */
+  files: number
+  candidates: SpliceCandidate[]
 }
 
 export interface HitImportResult {
@@ -113,6 +151,11 @@ export interface SerumPreset {
   tags: string[]
   /** Sample files it names that aren't on this Mac (made on another computer): left out of the pools. */
   missing?: number
+  /**
+   * Not a Serum preset but a Bass Samples page one-shot (SCOPE.md §6.7a): `path` is its
+   * library-relative file, and the engine plays the bassline with it like a sampler.
+   */
+  sample?: boolean
 }
 
 export interface MidiImportResult {
@@ -216,6 +259,11 @@ export interface SampleListItem {
   energy_db?: number | null
   /** Its tone (schema v14; null until measured): power in the engine's 24 bands (40 Hz–16 kHz), dB against its total. */
   tone?: number[] | null
+  /**
+   * How hard it hits (schema v15; null until measured): the K-weighted level (as LUFS) of its
+   * loudest 200 ms. Against `energy_db` it tells a snappy hit from a washy one.
+   */
+  punch_db?: number | null
 }
 
 /**
@@ -383,6 +431,12 @@ export interface DrumvaultAPI {
   importHits(paths: string[], kind?: HitItem['kind']): Promise<HitImportResult>
   /** File dialog for disco hits: audio files, folders, zips. */
   chooseHits(title?: string): Promise<string[]>
+  /** Look through the Splice folder (the saved one, else ~/Splice) for sounds for the music pages. Reads only. */
+  scanSplice(): Promise<SpliceScan>
+  /** Pick another Splice folder (saved in the settings); null when cancelled. */
+  chooseSpliceFolder(): Promise<string | null>
+  /** A file in the Splice folder, to listen to it. */
+  readSplice(path: string): Promise<ArrayBuffer>
   /** Correct a hit's key (null: no key, never moved into the track key). */
   setHitKey(hitId: number, key: string | null): Promise<void>
   /** The semitones a hit plays off from the track key, −12…12 (a key read wrong, fixed once). */

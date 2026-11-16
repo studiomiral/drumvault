@@ -1,12 +1,12 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → [lane EQ] → lane duck (sidechain) → lane pan → master
+// source → [clip filter] → clip gain → lane gain → [lane EQ] → lane duck (sidechain) → lane pan → [mono low end] → master
 //                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
 
 import { dbToGain } from '../lib/project'
 import type { EqBand, Lane } from '../types/project'
-import { createReverb, type Reverb } from './reverb'
+import { createEcho, createReverb, type Echo, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
 export interface LaneNodes {
@@ -18,20 +18,39 @@ export interface LaneNodes {
   eq: BiquadFilterNode[]
   /** The bands' shape the EQ nodes were made for (types in order), to rebuild only when it changes. */
   eqShape: string
-  /** The lane's reverb, made when a clip first sends to it. */
+  /** The lane's reverb, made when a clip first sends to it: the hall, or a short room when `room` is set. */
   verb?: Reverb
+  room?: boolean
+  /** The lane's delay, made when a clip first throws to it. */
+  echo?: Echo
+  /** Where the lane plays into (the master). */
+  out: AudioNode
+  /** The lane's mono low end: the crossover's filters (lows, then highs) and the Hz they were made for. */
+  mono?: { hz: number; low: BiquadFilterNode[]; high: BiquadFilterNode[]; sum: GainNode }
 }
 
 /** The lane's reverb (made on first use). */
 export function laneVerb(ctx: BaseAudioContext, nodes: LaneNodes): Reverb {
-  nodes.verb ??= createReverb(ctx, nodes.gain)
+  nodes.verb ??= createReverb(ctx, nodes.gain, nodes.room ? 'room' : 'hall')
   return nodes.verb
+}
+
+/** The lane's delay (made on first use), set to repeat every `time` seconds, `feedback` of each repeat coming round again. */
+export function laneEcho(ctx: BaseAudioContext, nodes: LaneNodes, time: number, feedback: number): Echo {
+  nodes.echo ??= createEcho(ctx, nodes.gain)
+  if (nodes.echo.delay.delayTime.value !== time) nodes.echo.delay.delayTime.value = time
+  nodes.echo.feedback.gain.value = Math.max(0, Math.min(0.9, feedback))
+  return nodes.echo
 }
 
 /** Drop the lane's reverb and whatever tail it still rings (stop): the next send makes a new one. */
 export function dropVerb(nodes: LaneNodes): void {
   nodes.verb?.output.disconnect()
   nodes.verb = undefined
+  // (The delay's echoes stop with it.)
+  nodes.echo?.output.disconnect()
+  nodes.echo?.feedback.disconnect()
+  nodes.echo = undefined
 }
 
 export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNodes {
@@ -45,7 +64,58 @@ export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNod
   const duck = ctx.createGain()
   const pan = ctx.createStereoPanner()
   gain.connect(duck).connect(pan).connect(dest)
-  return { gain, duck, pan, eq: [], eqShape: '' }
+  return { gain, duck, pan, eq: [], eqShape: '', out: dest }
+}
+
+/** Which reverb the lane sends to: a reverb made as the other kind is dropped (the next send makes the right one). */
+export function setLaneRoom(nodes: LaneNodes, room: boolean): void {
+  if (!!nodes.room === room) return
+  nodes.room = room
+  nodes.verb?.output.disconnect()
+  nodes.verb = undefined
+}
+
+/** A Butterworth biquad's Q as Web Audio takes it for low- and high-passes (dB). */
+const BUTTERWORTH_Q_DB = -3.01
+
+/**
+ * The lane's low end below `hz` summed to mono (none: stereo all the way down), after its pan: a
+ * 4th-order Linkwitz-Riley crossover (two Butterworth filters each way: together they add up flat),
+ * the lows mixed to mono and fed to both sides, the highs as they are. New nodes only when it is
+ * switched on or off.
+ */
+export function setLaneMono(ctx: BaseAudioContext, nodes: LaneNodes, hz: number | undefined): void {
+  if (!hz) {
+    if (!nodes.mono) return
+    nodes.pan.disconnect()
+    for (const n of [...nodes.mono.low, ...nodes.mono.high, nodes.mono.sum]) n.disconnect()
+    nodes.mono = undefined
+    nodes.pan.connect(nodes.out)
+    return
+  }
+  if (!nodes.mono) {
+    const pass = (type: 'lowpass' | 'highpass') => [0, 1].map(() => {
+      const f = ctx.createBiquadFilter()
+      f.type = type
+      f.Q.value = BUTTERWORTH_Q_DB
+      return f
+    })
+    const low = pass('lowpass')
+    const high = pass('highpass')
+    // Stereo in, one channel out (the two sides averaged); the master upmixes it to both sides.
+    const sum = ctx.createGain()
+    sum.channelCount = 1
+    sum.channelCountMode = 'explicit'
+    sum.channelInterpretation = 'speakers'
+    nodes.pan.disconnect()
+    nodes.pan.connect(low[0]).connect(low[1]).connect(sum).connect(nodes.out)
+    nodes.pan.connect(high[0]).connect(high[1]).connect(nodes.out)
+    nodes.mono = { hz: 0, low, high, sum }
+  }
+  if (nodes.mono.hz !== hz) {
+    for (const f of [...nodes.mono.low, ...nodes.mono.high]) f.frequency.value = hz
+    nodes.mono.hz = hz
+  }
 }
 
 /** The lane's EQ as `bands` (none: bypassed): new nodes only when the bands' shape changes. */
@@ -99,6 +169,8 @@ export function resetDuck(nodes: LaneNodes, at: number): void {
 export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, at = 0): void {
   nodes.gain.gain.setTargetAtTime(audible ? dbToGain(laneGainDb(lane)) : 0, at, 0.01)
   setLaneEq(nodes.gain.context, nodes, laneEqBands(lane))
+  setLaneMono(nodes.gain.context, nodes, lane.monoBelow)
+  setLaneRoom(nodes, !!lane.room)
   nodes.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, lane.pan)), at, 0.01)
 }
 
@@ -142,6 +214,14 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
     d.gain.linearRampToValueAtTime(0, when + duration)
     d.connect(g)
     head = d
+  } else if (ev.release && duration > ev.release) {
+    // A gated hit: full until its release, then out by its end.
+    const d = ctx.createGain()
+    d.gain.setValueAtTime(1, when)
+    d.gain.setValueAtTime(1, when + duration - ev.release)
+    d.gain.linearRampToValueAtTime(0, when + duration)
+    d.connect(g)
+    head = d
   }
   if (ev.fade) {
     // Clip fades: gain ramps between the fade's corner points (in project time from ev.start).
@@ -181,6 +261,12 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
       s.gain.setValueCurveAtTime(Float32Array.from(ev.verb), when, Math.max(1e-3, ev.duration ?? duration))
     }
     out.connect(s).connect(laneVerb(ctx, lane).input)
+  }
+  if (ev.echo && ev.echo.send > 0) {
+    // Delay throw: the sound sent to the lane's delay, which repeats it.
+    const s = ctx.createGain()
+    s.gain.value = ev.echo.send
+    out.connect(s).connect(laneEcho(ctx, lane, ev.echo.time, ev.echo.feedback).input)
   }
   src.start(when, offset, duration * rate)  // Web Audio's duration is buffer time
   return src

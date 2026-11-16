@@ -200,20 +200,46 @@ def test_tone_of_a_sound():
     assert tone(np.zeros(1000, dtype=np.float32), sr, th) is None
 
 
+def test_punch_is_the_loudest_window_and_tells_a_snappy_hit_from_a_washy_one():
+    from drumvault_engine.audioutil import k_energy_db, k_punch_db
+
+    sr = 44100
+    rng = np.random.default_rng(1)
+    noise = rng.standard_normal(sr).astype(np.float32) * 0.1
+    # A sound as long as the window: its punch is its loudness.
+    assert k_punch_db(noise[: sr // 5], sr, 0.2) == pytest.approx(k_energy_db(noise[: sr // 5], sr) - 10 * np.log10(0.2), abs=0.05)
+    # Steady noise: any window is as loud as the whole.
+    assert k_punch_db(noise, sr, 0.2) == pytest.approx(k_energy_db(noise, sr), abs=0.5)
+    # The same energy in 50 ms or spread over 800 ms: the snappy one hits 6 dB harder (0.8 s / 0.2 s).
+    snappy = np.zeros(sr, dtype=np.float32)
+    snappy[: sr // 20] = rng.standard_normal(sr // 20) * 0.4
+    washy = np.zeros(sr, dtype=np.float32)
+    washy[: 4 * sr // 5] = rng.standard_normal(4 * sr // 5) * 0.1
+    assert k_energy_db(snappy, sr) == pytest.approx(k_energy_db(washy, sr), abs=0.5)
+    assert k_punch_db(snappy, sr, 0.2) - k_punch_db(washy, sr, 0.2) == pytest.approx(6.0, abs=0.7)
+    # Shorter than the window: counted as the window long. Stereo as its mono mix. Silence: none.
+    assert k_punch_db(snappy[: sr // 20], sr, 0.2) == pytest.approx(k_punch_db(snappy, sr, 0.2), abs=0.05)
+    assert k_punch_db(np.stack([snappy, snappy], axis=1), sr, 0.2) == pytest.approx(k_punch_db(snappy, sr, 0.2), abs=0.01)
+    assert k_punch_db(np.zeros(1000, dtype=np.float32), sr, 0.2) is None
+
+
 def test_samples_and_hits_get_their_loudness(fixtures, tmp_path):
     settings = Settings(library_path=str(tmp_path / "lib"))
     pipeline.process_zip(fixtures.zip("deep_groove"), settings)
     with LibraryDB(settings.library_path) as db:
-        rows = db.conn.execute("SELECT id, energy_db, tone FROM samples").fetchall()
+        rows = db.conn.execute("SELECT id, energy_db, tone, punch_db FROM samples").fetchall()
         assert rows and all(r["energy_db"] is not None and -60 < r["energy_db"] < 20 for r in rows)
+        assert all(r["punch_db"] is not None and -60 < r["punch_db"] < 10 for r in rows)
+        punch = {r["id"]: r["punch_db"] for r in rows}
         assert all(len(json.loads(r["tone"])) == 24 for r in rows)
         measured = {r["id"]: r["energy_db"] for r in rows}
-        db.conn.execute("UPDATE samples SET energy_db = NULL, tone = NULL")
+        db.conn.execute("UPDATE samples SET energy_db = NULL, tone = NULL, punch_db = NULL")
         assert db.get_arrangement(1)["levels"]["parts"]["kick"] < 0
     assert pipeline.analyze_library(settings)["loudness"] == len(measured)
     with LibraryDB(settings.library_path) as db:
         again = {r["id"]: r["energy_db"] for r in db.conn.execute("SELECT id, energy_db FROM samples")}
         assert again == pytest.approx(measured, abs=0.02)
+        assert {r["id"]: r["punch_db"] for r in db.conn.execute("SELECT id, punch_db FROM samples")} == pytest.approx(punch, abs=0.02)
 
 
 def test_old_library_gets_the_new_columns(tmp_path):

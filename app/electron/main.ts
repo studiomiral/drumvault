@@ -5,7 +5,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
 import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
 import { keptDir, LibraryReader } from './db'
@@ -305,11 +306,30 @@ function registerIpc(): void {
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
-  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' = 'disco') => {
+  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' | 'bass' | 'ambience' = 'disco') => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request('import_hits', { paths, kind, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
+  })
+  // The Splice page (SCOPE.md §6.12): the engine looks through the folder (names and headers only).
+  const spliceFolder = () => settings.spliceFolder || join(homedir(), 'Splice')
+  ipcMain.handle('splice:scan', async () => {
+    if (!sidecar) throw new Error('Engine is not running')
+    return sidecar.request('scan_splice', { folder: spliceFolder(), settings: engineSettings() }, 300_000)
+  })
+  ipcMain.handle('dialog:splice', async () => {
+    const r = await dialog.showOpenDialog(win!, { title: 'Choose your Splice folder', buttonLabel: 'Choose', defaultPath: spliceFolder(), properties: ['openDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return null
+    await applySettings({ spliceFolder: r.filePaths[0] })
+    return r.filePaths[0]
+  })
+  ipcMain.handle('splice:read', async (_e, path: string) => {
+    // Only files inside the Splice folder are read.
+    const rel = relative(resolve(spliceFolder()), resolve(path))
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`Path outside the Splice folder: ${path}`)
+    const buf = await readFile(resolve(path))
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   })
   ipcMain.handle('dialog:hits', async (_e, title = 'Add disco hits') => {
     const r = await dialog.showOpenDialog(win!, {
@@ -605,6 +625,9 @@ function buildMenu(): void {
         { label: 'Disco Hits', accelerator: 'CmdOrCtrl+7', click: () => send('menu', 'view:hits') },
         { label: 'Chord Stabs', click: () => send('menu', 'view:stabs') },
         { label: 'Strings', click: () => send('menu', 'view:strings') },
+        { label: 'Bass Samples', click: () => send('menu', 'view:basses') },
+        { label: 'Ambience', click: () => send('menu', 'view:ambience') },
+        { label: 'Splice', click: () => send('menu', 'view:splice') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

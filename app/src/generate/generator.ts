@@ -15,20 +15,26 @@ import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, T
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated } from './bassline'
 import { hitPitch, hitSample } from './disco'
-import { STRINGS_CHANCE, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
+import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample } from './ambience'
+import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { chopPitch, chopSample, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
-import { stabParts, stabRhythm, type StabTurns } from './stabs'
+import { accented, bassSteps, closestGap, perBarFor, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabTurn, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
 import { templateFrom } from './template'
-import { balanceFrom, dropRanges, levelLanes, type Balance } from './balance'
-import { bassy, eqLanes } from './eq'
+import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
+import {
+  breakShape, CHARACTER_LABEL, characterRules, CHARACTERS, isReese, LEAD_DB, LEAD_LABEL, leadRules, PAD_BARS, PAD_CHANCE, padNotes, pickLead,
+  type Character, type Lead,
+} from './character'
+import { balanceFrom, dropRanges, evenClips, levelLanes, punchRefs, type Balance } from './balance'
+import { bassy, filterLoss, eqLanes } from './eq'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
-  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'strings' | 'vocal' | 'vchop'
+  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
 
 /** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -60,6 +66,8 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'stab2', name: 'Stab 2', startDb: -7, color: '#fde68a' },
   { role: 'stab3', name: 'Stab 3', startDb: -7, color: '#fef3c7' },
   { role: 'strings', name: 'Strings', startDb: -12, color: '#99f6e4' },
+  { role: 'pad', name: 'Pad', startDb: -10, color: '#c4b5fd' },
+  { role: 'bed', name: 'Ambience', startDb: -24, color: '#cbd5e1' },
   { role: 'vocal', name: 'Vocal', startDb: -3, color: '#f9a8d4' },
   { role: 'vchop', name: 'Vocal Chops', startDb: -6, color: '#fbcfe8' },
   { role: 'disco', name: 'Disco Hit', startDb: -6, color: '#f0abfc' },
@@ -72,7 +80,7 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'atmos', name: 'Atmos', startDb: -11, color: '#94a3b8' },
 ]
 /** Lanes that keep playing in the beat or two of silence before a drop. */
-const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'hits'])
+const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'hits', 'bed'])
 /** The Strings lane's sidechain depth when Generate doesn't set one. */
 const STRINGS_SIDECHAIN = 0.6
 /** The rules the Strings lane owns, kept with kept strings. */
@@ -121,7 +129,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits' }
+const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits' }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -131,14 +139,31 @@ const startingDb = (role: Role) => LANES.find((l) => l.role === role)?.startDb ?
  * Every generated lane of `project` (or `only` these) brought to its place in the balance
  * (balance.ts): the producers' in the user's tracks, else the house defaults; and its EQ (eq.ts).
  */
-function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOptions, sections: Section[], only?: Set<string>): Balance & { measured: number } {
+function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOptions, sections: Section[], only?: Set<string>, lead?: Lead | null):
+    Balance & { measured: number; evened: number; mix: MixCheck | null } {
   const hits = [...opts.disco?.hits ?? [], ...opts.stabs?.hits ?? []].map(hitSample)
   const byPath = new Map([...all, ...hits].map((s) => [s.rel_path, s]))
   const balance = balanceFrom(opts.templates ?? [])
   const drops = dropRanges(sections)
-  const measured = levelLanes(project, byPath, balance, drops, laneRole, startingDb, only)
+  // How hard each kind of one-shot usually hits in the library: a snappier one counts louder.
+  const punch = punchRefs(all)
+  // A lane's samples evened out first, then the lane brought to its place, then its EQ.
+  const evened = evenClips(project, byPath, drops, laneRole, only, punch)
+  const measured = levelLanes(project, byPath, balance, drops, laneRole, startingDb, only, punch)
   eqLanes(project, byPath, opts.templates ?? [], drops, laneRole, only)
-  return { ...balance, measured }
+  // The whole mix against the user's tracks (a whole track only: one lane made again keeps the rest's levels).
+  const mix = only ? null : checkMix(project, byPath, opts.templates ?? [], drops, laneRole, punch)
+  // The track's lead sits a little over where the balance puts it (a stab still never over the kick).
+  if (lead && measured) {
+    const kick = project.lanes.find((l) => l.name === 'Kick')?.levelDb
+    for (const l of project.lanes) {
+      const role = laneRole(l.name)
+      const mine = lead === 'stab' ? STAB_ROLES.includes(role!) : role === lead
+      if (!mine || l.levelDb == null || (only && !only.has(l.id))) continue
+      l.levelDb = lead === 'stab' && kick != null ? Math.min(l.levelDb + LEAD_DB[lead], Math.max(l.levelDb, kick - 1)) : l.levelDb + LEAD_DB[lead]
+    }
+  }
+  return { ...balance, measured, evened, mix }
 }
 
 /** Lane volumes = the Generate view's sliders (dB per lane, 0 by default). */
@@ -148,6 +173,104 @@ export function applyMix(project: Project, mix: Mix): void {
     if (l) lane.volumeDb = mix[l.role] ?? 0
   }
 }
+
+/**
+ * One groove (SCOPE.md §6.6): how the drums carry through breakdowns. What stays closes over
+ * GLUE_CLOSE_BARS after the line; hats are thinned (high-passed) instead of darkened; a low-pass
+ * (a high-pass) counts as open at GLUE_LP_OPEN_HZ (GLUE_HP_OPEN_HZ); nothing gets darker than
+ * GLUE_MIN_HZ. Every later breakdown is GLUE_DEEPER times as dark and GLUE_DEEPER_DB lower. What
+ * leaves closes to GLUE_LEAVE_HZ over the GLUE_BEFORE_BARS before the line and fades GLUE_FADE_DB
+ * down after it. The long breakdown is bare (the thread alone) when its middle is at least
+ * GLUE_BARE_MIN_BARS. At most GLUE_RETURNERS loops open up into the next part.
+ */
+const GLUE_CLOSE_BARS = 4
+const GLUE_THIN_HZ = 900
+const GLUE_LP_OPEN_HZ = 18000
+const GLUE_HP_OPEN_HZ = 30
+const GLUE_MIN_HZ = 250
+const GLUE_DEEPER = 0.7
+const GLUE_DEEPER_DB = 1.5
+const GLUE_LEAVE_HZ = 6000
+const GLUE_BEFORE_BARS = 2
+const GLUE_FADE_DB = 16
+const GLUE_BARE_MIN_BARS = 12
+const GLUE_RETURNERS = 4
+/** A percussion lead plays through breakdowns this much under its drop level (dB), unfiltered. */
+const LEAD_BREAK_DB = -2
+/** What stays sits this much further under its drop loudness than the track's `glueDb`, its filter's loss made up for (within these). */
+const GLUE_UNDER_DB = 4
+const GLUE_MAX_MAKEUP_DB = 6
+const GLUE_MAX_CUT_DB = 12
+/** The kick's and the bass's low end (the kick roll's and the impacts' too) is mono below this (Hz). */
+const MONO_BELOW_HZ = 120
+const MONO_ROLES = new Set<Role>(['kick', 'bass', 'buildup', 'hits'])
+/** The loops that leave after the line, the first staying longest; and those that come back, the first earliest. */
+const GLUE_LEAVE_ORDER: Role[] = ['top', 'hats', 'perc', 'top2', 'groove', 'hats2', 'perc2', 'top3', 'top4', 'ride']
+const GLUE_RETURN_ORDER: Role[] = ['hats', 'perc', 'top', 'top2', 'groove', 'hats2', 'perc2', 'top3']
+
+/** The engine's tone bands per octave (24 bands from 40 Hz to 16 kHz). */
+const TONE_BANDS_PER_OCTAVE = 24 / Math.log2(16000 / 40)
+
+/** The tone of several sounds together (each as its share of power per band); null when none is measured. */
+function meanTone(tones: (number[] | null | undefined)[]): number[] | null {
+  const xs = tones.filter((t): t is number[] => !!t && t.length === 24)
+  if (!xs.length) return null
+  const acc = new Array(24).fill(0)
+  for (const t of xs) {
+    const p = t.map((v) => 10 ** (v / 10))
+    const total = p.reduce((a, b) => a + b, 0)
+    if (total > 0) p.forEach((v, i) => { acc[i] += v / total / xs.length })
+  }
+  return acc.map((v) => 10 * Math.log10(Math.max(v, 1e-9)))
+}
+
+/**
+ * Stabs that fit (SCOPE.md §6.9). They sit in a room by `STAB_ROOM` and duck under the kick by
+ * `STAB_DUCK` over `STAB_DUCK_BEATS`; a hit is gated to `STAB_GATE_SHARE` of the gap to the next
+ * stab (never under `STAB_GATE_MIN_BEATS`); a delay throw sends `STAB_ECHO`. A filter opening runs
+ * from the track's `stabsCutoff` to `STAB_OPEN_HZ`. In breakdowns what stays is `STAB_BREAK_DB`
+ * down; what leaves fades by `STAB_FADE_DB` a bar. A tease sits `STAB_TEASE_DB` down, and only in
+ * an intro of `STAB_TEASE_MIN_INTRO` bars or more (16 bars of it stay clean for the DJ). Two stabs
+ * sit `STAB_PAN` apart either side; of three, the first stays in the middle.
+ */
+const STAB_ROOM = 0.18
+const STAB_DUCK = 0.25
+const STAB_DUCK_BEATS = 0.4
+const STAB_GATE_SHARE = 0.92
+const STAB_GATE_MIN_BEATS = 0.25
+const STAB_ECHO = 0.5
+const STAB_OPEN_HZ = 16000
+const STAB_BREAK_DB = -3
+const STAB_FADE_DB = -5
+const STAB_TEASE_DB = -4
+const STAB_TEASE_MIN_INTRO = 24
+const STAB_TEASE_BARS = 8
+const STAB_PAN = 0.25
+
+/**
+ * The patches a track's bass is drawn from (SCOPE.md §6.7a): when the pool has Serum patches and
+ * bass samples both, one kind or the other with even chances (however many there are of each),
+ * decided by the seed alone (the track's own random stream is left as it is).
+ */
+function bassPool(presets: SerumPreset[], seed: number): SerumPreset[] {
+  const samples = presets.filter((p) => p.sample)
+  const serum = presets.filter((p) => !p.sample)
+  if (!samples.length || !serum.length) return presets
+  return new Rng(seed ^ 0x42535350).chance(0.5) ? samples : serum
+}
+
+/** Whether a structure has one drop only. */
+const drops1 = (sections: Section[]) => sections.filter((s) => s.kind === 'drop').length === 1
+
+/**
+ * The breakdown layer (SCOPE.md §6.7b): a pad's filter opens to `PAD_OPEN_HZ`, a reese's to
+ * `PAD_REESE_OPEN_HZ` (it starts an octave lower); the layer swells in over `PAD_FADE_BARS` and
+ * rises `PAD_RISE_DB` into the next part.
+ */
+const PAD_OPEN_HZ = 7000
+const PAD_REESE_OPEN_HZ = 1800
+const PAD_FADE_BARS = 2
+const PAD_RISE_DB = 8
 
 /** Lanes whose main sample can be kept while cycling. */
 export const KEEPABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove']
@@ -182,6 +305,13 @@ export interface GenerateOptions {
    * Strings lane's sidechain depth; null or empty = none.
    */
   strings?: { hits: HitItem[]; sidechain?: number } | null
+  /**
+   * The breakdown layer (SCOPE.md §6.7b): Serum 2 patches for pads (a chord) and reeses (one low
+   * note), from the Pads module's folders; null or empty = none.
+   */
+  pads?: { presets: SerumPreset[] } | null
+  /** The ambience bed (SCOPE.md §6.10a): the Ambience page's textures; null or empty = none. */
+  ambience?: { hits: HitItem[] } | null
   /**
    * Vocals (SCOPE.md §6.11): the Vocals page's analysed takes, one sung in every track (one not
    * used in an export yet while there are some); null or empty = none.
@@ -237,7 +367,7 @@ const RIDE_ROLES: [RidePart, Role[], string][] = [
   ['bass', ['bass'], 'bass'], ['top', ['top', 'top2', 'top3', 'top4', 'groove'], 'tops'],
 ]
 /** The mix high-pass into drops leaves the moments alone: risers, fills, impacts, crashes, hits. */
-const MIX_HP_ROLES = (r: Role) => !['fills', 'fx', 'fx2', 'hits', 'crash', 'disco', 'disco2'].includes(r)
+const MIX_HP_ROLES = (r: Role) => !['fills', 'fx', 'fx2', 'hits', 'crash', 'disco', 'disco2', 'bed'].includes(r)
 
 /** A seed from a structure's shape (FNV-1a): the same sections, the same rides. */
 function structureSeed(sections: Section[]): number {
@@ -320,6 +450,8 @@ export interface Generation {
   rules: Rules
   /** Source code of the real track whose structure this one follows, if any. */
   template?: string | null
+  /** The drop's tone against the user's tracks, and what was moved for it (mix.ts); null or absent: not checked. */
+  mix?: MixCheck | null
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +643,10 @@ interface BarPattern {
   /** A volume ride over the bar (a build-up getting louder): dB at its start, and at its end. */
   gainDb?: number
   gainTo?: number
+  /** A stab's: each hit at most this long (beats), its send to the lane's room (0…1), its delay throw (0…1). */
+  gate?: number
+  room?: number
+  echo?: number
 }
 
 interface Segment {
@@ -523,6 +659,9 @@ interface Segment {
   gainDb?: number
   gainTo?: number
   bass?: BassRender
+  /** Fades from the part's edges (beats): a layer that swells in and leaves. */
+  fadeIn?: number
+  fadeOut?: number
   /** Loop variations: beats into the loop at `start`, only its first bars, semitones. */
   trim?: number
   loopBars?: number
@@ -540,20 +679,22 @@ function alike(a: Segment, b: Segment): boolean {
   return a.sample.id === b.sample.id && (a.pitch ?? 0) === (b.pitch ?? 0) && (a.loopBars ?? 0) === (b.loopBars ?? 0)
     && JSON.stringify(a.filter ?? null) === JSON.stringify(b.filter ?? null) && JSON.stringify(a.bass ?? null) === JSON.stringify(b.bass ?? null)
     && JSON.stringify(a.verb ?? null) === JSON.stringify(b.verb ?? null)
-    && (a.gainDb ?? 0) === (b.gainDb ?? 0) && a.gainTo === b.gainTo
+    && (a.gainDb ?? 0) === (b.gainDb ?? 0) && a.gainTo === b.gainTo && !a.fadeIn && !a.fadeOut && !b.fadeIn && !b.fadeOut
 }
 
 /** Lanes whose one-shot patterns take on the track's feel (the kick and crash stay on the grid). */
 // (Not the chord stabs: they sit straight on the grid, where a patch's arp keeps them anyway.)
 const GROOVED = new Set<Role>(['clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4'])
 
-const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}`
+const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}|${p.gate ?? ''}|${p.room ?? ''}|${p.echo ?? ''}`
 
 class Lanes {
   bars = new Map<Role, (BarPattern | null)[]>()
   segs = new Map<Role, Segment[]>()
   /** The track's feel, applied to one-shot patterns on the GROOVED lanes. */
   feel: StepGroove | null = null
+  /** The stabs take on the feel too (tracks whose stabs are written for them, rule `stabFit`). */
+  stabFeel = false
 
   constructor(private total: number) {}
 
@@ -597,7 +738,24 @@ class Lanes {
       if (s.sample.kind !== 'loop' || (s.bass && !rendered) || beat <= s.start || beat >= s.start + s.length) return [s]
       const L = loopLen(s)
       const head = beat - s.start
-      return [{ ...s, length: head }, { ...s, start: beat, length: s.length - head, trim: ((s.trim ?? 0) + head) % L }]
+      // A sweep and a ride go on where they were: the first part ends, the second starts, at their
+      // value at the split (the filter evenly in pitch, the level in dB); fades stay at their ends.
+      const t = head / s.length
+      const f = s.filter
+      const hz = f && f.to != null ? Math.round(f.from * (f.to / f.from) ** t) : null
+      const db = s.gainTo != null ? Math.round(((s.gainDb ?? 0) + (s.gainTo - (s.gainDb ?? 0)) * t) * 2) / 2 : null
+      const { fadeIn, fadeOut, ...plain } = s
+      const first: Segment = { ...plain, length: head, ...(fadeIn ? { fadeIn } : {}) }
+      const second: Segment = { ...plain, start: beat, length: s.length - head, trim: ((s.trim ?? 0) + head) % L, ...(fadeOut ? { fadeOut } : {}) }
+      if (f && hz != null) {
+        first.filter = { ...f, to: hz }
+        second.filter = { ...f, from: hz }
+      }
+      if (db != null) {
+        first.gainTo = db
+        second.gainDb = db
+      }
+      return [first, second]
     }))
   }
 
@@ -720,7 +878,10 @@ class Lanes {
         if (p.gainTo != null) c.gainTo = p.gainTo
         if (p.filter) c.filter = { ...p.filter }
         if (p.pitch) c.pitch = p.pitch
-        if (this.feel && GROOVED.has(role)) c.groove = grooveFor(this.feel, c.steps)
+        if (p.gate) c.gate = p.gate
+        if (p.room) c.verb = { from: p.room, to: p.room }
+        if (p.echo) c.echo = p.echo
+        if (this.feel && (GROOVED.has(role) || (this.stabFeel && STAB_ROLES.includes(role)))) c.groove = grooveFor(this.feel, c.steps)
         out.push(c)
       }
       const key = (b: number) => (bars[b] ? patternKey(bars[b]!) : '')
@@ -769,6 +930,9 @@ class Lanes {
         if (s.bass) c.bass = { ...s.bass }
         if (s.pitch) c.pitch = s.pitch
         if (s.loopBars && s.loopBars < (s.sample.bars ?? 1)) c.loopBars = s.loopBars
+        // (Fades never meet: each at most half the clip.)
+        if (s.fadeIn) c.fadeIn = Math.min(s.fadeIn, s.length / 2)
+        if (s.fadeOut) c.fadeOut = Math.min(s.fadeOut, s.length / 2)
         out.push(c)
       }
     }
@@ -866,7 +1030,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const bassMidi = model
     ? keep.bassMidi ?? generatedMidi(generateBassline(model, rng, { key, bars: bo!.bars }), key) : null
   const bassPreset = bassMidi && bo
-    ? keep.bassPreset ?? rng.pickBy(bo.presets, (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
+    ? keep.bassPreset ?? rng.pickBy(bassPool(bo.presets, seed), (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
   const bass: GenerationBass | null = bassMidi && bassPreset
     ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key) + (bo?.octaves?.[bassPreset.path] ?? 0), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
@@ -879,14 +1043,26 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const stabOf = new Map(stabItems.map((h) => [h.rel_path, h]))
   const keptRule = keep.rules?.stabs as boolean | undefined
   const useStabs = stabPool.length > 0 && (keptRule ?? true)
+  // (Known before the rules are: a kept or locked value, else on.)
+  const stabFitEarly = ((keep.rules?.stabFit ?? opts.locks?.stabFit ?? true) as boolean) !== false
   const stabs: SampleListItem[] = []
   if (useStabs) {
     const keptIds = STAB_ROLES.map((r) => keep.picks?.[r]?.id)
+    // Stabs that fit the track (rule `stabFit`): near its key, not the tops' tone over again, and a set.
+    const topsTone = meanTone(tops.map((t) => t.tone))
+    const fitting = (cands: SampleListItem[]) => {
+      const chosen = stabs.map((x) => stabOf.get(x.rel_path)!).filter(Boolean)
+      return srng.pickBy(cands, (x) => {
+        const h = stabOf.get(x.rel_path)
+        return h ? stabWeight(h, hitPitch(h, key), topsTone, chosen, TONE_BANDS_PER_OCTAVE) : 1
+      })
+    }
     for (const role of STAB_ROLES) {
       const own = keep.picks?.[role] ? stabPool.find((x) => x.id === keep.picks![role]!.id) : undefined
       const cands = stabPool.filter((x) => !stabs.includes(x) && !keptIds.includes(x.id))
       const fresh = cands.filter((x) => !keep.avoid?.includes(x.rel_path))
-      const pick = own ?? (fresh.length ? srng.pick(fresh) : cands.length ? srng.pick(cands) : null)
+      const from = fresh.length ? fresh : cands
+      const pick = own ?? (!from.length ? null : stabFitEarly ? fitting(from) : srng.pick(from))
       if (pick) stabs.push(pick)
     }
     stabs.forEach((x, i) => (picks[STAB_ROLES[i]] = x))
@@ -900,6 +1076,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const brng = new Rng(seed ^ 0x4255494c)
   // How the track fills up out of its intro (and thins out into its outro): an RNG of its own too.
   const lrng = new Rng(seed ^ 0x4c494654)
+  // How the groove carries through breakdowns: an RNG of its own too.
+  const grng = new Rng(seed ^ 0x474c5545)
   const buildDrawn = {
     buildup: brng.weighted([['none', 3], ['snareRoll', 2], ['snareSteps', 2], ['kickRoll', 1.5], ['claps', 1.5]] as const) as Buildup,
     buildupBars: brng.weighted([[2, 1], [4, 3], [8, 2]] as const) as number,
@@ -919,6 +1097,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const stringHits = (opts.strings?.hits ?? []).filter((h) => stringsShift(h, key) != null)
   // ---- vocals (SCOPE.md §6.11): the Vocals page's takes. An RNG of their own too ----
   const vrng = new Rng(seed ^ 0x564f434c)
+  // The ambience bed: an RNG of its own too.
+  const arng = new Rng(seed ^ 0x414d4249)
+  const bedHits = opts.ambience?.hits ?? []
   const takes = opts.vocals?.takes ?? []
   const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
 
@@ -957,6 +1138,23 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // Decided once per track and applied to every section of the same kind, so a track has its
   // own logic instead of sounding random: if drop 1 has a crash every 16 bars, so does drop 2.
   // Breakdowns are the exception: a break is a break from the rest, so they vary on their own.
+  const stabMode = srng.weighted([['answer', 7], ['lock', 3]] as const) as StabBass
+  // ---- the track's character and its lead (SCOPE.md §6.6, "Identity"; an RNG of their own): one of
+  // a few kinds of club track, which sets the rules that go together, and the one element the track
+  // is built around. A kept or locked value stands; a track made before has neither ----
+  const crng = new Rng(seed ^ 0x43484152)
+  const drawnCharacter = crng.pick(CHARACTERS)
+  // (A track made again carries its own, also when it has none: one made before characters.)
+  const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
+  const charRules = characterRules(drawnCharacter, crng, KICK_PHRASE_ENDS)
+  const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
+  const drawnLead = pickLead(character ?? drawnCharacter, crng, hasLead)
+  const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : opts.locks && 'lead' in opts.locks ? opts.locks.lead : undefined
+  const lead = kept !== undefined ? ((kept && hasLead.includes(kept as Lead) ? kept : null) as Lead | null) : character ? drawnLead : null
+  // ---- the breakdown layer (§6.7b; an RNG of its own): a pad's chord or a reese's note ----
+  const prng = new Rng(seed ^ 0x50414453)
+  const padPool = key ? opts.pads?.presets ?? [] : []
+  const padDraw = { in: prng.chance(PAD_CHANCE[character ?? drawnCharacter]), preset: padPool.length ? prng.pick(padPool).path : null, hz: prng.int(250, 600) }
   const drawn = {
     fx: rng.weighted([['sparse', 1], ['normal', 3], ['busy', 1.5]] as const),
     // Every 16 bars in drops (crashes also in intro and outro): a crash on the 1, the bar before
@@ -1052,7 +1250,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     discoAt: drng.weighted([['drops', 3], ['16', 2], ['8', 1], ['all', 2]] as const),
     // Strings in some tracks: in the drops, all through, or all but the intro and outro.
     stringsIn: stringHits.length > 0 && trng.chance(STRINGS_CHANCE),
-    stringsAt: trng.weighted([['drops', 3], ['all', 2], ['inner', 3]] as const),
+    // (A supporting layer: from the second drop, in the second half of every drop, or in the
+    // breakdowns for tension. Tracks made before: in the drops, all through, or all but intro and outro.)
+    stringsAt: trng.weighted([['later', 3], ['halves', 3], ['breaks', 2]] as const) as 'later' | 'halves' | 'breaks' | 'drops' | 'all' | 'inner',
     // A vocal in every track: its phrase loop, its chops, or both; the long or the short loop; the
     // phrase in the drops, in their second halves, in drops and breakdowns, or in breakdowns (a
     // reverb build on it there); the chops in the drops (where the phrase isn't), also into them.
@@ -1062,6 +1262,25 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     vocalAt: vrng.weighted([['drops', 3], ['halves', 2], ['drops_breaks', 3], ['breaks', 1]] as const) as 'drops' | 'halves' | 'drops_breaks' | 'breaks',
     chopsAt: vrng.weighted([['drops', 3], ['drops_builds', 1]] as const) as 'drops' | 'drops_builds',
     chopRhythm: stabRhythm(vrng),
+    // The groove carries through breakdowns (SCOPE.md §6.6, "One groove"): the drop's own drums
+    // play on there in a darker state instead of each break drawing its own content. The perc
+    // through it low-passed or fading out; how dark (Hz) and how far down (dB) what stays sits;
+    // the bars the rest takes to fade out after the line, and the bars it all opens up over into
+    // the next part.
+    glue: true,
+    gluePerc: grng.weighted([['through', 3], ['leave', 2]] as const),
+    glueHz: grng.int(500, 1400),
+    glueDb: -grng.int(3, 7),
+    glueOut: grng.weighted([[4, 2], [8, 3]] as const) as number,
+    glueOpen: grng.weighted([[8, 3], [16, 2]] as const) as number,
+    character,
+    lead,
+    // A layer made for the breakdowns: whether, through which patch, and where its filter starts.
+    padIn: padPool.length > 0 && padDraw.in,
+    padPreset: padDraw.preset,
+    padHz: padDraw.hz,
+    // A very quiet texture under the track (between the intro and the outro), ducking under the kick.
+    bedIn: bedHits.length > 0 && arng.chance(BED_CHANCE),
     // The feel: how much of the main loop's groove the one-shots and the bass take on.
     feel: rng.int(70, 100) / 100,
     // Loop variations: a top layer (or the second perc / hat loop) a little higher or lower, and
@@ -1073,7 +1292,26 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // Chord stabs and their 2-bar rhythm; in drops only, or also low-passed in breakdowns and
     // builds ('keys': where keys parts played before stabs replaced them).
     stabs: useStabs,
-    stabRhythm: stabRhythm(srng, opts.stabs?.rhythms ?? []),
+    // The stabs written for the track (SCOPE.md §6.9, "Stabs that fit"): chosen to fit it, their
+    // rhythm against its bassline (in its rests, or on its syncopations), with its feel, phrased
+    // (accents, a turn at the end of every 8 bars), brought in and taken through the track, in a
+    // room, gated, ducked. Off: placed as before (tracks made before).
+    stabFit: stabFitEarly,
+    stabBass: stabMode,
+    stabRhythm: stabRhythm(srng, opts.stabs?.rhythms ?? [], stabFitEarly ? {
+      perBar: perBarFor(stabs.map((x) => stabOf.get(x.rel_path)!).filter(Boolean)),
+      bass: bass ? bassSteps(bass.notes ?? bass.midi.notes, bassBars(bass)) : null,
+      mode: ((keep.rules?.stabBass ?? opts.locks?.stabBass ?? stabMode) as StabBass),
+    } : undefined),
+    // How a phrase's last bar turns; a slow filter opening over the first bars of drop 1 or of every
+    // drop; a dark tease at the end of a long intro; drop 1 on the lean rhythm at first; a phrase of
+    // rest in long drops; delay throws on the last bar of every 8 or 16 bars, or only into breakdowns.
+    stabTurn: srng.weighted([['none', 2], ['drop', 3], ['push', 3], ['double', 2]] as const) as StabTurn,
+    stabsOpen: srng.weighted([['none', 2], ['first', 3], ['each', 2]] as const),
+    stabsTease: srng.chance(0.6),
+    stabsGrow: srng.chance(0.5),
+    stabsRest: srng.chance(0.5),
+    stabEcho: srng.weighted([['none', 2], ['8', 2], ['16', 3], ['breaks', 2]] as const),
     stabsIn: srng.weighted([['drops', 1], ['keys', 1]] as const),
     stabsBreaks: srng.weighted([['filtered', 2], ['none', 1]] as const),
     stabsBuild: srng.weighted([['sweep', 2], ['filtered', 1], ['none', 1]] as const),
@@ -1083,8 +1321,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     stabCount: srng.weighted([[1, 4], [2, 4], [3, 2]] as const) as number,
     stabTurns: srng.weighted([['bars', 1], ['hits', 1]] as const) as StabTurns,
   }
-  const rules: typeof drawn = { ...drawn, ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
-    ...(opts.locks as Partial<typeof drawn> | undefined) }
+  // What the track drew, then what its character and its lead make of it; a real track's own
+  // decisions, what is kept and what is locked go over those.
+  const rules: typeof drawn = { ...drawn, ...(character ? charRules as Partial<typeof drawn> : undefined), ...(leadRules(lead) as Partial<typeof drawn>),
+    ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
+    ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
   // otherwise the build-up takes the roll's place (a fill can still lead in with it).
   if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
@@ -1201,8 +1442,117 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     })
   }
 
+  // ---- stabs that fit (rule `stabFit`): the rhythm with its accents, its lean version and its turn at
+  // the end of a phrase, each as the stabs' parts; a gate where a stab would ring into the next ----
+  const stabFit = !!rules.stabFit && stabs.length > 0
+  lanes.stabFeel = stabFit
+  const stabN = stabSteps.length
+  const stabFull = stabFit ? accented(rules.stabRhythm) : rules.stabRhythm
+  const two = (r: Velocity[][]) => [r[0], r[1 % r.length]]
+  const partsOf = (r: Velocity[][]) => stabParts(r, stabN, rules.stabTurns)
+  const stabVariants = stabFit ? {
+    full: partsOf(two(stabFull)),
+    lean: partsOf(sparse(two(stabFull))),
+    // (The last bar of a phrase is always the rhythm's second bar: phrases are 8 bars.)
+    turn: partsOf([two(stabFull)[0], turned(two(stabFull)[1], rules.stabTurn as StabTurn)]),
+  } : null
+  const gapBeats = (closestGap(two(stabFull)) / 4) * STAB_GATE_SHARE
+  const stabGate = stabs.map((x, i) => {
+    const rings = (x.duration_s / 2 ** ((stabPitch[i] ?? 0) / 12)) * (bpm / 60)   // beats, at the pitch it plays
+    return stabFit && rings > gapBeats ? Math.max(STAB_GATE_MIN_BEATS, Math.round(gapBeats * 16) / 16) : undefined
+  })
+  /**
+   * One bar of the stabs: `which` version of the rhythm (bar `k` of its two), low-passed from
+   * `hz[0]` to `hz[1]` over the bar, `db` down, no hit louder than `cap`, with a delay throw.
+   */
+  const stabBar = (b: number, k: number, o: { which?: 'full' | 'lean' | 'turn'; hz?: [number, number]; db?: number; cap?: Velocity; echo?: boolean } = {}) => {
+    const parts = stabVariants![o.which ?? 'full']
+    stabs.forEach((x, i) => {
+      const mine = parts[i]?.[k % 2]
+      const s_ = (mine ?? []).map((v) => Math.min(v, o.cap ?? 3)) as Steps
+      if (!s_.some(Boolean)) { lanes.setBar(STAB_ROLES[i], b, null); return }
+      const filter: ClipFilter | undefined = o.hz && { type: 'lowpass', from: Math.round(o.hz[0]), to: Math.round(o.hz[1]) === Math.round(o.hz[0]) ? null : Math.round(o.hz[1]), q: 0.8 }
+      lanes.setBar(STAB_ROLES[i], b, {
+        sample: x, steps: s_, room: STAB_ROOM, ...(filter ? { filter } : {}), ...(stabPitch[i] ? { pitch: stabPitch[i] } : {}),
+        ...(o.db ? { gainDb: o.db } : {}), ...(stabGate[i] ? { gate: stabGate[i] } : {}), ...(o.echo ? { echo: STAB_ECHO } : {}),
+      })
+    })
+  }
+  /** The cutoff `t` of the way (0…1) from `f0` to `f1` (evenly in pitch). */
+  const sweepHz = (f0: number, f1: number, t: number) => f0 * (f1 / f0) ** Math.max(0, Math.min(1, t))
+  /** The stabs through a section, by the track's rules (stabs that fit). `drop`: which drop this is (0 the first). */
+  const stabsFit = (sec: Section, next: Section | undefined, drop: number) => {
+    const a = sec.start
+    const z = sec.start + sec.bars
+    const n = sec.bars
+    const cut = Number(rules.stabsCutoff)
+    const keys = rules.stabsIn === 'keys'
+    const phraseEnd = (b: number) => (b - a) % PHRASE === PHRASE - 1
+    if (sec.kind === 'drop') {
+      const half = a + Math.floor(n / 2 / PHRASE) * PHRASE || a + n / 2
+      // A slow opening over the drop's first bars: the first drop's, or every drop's.
+      const opening = rules.stabsOpen === 'each' || (rules.stabsOpen === 'first' && drop === 0)
+        ? Math.min(32, Math.max(PHRASE, Math.floor(n / 2 / PHRASE) * PHRASE)) : 0
+      for (let b = a; b < z; b++) {
+        // A phrase of rest in a long drop: its third.
+        if (rules.stabsRest && n >= 4 * PHRASE && b >= a + 2 * PHRASE && b < a + 3 * PHRASE) continue
+        const lean = rules.stabsGrow && drop === 0 && b < half
+        const echo = rules.stabEcho === '8' ? phraseEnd(b) : rules.stabEcho === '16' ? (b - a) % (2 * PHRASE) === 2 * PHRASE - 1
+          : rules.stabEcho === 'breaks' ? b === z - 1 && next?.kind === 'break' : false
+        const j = b - a
+        stabBar(b, j, {
+          which: lean ? 'lean' : phraseEnd(b) && rules.stabTurn !== 'none' ? 'turn' : 'full', echo,
+          ...(j < opening ? { hz: [sweepHz(cut, STAB_OPEN_HZ, j / opening), sweepHz(cut, STAB_OPEN_HZ, (j + 1) / opening)] as [number, number] } : {}),
+        })
+      }
+    } else if (sec.kind === 'break' && lead === 'stab') {
+      // The track's lead, exposed: by its own rhythm in the clear from the breakdown's second part
+      // on (a delay throw at the end of each phrase), after leaving the line darker and softer.
+      const from = breakShape(a, n).lead
+      for (let j = 0; j < Math.min(2, from - a); j++) stabBar(a + j, j, { hz: [sweepHz(6000, cut, j / 2), sweepHz(6000, cut, (j + 1) / 2)], db: STAB_FADE_DB * (j + 1), cap: j ? 1 : 2 })
+      for (let b = from; b < z; b++) stabBar(b, b - a, { which: phraseEnd(b) && rules.stabTurn !== 'none' ? 'turn' : 'full', echo: phraseEnd(b) })
+    } else if (sec.kind === 'break') {
+      const playing = STAB_ROLES.some((r) => lanes.bar(r, a - 1))
+      const opens = !!next && next.kind !== 'outro'
+      if (keys && rules.stabsBreaks === 'filtered') {
+        // They stay, as the drums do: closing over the first bars, held softer and dark, opening into the next part.
+        const close = Math.min(GLUE_CLOSE_BARS, Math.max(1, Math.floor(n / 4)))
+        const open = opens ? Math.min(Number(rules.glueOpen ?? PHRASE), Math.max(2, Math.floor(n / 2))) : 0
+        const bare = !!sec.long && z - open - (a + close) >= GLUE_BARE_MIN_BARS
+        for (let b = a; b < z; b++) {
+          const j = b - a
+          if (j < close) stabBar(b, j, { hz: [sweepHz(STAB_OPEN_HZ, cut, j / close), sweepHz(STAB_OPEN_HZ, cut, (j + 1) / close)], db: Math.round(STAB_BREAK_DB * ((j + 1) / close) * 2) / 2, cap: 2 })
+          else if (b >= z - open) {
+            const t = (b - (z - open)) / open
+            stabBar(b, j, { hz: [sweepHz(cut, STAB_OPEN_HZ, t), sweepHz(cut, STAB_OPEN_HZ, t + 1 / open)], db: Math.round(STAB_BREAK_DB * (1 - t) * 2) / 2, cap: 2 })
+          } else if (!bare || b < a + close + 4) stabBar(b, j, { hz: [cut, cut], db: STAB_BREAK_DB, cap: 2 })
+        }
+      } else if (playing) {
+        // They leave across the line: two bars darker and softer, not a hard stop.
+        for (let j = 0; j < Math.min(2, n); j++) stabBar(a + j, j, { hz: [sweepHz(6000, cut, j / 2), sweepHz(6000, cut, (j + 1) / 2)], db: STAB_FADE_DB * (j + 1), cap: j ? 1 : 2 })
+      }
+    } else if (sec.kind === 'build') {
+      if (keys && rules.stabsBuild !== 'none') {
+        for (let b = a; b < z; b++) {
+          const j = b - a
+          stabBar(b, j, { hz: rules.stabsBuild === 'sweep' ? [sweepHz(cut, 8000, j / n), sweepHz(cut, 8000, (j + 1) / n)] : [cut, cut], cap: 2 })
+        }
+      }
+    } else if (sec.kind === 'intro') {
+      // A dark tease of the lean rhythm at the end of a long intro (16 bars of it stay clean).
+      if (rules.stabsTease && n >= STAB_TEASE_MIN_INTRO && (next?.kind === 'drop' || next?.kind === 'build')) {
+        for (let b = z - STAB_TEASE_BARS; b < z; b++) {
+          const t = (b - (z - STAB_TEASE_BARS)) / STAB_TEASE_BARS
+          stabBar(b, b - a, { which: 'lean', hz: [sweepHz(cut * 0.7, cut * 1.6, t), sweepHz(cut * 0.7, cut * 1.6, t + 1 / STAB_TEASE_BARS)], db: STAB_TEASE_DB, cap: 2 })
+        }
+      }
+    }
+  }
+
   const crashAt = new Set<number>()
-  const tracks = { tops: Math.min(tops.length, rules.dropTops) }
+  const percShotGlue = steps([3, 7, 10, 14], 2)
+  // (A track led by its stabs keeps a top loop less: room for them.)
+  const tracks = { tops: Math.max(1, Math.min(tops.length, rules.dropTops) - (lead === 'stab' && tops.length > 1 ? 1 : 0)) }
   /**
    * The lift of an intro (rule `ioLift`): what the drops have that it doesn't yet, in the order it
    * joins (hats, perc, a second top loop, claps), each with the bars before the intro's end it
@@ -1337,8 +1687,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
           clapBar(b, steps(TWO_FOUR))
         }
       }
-    } else if (sec.kind === 'break' && rng.chance(0.3)) {
-      for (let b = a; b < z; b++) clapBar(b, steps(TWO_FOUR, 2))
+    } else if (sec.kind === 'break') {
+      // (With the groove carried through, the breaks' drums are written after the sections: `carry`.)
+      if (rng.chance(0.3) && !rules.glue) for (let b = a; b < z; b++) clapBar(b, steps(TWO_FOUR, 2))
     } else if (sec.kind === 'intro' && rules.ioClaps) {
       for (let b = half; b < z; b++) clapBar(b, steps(TWO_FOUR, 2))
     } else if (sec.kind === 'outro' && rules.ioClaps) {
@@ -1348,7 +1699,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // ---- hats: in intro, outro and breaks by the track's rules ----
     const hatShot = (v: Velocity = 3) => steps(OFFBEAT, v)
     if (sec.kind === 'break') {
-      if (rules.hatsInBreaks) layer('hats', hats, a, z, hatShot(2), { type: 'highpass', from: 900, to: null, q: 0.7 })
+      if (rules.hatsInBreaks && !rules.glue) layer('hats', hats, a, z, hatShot(2), { type: 'highpass', from: GLUE_THIN_HZ, to: null, q: 0.7 })
     } else if (sec.kind === 'intro' || sec.kind === 'outro') {
       const how = sec.kind === 'intro' ? rules.introHats : rules.outroHats
       if (how === 'all') layer('hats', hats, a, z, hatShot())
@@ -1378,7 +1729,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     else if (sec.kind === 'outro') { if (rules.ioPerc) layer('perc', perc, a, half, percShot) }
     else if (sec.kind === 'build') layer('perc', perc, sec.build === 'layered' ? a + Math.min(PHRASE, sec.bars / 2) : a, z, percShot)
     else if (sec.kind === 'break' && rng.chance(0.6)) {
-      layer('perc', perc, a, z, percShot, rng.chance(0.5) ? { type: 'highpass', from: 400, to: null, q: 0.7 } : undefined)
+      const thin = rng.chance(0.5)
+      if (!rules.glue) layer('perc', perc, a, z, percShot, thin ? { type: 'highpass', from: 400, to: null, q: 0.7 } : undefined)
     }
 
     // ---- tops (layered, each top loop on its own lane) and groove ----
@@ -1421,7 +1773,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         }
       }
     } else if (sec.kind === 'break') {
-      if (rules.topsBreaks !== 'none') {
+      if (rules.topsBreaks !== 'none' && !rules.glue) {
         topLayer(0, a, z, rules.topsBreaks === 'filtered' ? { type: 'lowpass', from: rules.topsBreakHz, to: null, q: 0.7 } : undefined)
       }
     } else if (sec.kind === 'intro') {
@@ -1446,7 +1798,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
     // ---- chord stabs: the rhythm through every drop; elsewhere nothing, or the same rhythm
     // low-passed in breakdowns and builds (by the track's rules) ----
-    if (stabs.length) {
+    if (stabFit) stabsFit(sec, next, dropIndex - 1)
+    else if (stabs.length) {
       const lp = (to: number | null = null): ClipFilter => ({ type: 'lowpass', from: rules.stabsCutoff, to, q: 0.8 })
       if (sec.kind === 'drop') stabBars(a, z)
       else if (rules.stabsIn === 'keys' && sec.kind === 'break' && rules.stabsBreaks === 'filtered') stabBars(a, z, lp())
@@ -1460,7 +1813,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (bassSample) {
       const hp = (to: number | null = null): ClipFilter => ({ type: 'highpass', from: rules.bassHp, to, q: 0.7 })
       if (sec.kind === 'drop') bassPart(a, z, undefined, gap)
-      else if (sec.kind === 'break') { if (rules.bassBreaks === 'filtered') bassPart(a, z, hp()) }
+      else if (sec.kind === 'break' && lead === 'bass') {
+        // The track's lead, exposed: the bassline in full from the breakdown's second part on (no kick over it).
+        const from = breakShape(a, sec.bars).lead
+        if (rules.bassBreaks === 'filtered') bassPart(a, from, hp())
+        bassPart(from, z)
+      } else if (sec.kind === 'break') { if (rules.bassBreaks === 'filtered') bassPart(a, z, hp()) }
       else if (sec.kind === 'build') {
         if (rules.bassBuild === 'sweep') bassPart(a, z, hp(BASS_SWEEP_TO_HZ))
         else if (rules.bassBuild === 'filtered') bassPart(a, z, hp())
@@ -1530,6 +1888,195 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (sec.kind === 'drop' && rules.phraseFill) for (const m of marks) endOn('fill', 'fills', fills, m * 4, 8, 1)
   })
 
+  // ---- one groove (SCOPE.md §6.6): the drums of the part before a breakdown play on through it
+  // in a darker state, each part moving a step at a time and across the lines, never all at once ----
+  const carried: string[] = []
+  if (rules.glue) {
+    /** The loop of `role` playing up to the line at `bar` (or stopping a beat or two before it). */
+    const endingAt = (role: Role, bar: number) => (lanes.segs.get(role) ?? [])
+      .filter((x) => x.sample.kind === 'loop' && !x.bass && x.start < bar * 4 && x.start + x.length <= bar * 4 && x.start + x.length >= bar * 4 - 2)
+      .sort((x, y) => y.start + y.length - (x.start + x.length))[0] ?? null
+    const startingAt = (role: Role, bar: number) => (lanes.segs.get(role) ?? [])
+      .find((x) => x.sample.kind === 'loop' && !x.bass && x.start === bar * 4) ?? null
+    type Key = [bar: number, hz: number | null, db: number]
+    type How = 'lowpass' | 'highpass' | 'open'
+    /**
+     * `src` (a loop as it plays elsewhere, in phase with that; or a one-shot pattern) over the bars
+     * of `keys`: from key to key its filter moves from one cutoff to the next and its level from
+     * one dB to the next.
+     */
+    const run = (role: Role, src: { seg?: Segment; pat?: BarPattern }, how: How, keys: Key[]) => {
+      const filt = (h0: number | null, h1: number | null): ClipFilter | undefined => (how === 'open' || h0 == null ? undefined
+        : { type: how, from: Math.round(h0), to: h1 == null || Math.round(h1) === Math.round(h0) ? null : Math.round(h1), q: 0.7 })
+      const half = (v: number) => Math.round(v * 2) / 2 || 0
+      for (let k = 0; k + 1 < keys.length; k++) {
+        const [b0, h0, d0] = keys[k]
+        const [b1, h1, d1] = keys[k + 1]
+        if (b1 <= b0) continue
+        if (src.seg) {
+          const x = src.seg
+          const L = loopLen(x)
+          const trim = ((((x.trim ?? 0) + b0 * 4 - x.start) % L) + L) % L
+          const filter = filt(h0, h1)
+          lanes.add(role, {
+            sample: x.sample, start: b0 * 4, length: (b1 - b0) * 4, trim, ...(x.pitch ? { pitch: x.pitch } : {}), ...(x.loopBars ? { loopBars: x.loopBars } : {}),
+            ...(filter ? { filter } : {}), ...(half(d0) ? { gainDb: half(d0) } : {}), ...(half(d1) !== half(d0) ? { gainTo: half(d1) } : {}),
+          })
+        } else if (src.pat) {
+          // A one-shot pattern: bar by bar, the filter and the level stepping along.
+          const at = (b: number): [number | null, number] => {
+            const t = (b - b0) / (b1 - b0)
+            return [h0 == null || h1 == null ? h0 : h0 * (h1 / h0) ** t, d0 + (d1 - d0) * t]
+          }
+          for (let b = b0; b < b1; b++) {
+            const [ha, da] = at(b)
+            const [hb, db] = at(b + 1)
+            const filter = filt(ha, hb)
+            lanes.setBar(role, b, {
+              sample: src.pat.sample, steps: src.pat.steps.map((v) => Math.min(v, 2)) as Steps, ...(src.pat.pitch ? { pitch: src.pat.pitch } : {}),
+              ...(filter ? { filter } : {}), ...(half(da) ? { gainDb: half(da) } : {}), ...(half(db) !== half(da) ? { gainTo: half(db) } : {}),
+            })
+          }
+        }
+      }
+    }
+    const names: Partial<Record<Role, string>> = { perc: 'perc', hats: 'hats', top: 'tops' }
+    let depth = 0
+    sections.forEach((sec, i) => {
+      if (sec.kind !== 'break') return
+      const a = sec.start
+      const z = sec.start + sec.bars
+      const n = sec.bars
+      const next = sections[i + 1]
+      const d = depth++
+      // Every later breakdown is the first one taken further: darker, lower, the rest out sooner.
+      const deeper = GLUE_DEEPER ** d
+      const level = rules.glueDb - GLUE_DEEPER_DB * d
+      /**
+       * The clip level that puts a part held at `hz` where it belongs: `GLUE_UNDER_DB` under `level`
+       * below its loudness in the drop, whatever its filter takes (a bright loop loses far more under
+       * a low-pass than a dark one, and would vanish). Unmeasured, or unfiltered: `level` itself.
+       */
+      const levelAt = (src: { seg?: Segment; pat?: BarPattern }, how: How, hz: number | null): number => {
+        const loss = how === 'open' || hz == null ? null : filterLoss((src.seg ?? src.pat)?.sample.tone, how, hz)
+        if (loss == null) return level
+        return Math.round(Math.max(-GLUE_MAX_CUT_DB, Math.min(GLUE_MAX_MAKEUP_DB, level - GLUE_UNDER_DB - loss)) * 2) / 2
+      }
+      const dark = Math.max(GLUE_MIN_HZ, rules.glueHz * deeper)
+      const opens = !!next && next.kind !== 'outro'
+      const close = Math.min(GLUE_CLOSE_BARS, Math.max(1, Math.floor(n / 4)))
+      const open = opens ? Math.min(rules.glueOpen, Math.max(2, Math.floor(n / 2))) : 0
+      /** What `role` played into the breakdown: its loop (played on in phase), its pattern, else the track's sample. */
+      const source = (role: Role, s: SampleListItem | null, shot: Steps): { seg?: Segment; pat?: BarPattern } | null => {
+        const seg = endingAt(role, a)
+        if (seg) return { seg }
+        const pat = lanes.bar(role, a - 1)
+        if (pat) return { pat }
+        if (!s) return null
+        return s.kind === 'loop' ? { seg: { sample: s, start: a * 4, length: n * 4 } } : { pat: { sample: s, steps: shot } }
+      }
+      // ---- what stays all through (by the track's rules; one part always does: the thread) ----
+      const stay: { role: Role; src: { seg?: Segment; pat?: BarPattern }; how: How; hz: number; level?: number }[] = []
+      const want = (role: Role, s: SampleListItem | null, shot: Steps, how: How, hz: number, level?: number) => {
+        const src = source(role, s, shot)
+        if (src) stay.push({ role, src, how, hz, level })
+      }
+      // (A track led by its percussion keeps it in the clear: open, a little under its drop level.)
+      const percStays = () => (lead === 'perc' ? want('perc', perc, percShotGlue, 'open', dark, LEAD_BREAK_DB) : want('perc', perc, percShotGlue, 'lowpass', dark))
+      const hatsStay = () => want('hats', hats, steps(OFFBEAT, 2), 'highpass', GLUE_THIN_HZ)
+      const topStays = (how: How) => want('top', tops[0] ?? null, [], how, Math.max(GLUE_MIN_HZ, rules.topsBreakHz * deeper))
+      if (rules.gluePerc === 'through') percStays()
+      if (rules.hatsInBreaks) hatsStay()
+      if (rules.topsBreaks !== 'none') topStays(rules.topsBreaks === 'open' ? 'open' : 'lowpass')
+      if (!stay.length) { percStays(); if (!stay.length) hatsStay(); if (!stay.length) topStays('lowpass') }
+      const staying = new Set(stay.map((x) => x.role))
+      // The long breakdown strips down to the thread alone for its middle bars, darker still.
+      const bare = !!sec.long && z - open - (a + close) >= GLUE_BARE_MIN_BARS
+      stay.forEach((x, k) => {
+        const from = x.how === 'highpass' ? GLUE_HP_OPEN_HZ : GLUE_LP_OPEN_HZ
+        const hz = x.how === 'open' ? null : x.hz
+        const held = x.level ?? levelAt(x.src, x.how, hz)
+        const end: Key[] = open ? [[z - open, hz, held], [z, hz == null ? null : from, 0]] : [[z, hz, held]]
+        if (!bare) run(x.role, x.src, x.how, [[a, hz == null ? null : from, 0], [a + close, hz, held], ...end])
+        else if (k === 0) {
+          const low = hz == null ? null : x.how === 'highpass' ? hz : Math.max(GLUE_MIN_HZ, hz * GLUE_DEEPER)
+          const lower = levelAt(x.src, x.how, low) - GLUE_DEEPER_DB
+          run(x.role, x.src, x.how, [[a, hz == null ? null : from, 0], [a + close, hz, held], [a + close + 4, low, lower],
+            ...(open ? [[z - open, low, lower], [z, hz == null ? null : from, 0]] as Key[] : [[z, low, lower]] as Key[])])
+        } else {
+          run(x.role, x.src, x.how, [[a, hz == null ? null : from, 0], [a + close, hz, held], [a + close + 4, hz, held - GLUE_FADE_DB]])
+          if (open) run(x.role, x.src, x.how, [[z - open, hz, held - GLUE_FADE_DB / 2], [z, hz == null ? null : from, 0]])
+        }
+      })
+      // ---- what leaves: every other loop that played into the line goes on past it, darker and
+      // fading, one after the other (and closes over the last bars before the line) ----
+      const leaving = new Map<Role, number>()
+      GLUE_LEAVE_ORDER.filter((r) => !staying.has(r)).map((r) => [r, endingAt(r, a)] as const).filter(([, x]) => !!x).forEach(([role, seg], k) => {
+        const bars = Math.min(n, Math.max(2, rules.glueOut - 2 * k - 2 * d))
+        run(role, { seg: seg! }, 'lowpass', [[a, GLUE_LEAVE_HZ, 0], [a + bars, dark, -GLUE_FADE_DB]])
+        leaving.set(role, a + bars)
+        if (seg!.length >= 4 * BEATS_PER_BAR) {
+          lanes.ride(role, (a - GLUE_BEFORE_BARS) * 4, a * 4, { filter: { type: 'lowpass', from: GLUE_LP_OPEN_HZ, to: GLUE_LEAVE_HZ, q: 0.7 }, gainDb: 0 })
+        }
+      })
+      // The clap leaves the same way: softer and darker over a few bars.
+      const clapWas = lanes.bar('clap', a - 1)
+      if (clap && clapWas) {
+        const soft = (v: Velocity, hz: number) => ({ sample: clap, steps: steps(TWO_FOUR, v), filter: { type: 'lowpass', from: hz, to: null, q: 0.7 } as ClipFilter })
+        for (let b = a; b < Math.min(z, a + 2); b++) lanes.setBar('clap', b, soft(2, GLUE_LEAVE_HZ))
+        if (d === 0 && n >= PHRASE) for (let b = a + 2; b < a + 4; b++) lanes.setBar('clap', b, soft(1, Math.max(dark, 1200)))
+      }
+      // ---- what comes back: the loops the next part starts with open up into it over the last
+      // bars, the main ones first (the opening is the build) ----
+      if (open) {
+        GLUE_RETURN_ORDER.filter((r) => !staying.has(r)).map((r) => [r, startingAt(r, z)] as const).filter(([, x]) => !!x).slice(0, GLUE_RETURNERS)
+          .forEach(([role, seg], k) => {
+            const from = Math.max(leaving.get(role) ?? a, z - Math.max(2, open - 2 * k))
+            if (from < z) run(role, { seg: seg! }, 'lowpass', [[from, dark, -GLUE_FADE_DB], [z, GLUE_LP_OPEN_HZ, 0]])
+          })
+      }
+      if (d === 0) {
+        const kept = stay.map((x) => names[x.role]).join(' and ')
+        carried.push(`the groove carries through breakdowns: ${kept} ${stay.some((x) => x.how !== 'open') ? 'filtered' : 'quieter'}, the rest fading out over ${rules.glueOut} bars${open ? `, opening up over ${open}` : ''}`)
+      }
+    })
+  }
+
+  // ---- the breakdown layer (SCOPE.md §6.7b): a pad's chord or a reese's note through a Serum patch,
+  // coming in once the breakdown has stripped down, its filter opening and its level rising into
+  // the next part (the breakdown's shape: strip, the new layer, the build) ----
+  const padPatch = rules.padIn && rules.padPreset ? (opts.pads?.presets ?? []).find((x) => x.path === rules.padPreset) ?? null : null
+  const padReese = !!padPatch && isReese(padPatch)
+  const padLine = padPatch ? padNotes(key, padReese) : null
+  let padBreaks = 0
+  if (padPatch && padLine) {
+    const render: BassRender = {
+      role: 'pad', keyLabel: key, preset: padPatch.path, presetName: padPatch.name, midiId: 0, midiName: padReese ? 'Reese' : 'Pad', transpose: 0,
+      notes: padLine, bars: PAD_BARS,
+    }
+    const sample: SampleListItem = {
+      id: -2_100_000_000, rel_path: bassPath(render, bpm), name: `${padPatch.name} · ${padReese ? 'reese' : 'pad'}`, kind: 'loop', category: 'melodic', bpm,
+      bars: PAD_BARS, body_bars: null, key_label: key, key_camelot: null, duration_s: (PAD_BARS * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0,
+      rating: null, tags: null, zip_id: -1, source_code: 'Serum',
+    }
+    sections.forEach((sec, i) => {
+      if (sec.kind !== 'break') return
+      const next = sections[i + 1]
+      const a = breakShape(sec.start, sec.bars).layer
+      const z = sec.start + sec.bars
+      if (z <= a) return
+      const rises = !!next && next.kind !== 'outro'
+      const [from, to] = padReese ? [Math.round(rules.padHz / 2), PAD_REESE_OPEN_HZ] : [rules.padHz, PAD_OPEN_HZ]
+      lanes.add('pad', {
+        sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render,
+        filter: { type: 'lowpass', from, to: rises ? to : null, q: 0.8 },
+        fadeIn: Math.min(PAD_FADE_BARS, (z - a) / 4) * BEATS_PER_BAR, fadeOut: (rises ? 0.5 : Math.min(PAD_FADE_BARS, (z - a) / 4)) * BEATS_PER_BAR,
+        ...(rises ? { gainDb: -PAD_RISE_DB, gainTo: 0 } : { gainDb: -PAD_RISE_DB / 2 }),
+      })
+      padBreaks++
+    })
+  }
+
   // ---- a bassy impact opens the breakdowns and build-ups instead of hitting the drops, where no
   // kick plays under its boom (the kick lane, or a kick roll on the Build-up lane) ----
   const boom = rules.dropImpact ? trackPick('impact', impacts) : null
@@ -1575,7 +2122,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   // ---- something changes every 8 bars: where the arrangement doesn't, a subtle variation ----
   const varied = everyEightBars(lanes, sections, rng, {
-    kick, fill: fills.length ? endOn : null, fills,
+    kick, fill: fills.length ? endOn : null, fills, shapedBreaks: !!rules.glue,
   })
 
   // ---- disco hits on the 1 of key moments, taking turns when there are two (after the 8-bar
@@ -1616,6 +2163,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // the key, starting again on every 8-bar line, in the drops, all through, or between the intro
   // and the outro ----
   const keptStrings = keep.picks?.strings ? stringHits.find((h) => stringsItem(h).id === keep.picks!.strings!.id) ?? null : null
+  let stringsWhere = String(rules.stringsAt)
+  let stringsEvery = 8
   let strings: HitItem | null = keptStrings
   if (!strings && rules.stringsIn && stringHits.length) {
     const fresh = stringHits.filter((h) => !keep.avoid?.some((a) => a.startsWith(stringsRenderPrefix(h.rel_path))))
@@ -1623,18 +2172,64 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   const stringsMove = strings ? stringsShift(strings, key)! : 0
   if (strings) {
-    const render = stringsRender(strings, key, stringsMove)
+    const render = stringsRender(strings, key, stringsMove, bpm)
+    stringsEvery = render.bars ?? 8
     const item = stringsItem(strings)
     const sample = stringsSample(item, render, bpm)
     const first = sections[0]
     const last = sections[sections.length - 1]
-    const spans: [number, number][] = rules.stringsAt === 'drops' ? sections.filter((x) => x.kind === 'drop').map((x) => [x.start, x.start + x.bars])
-      : rules.stringsAt === 'all' ? [[0, total]]
-        : [[first.kind === 'intro' ? first.start + first.bars : 0, last.kind === 'outro' ? last.start : total]]
+    const drops = sections.filter((x) => x.kind === 'drop')
+    const breaks = sections.filter((x) => x.kind === 'break')
+    const whole = (x: Section): [number, number] => [x.start, x.start + x.bars]
+    const secondHalf = (x: Section): [number, number] => [x.start + (Math.floor(x.bars / 2 / PHRASE) * PHRASE || x.bars / 2), x.start + x.bars]
+    const at = rules.stringsAt === 'breaks' && !breaks.length ? 'halves' : rules.stringsAt
+    stringsWhere = at
+    const spans: [number, number][] = at === 'later' ? (drops.length > 1 ? drops.slice(1).map(whole) : drops.map(secondHalf))
+      : at === 'halves' ? drops.map(secondHalf)
+        : at === 'breaks' ? breaks.map(whole)
+          : at === 'drops' ? drops.map(whole)
+            : at === 'all' ? [[0, total]]
+              : [[first.kind === 'intro' ? first.start + first.bars : 0, last.kind === 'outro' ? last.start : total]]
+    // They come in at once where a part of the track starts (on a drop, a breakdown, the line
+    // halfway through a drop: after the fill or the crash, you want to hear them), and swell in only
+    // from the very start of a track. They leave over a couple of bars; in a breakdown they rise
+    // into the drop and stop with it.
     for (const [a, z] of spans) {
-      if (z > a) lanes.add('strings', { sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render })
+      if (z <= a) continue
+      const tension = at === 'breaks'
+      lanes.add('strings', {
+        sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render,
+        ...(a === 0 ? { fadeIn: Math.min(STRINGS_FADE_IN_BARS, (z - a) / 4) * BEATS_PER_BAR } : {}),
+        fadeOut: tension ? BEATS_PER_BAR / 2 : Math.min(STRINGS_FADE_OUT_BARS, (z - a) / 4) * BEATS_PER_BAR,
+        ...(tension ? { gainDb: -STRINGS_BREAK_RISE_DB, gainTo: 0 } : {}),
+      })
     }
     picks.strings = item
+  }
+
+  // ---- the ambience bed (SCOPE.md §6.10a; after the 8-bar variations, like the strings): one
+  // texture as a seamless loop from the end of the intro to the start of the outro, constant ----
+  const keptBed = keep.picks?.bed ? bedHits.find((h) => bedItem(h).id === keep.picks!.bed!.id) ?? null : null
+  let bed: HitItem | null = keptBed
+  if (!bed && rules.bedIn && bedHits.length) {
+    const fresh = bedHits.filter((h) => !keep.avoid?.some((a) => a.includes(`/${h.rel_path.split('/').pop()}`) || a === h.rel_path))
+    bed = arng.pick(fresh.length ? fresh : bedHits)
+  }
+  if (bed) {
+    const render = bedRender(bed, bpm)
+    const item = bedItem(bed)
+    const sample = bedSample(item, render, bpm)
+    const first = sections[0]
+    const last = sections[sections.length - 1]
+    const a = first.kind === 'intro' ? first.start + first.bars : 0
+    const z = last.kind === 'outro' ? last.start : total
+    if (z > a) {
+      lanes.add('bed', {
+        sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render,
+        fadeIn: BED_FADE_BARS * BEATS_PER_BAR, fadeOut: BED_FADE_BARS * BEATS_PER_BAR,
+      })
+    }
+    picks.bed = item
   }
 
   // ---- a vocal (after the 8-bar variations, like the strings): one take, its phrase loop where the
@@ -1691,6 +2286,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       }
     }
     picks.vocal = vocalItem(take)
+    // The stabs step back where the phrase is sung: no hit at full strength under it.
+    if (stabFit) {
+      for (const v of lanes.segs.get('vocal') ?? []) {
+        for (let b = Math.floor(v.start / BEATS_PER_BAR); b * BEATS_PER_BAR < v.start + v.length; b++) {
+          for (const role of STAB_ROLES) {
+            const p = lanes.bar(role, b)
+            if (p?.steps.some((x) => x > 2)) lanes.setBar(role, b, { ...p, steps: p.steps.map((x) => Math.min(x, 2)) as Steps })
+          }
+        }
+      }
+    }
     vocalNote = `vocal ${vocalItem(take).name} (${take.voice}, ${take.mood}): ${use === 'both' ? 'phrase and chops' : use === 'phrase' ? 'phrase' : 'chops'}`
   }
 
@@ -1783,14 +2389,36 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   applyMix(project, opts.mix ?? {})
   const bassLane = project.lanes.find((l) => l.name === 'Bass')
   if (bassLane && bo) bassLane.duck = bo.sidechain
+  // Kick and bass as one measurement: the sidechain as deep as they collide, as long as the kick rings.
+  const fit = bass && bo ? kickBass(kick, bass.notes ?? bass.midi.notes, bass.transpose, bassBars(bass), bpm, bo.sidechain) : null
+  if (bassLane && fit) {
+    bassLane.duck = fit.duck
+    bassLane.duckBeats = fit.beats
+  }
+  // Stabs that fit: in a room, ducking a little under the kick, and side by side when they take turns.
+  if (stabFit) {
+    const pans = stabs.length === 2 ? [-STAB_PAN, STAB_PAN] : stabs.length >= 3 ? [0, -STAB_PAN, STAB_PAN] : [0]
+    STAB_ROLES.forEach((role, i) => {
+      const l = project.lanes.find((x) => laneRole(x.name) === role)
+      if (!l) return
+      l.room = true
+      l.duck = STAB_DUCK
+      l.duckBeats = STAB_DUCK_BEATS
+      l.pan = pans[i] ?? 0
+    })
+  }
+  // The low end in mono: the kick's and the bass's (a kick roll's and the impacts' too).
+  for (const l of project.lanes) if (MONO_ROLES.has(laneRole(l.name)!) || (padReese && laneRole(l.name) === 'pad')) l.monoBelow = MONO_BELOW_HZ
   const stringsLane = project.lanes.find((l) => l.name === 'Strings')
   if (stringsLane) stringsLane.duck = opts.strings?.sidechain ?? STRINGS_SIDECHAIN
+  const bedLane = project.lanes.find((l) => l.name === 'Ambience')
+  if (bedLane) bedLane.duck = BED_DUCK
   const laneIds = new Map(LANES.map((l, i) => [l.role, project.lanes[i].id]))
   project.clips = lanes.clips(laneIds)
   const used = new Set(project.clips.map((c) => c.laneId))
   project.lanes = project.lanes.filter((l) => used.has(l.id))
   project.markers = sections.map((s) => makeMarker(s.label, s.start * 4, (s.start + s.bars) * 4))
-  const balance = balanceLanes(project, all, opts, sections)
+  const balance = balanceLanes(project, all, opts, sections, undefined, lead)
 
   // ---- what was chosen ----
   const n = (k: Section['kind']) => sections.filter((s) => s.kind === k).length
@@ -1802,6 +2430,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (bpm !== opts.bpm) choices.push(`${bpm} BPM (library ${opts.bpm})`)
   if (bass) choices.push(`bass in drops, ${rules.bassBreaks === 'filtered' ? `high-passed (${rules.bassHp} Hz)` : 'out'} in breakdowns`)
   if (tops.length && n('break')) choices.push(`tops ${{ filtered: 'low-passed', open: 'open', none: 'out' }[rules.topsBreaks]} in breakdowns`)
+  choices.push(...carried)
   if (breaths) choices.push(`${rules.dropBreath === 'all' ? 'tops, drums and bass' : 'tops'} out in the bar before drops`)
   if (hats) {
     const io = { none: 'none', half: 'from halfway', all: 'all through' }
@@ -1817,6 +2446,14 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (balance.measured) {
     choices.push(balance.tracks ? `mix balanced as in ${balance.tracks} of your tracks` : 'mix balanced on house defaults')
   }
+  if (balance.mix) {
+    const m = balance.mix
+    const k = m.after.reduce((best, v, i) => (Math.abs(v) > Math.abs(m.after[best]) ? i : best), 0)
+    const moved = m.moves.map((x) => `${x.lane} ${x.db > 0 ? '+' : ''}${x.db} dB`).join(', ')
+    choices.push(`mix checked against ${m.tracks} of your tracks: ${m.off < 0.05 ? 'on it' : `within ${m.off} dB (${REGIONS[k].name} ${m.after[k] > 0 ? '+' : ''}${m.after[k]})`}${moved ? `, after ${moved}` : ''}`)
+  }
+  if (fit) choices.push(`sidechain ${Math.round(fit.duck * 100)} % over ${fit.beats} beat: the bass ${fit.collision >= 0.5 ? 'sits on' : fit.collision >= 0.2 ? 'partly under' : 'mostly clear of'} the kick (${fit.kickHz} Hz)`)
+  if (balance.evened) choices.push(`${balance.evened} sample${balance.evened === 1 ? '' : 's'} levelled to ${balance.evened === 1 ? 'its' : 'their'} lane`)
   if (built) choices.push(`${BUILDUP_NOTE[rules.buildup as typeof BUILDUPS[number]]} into drops (${built} bars)`)
   if (crash && rules.buildupCrash !== 'none') choices.push(rules.buildupCrash === 'faster' ? 'crashes coming faster into drops' : 'crashes on the last four counts into drops')
   if (rules.loopGap) choices.push('loops stop before breaks')
@@ -1837,20 +2474,36 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (hpDrops) choices.push(`the mix high-passed in the ${hpBars === 1 ? 'bar' : `${hpBars} bars`} before drops`)
   if (vocalNote) choices.push(vocalNote)
   if (strings) {
-    const at = { drops: 'in the drops', all: 'all through', inner: 'between the intro and the outro' }[rules.stringsAt as string]
+    const at = { later: drops1(sections) ? 'in the second half of the drop' : 'from the second drop', halves: 'in the second half of drops', breaks: 'rising through the breakdowns',
+      drops: 'in the drops', all: 'all through', inner: 'between the intro and the outro' }[stringsWhere]
     const moved = stringsMove ? `, moved ${Math.abs(stringsMove)} st ${stringsMove > 0 ? 'up' : 'down'}` : ''
-    choices.push(`strings from ${strings.name} ${at}, every 8 bars${moved}`)
+    choices.push(`strings from ${strings.name} ${at}, every ${stringsEvery} bar${stringsEvery === 1 ? '' : 's'}, fading out${moved}`)
   }
   if (discoHits.length) {
     const where = { drops: 'where drops start and halfway', 16: 'every 16 bars of drops', 8: 'every 8 bars of drops', all: 'where drops and breaks start, halfway through drops' }[rules.discoAt]
     choices.push(`disco hit${discoHits.length > 1 ? 's' : ''} ${discoHits.map((s) => s.name).join(' and ')} ${where}`)
   }
+  // (After the structure's line, which stays first.)
+  if (character) choices.splice(tpl ? 1 : 0, 0, `${CHARACTER_LABEL[character]}${lead ? `, led by ${LEAD_LABEL[lead]}: teased in the intro, in the clear in the breakdowns` : ''}`)
+  if (bed) choices.push(`ambience bed: ${bed.name}, very quiet from the end of the intro to the outro, ducking under the kick`)
+  if (padBreaks && padPatch) choices.push(`break layer: ${padReese ? 'a reese' : 'a pad'} (${padPatch.name}) ${padReese ? `on ${key?.replace(/m$/, '')}` : `holding ${key}`}, opening into the next part`)
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
       : `in drops, ${rules.stabsBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`
     const turns = stabs.length < 2 ? '' : stabs.length === 2 && !stabSteps[0][1].some(Boolean) && !stabSteps[1][0].some(Boolean)
       ? ' taking turns bar by bar' : ' taking turns hit by hit'
     choices.push(`chord stab${stabs.length > 1 ? 's' : ''} ${stabs.map((x) => x.name).join(stabs.length > 2 ? ', ' : ' and ')}${turns}, ${where}`)
+    if (stabFit) {
+      const moved = stabPitch.filter(Boolean).length ? `, moved ${stabPitch.map((p) => `${p > 0 ? '+' : ''}${p}`).join(' / ')} st into the key` : ''
+      const how = [
+        bass ? (rules.stabBass === 'lock' ? 'on the bassline\'s syncopations' : 'in the bassline\'s rests') : null,
+        rules.stabTurn !== 'none' ? `a turn every 8 bars (${{ drop: 'the last stab left out', push: 'the last stab early', double: 'the last stab twice' }[rules.stabTurn as 'drop' | 'push' | 'double']})` : null,
+        rules.stabsOpen !== 'none' ? `a filter opening over ${rules.stabsOpen === 'first' ? 'drop 1' : 'every drop'}` : null,
+        rules.stabEcho !== 'none' ? `delay throws ${rules.stabEcho === 'breaks' ? 'into breakdowns' : `every ${rules.stabEcho} bars`}` : null,
+        stabGate.some(Boolean) ? 'gated' : null,
+      ].filter(Boolean).join(', ')
+      choices.push(`stabs written for the track: ${how || 'with its feel'}${moved}`)
+    }
   }
   if (vo && builds.into + builds.phrase) {
     choices.push(`reverb builds on tops${builds.into ? ' into drops and breaks' : ''}${builds.phrase ? `${builds.into ? ',' : ''} every ${vo.every} bars` : ''}`)
@@ -1873,7 +2526,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
-  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null }
+  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null, mix: balance.mix }
 }
 
 /** Places an event whose main sound ends on `endBeat` (generate's endOn). */
@@ -1892,7 +2545,7 @@ type Tweak = 'kick' | 'hatGap' | 'layerOut' | 'loopVary' | 'clap' | 'fill' | 'li
  * steady kick and hats. Returns how many were added.
  */
 function everyEightBars(lanes: Lanes, sections: Section[], rng: Rng,
-                        ctx: { kick: SampleListItem | null; fill: EndOn | null; fills: SampleListItem[] }): number {
+                        ctx: { kick: SampleListItem | null; fill: EndOn | null; fills: SampleListItem[]; shapedBreaks?: boolean }): number {
   // (Not the stabs: their 2-bar rhythm changes every bar, and the drums are the same with or without them.)
   const changed = (b: number) => lanes.roles().filter((r) => !STAB_ROLES.includes(r)).some((r) => {
     const s1 = lanes.state(r, b - 1)
@@ -1903,6 +2556,9 @@ function everyEightBars(lanes: Lanes, sections: Section[], rng: Rng,
   let last: Tweak | null = null
   let added = 0
   for (const sec of sections) {
+    // (A breakdown with the groove carried through has its own shape: nothing is taken out of it here,
+    // least of all the one part that keeps time.)
+    if (ctx.shapedBreaks && sec.kind === 'break') continue
     const end = sec.start + sec.bars
     const io = sec.kind === 'intro' || sec.kind === 'outro'
     for (let b = sec.start + PHRASE; b < end; b += PHRASE) {
@@ -1999,6 +2655,10 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   disco: ['discoIn', 'discoCount', 'discoAt'],
   // The Strings lane made again: another sample and placement (it stays strings).
   strings: [...STRINGS_RULES],
+  // The Pad lane made again: another patch for the breakdown layer.
+  pad: ['padPreset', 'padHz'],
+  // The Ambience lane made again: another texture.
+  bed: [],
   // The vocal lanes made again: another take, and how and where it's sung (it stays a vocal).
   vocal: ['vocalUse', 'vocalLoop', 'vocalAt', 'chopsAt', 'chopRhythm'],
   // A stab lane made again: another sample in the same rhythm (the others play their turns in it).
@@ -2042,6 +2702,8 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     const kept = project.lanes.find((l) => l.id === laneId)!
     kept.levelDb = rl!.levelDb
     kept.eq = rl!.eq && structuredClone(rl!.eq)
+    // (A new bassline sits differently under the kick: its sidechain with it.)
+    if (role === 'bass' && rl!.duckBeats != null) { kept.duck = rl!.duck; kept.duckBeats = rl!.duckBeats }
     const nextPicks = { ...g.picks }
     if (r.picks[role]) nextPicks[role] = r.picks[role]
     const nextRules = { ...g.rules, ...Object.fromEntries(Object.entries(r.rules).filter(([k]) => own.has(k))) }
@@ -2095,6 +2757,13 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
   let swapped = 0
   let kept = 0
   project.clips = project.clips.map((c) => {
+    if (c.type === 'audio' && c.bass?.role === 'pad') {
+      // The breakdown layer: its chord or note written again in the new key.
+      const notes = padNotes(key, c.bass.midiName === 'Reese')
+      if (!notes) return c
+      const render = { ...c.bass, keyLabel: key, notes }
+      return { ...c, bass: render, sample: { ...c.sample, relPath: bassPath(render, project.bpm) } }
+    }
     if (c.type === 'audio' && c.bass?.role === 'vocal') {
       // A vocal phrase: from the key it's sung in into the new one.
       const render = { ...c.bass, keyLabel: key, transpose: Math.max(-12, Math.min(12, transposeTo(c.bass.vocal?.key ?? null, key))) }
@@ -2108,7 +2777,7 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
       return pitch ? { ...rest, pitch } : rest
     }
     if (c.type === 'audio' && c.bass?.role === 'strings' && strings) {
-      const render = stringsRender(strings.hit, key, strings.shift)
+      const render = stringsRender(strings.hit, key, strings.shift, project.bpm)
       return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(stringsSample(stringsItem(strings.hit), render, project.bpm)) } }
     }
     // (Keys parts, stab patches and drones of older tracks stay as they are.)
@@ -2170,7 +2839,8 @@ export function rerollStabs(all: SampleListItem[], opts: GenerateOptions, g: Gen
 }
 
 /** The rules the stab reroll draws again. */
-const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff', 'stabCount', 'stabTurns']
+const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff', 'stabCount', 'stabTurns',
+  'stabFit', 'stabBass', 'stabTurn', 'stabsOpen', 'stabsTease', 'stabsGrow', 'stabsRest', 'stabEcho']
 
 /**
  * The lanes of `roles` made again (with their rules `own`, `force` set), the rest of the track
@@ -2181,6 +2851,18 @@ const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild
  * placement, or strings in a track that had none; everything else exactly as it is. Null when the
  * Strings page has no sample close enough to the key, or nothing new comes out.
  */
+/** Another ambience bed for the same track (the Ambience module's button), or one in a track without; the rest as it is. */
+export function rerollBed(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
+  if (!opts.ambience?.hits.length) return null
+  return rerollGroup(all, opts, g, seed, new Set<Role>(['bed']), new Set(), { bedIn: true }, 'ambience bed')
+}
+
+/** Another breakdown layer for the same track (the Pads module's button), or one in a track without; the rest as it is. */
+export function rerollPad(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
+  if (!opts.pads?.presets.length || !g.key) return null
+  return rerollGroup(all, opts, g, seed, new Set<Role>(['pad']), new Set(LANE_RULES.pad), { padIn: true }, 'break layer')
+}
+
 export function rerollStrings(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
   if (!opts.strings?.hits.length) return null
   return rerollGroup(all, opts, g, seed, new Set<Role>(['strings']), new Set(LANE_RULES.strings), { stringsIn: true }, 'strings')
@@ -2231,7 +2913,9 @@ function swapGroup(g: Generation, r: Generation, roles: Set<Role>, own: Set<stri
   // (Their level in the mix follows their new samples.)
   const lanes = r.project.lanes.filter((l) => inGroup(l.name)).map((l) => {
     const own = project.lanes.find((x) => x.name === l.name)
-    return own ? { ...own, levelDb: l.levelDb, eq: l.eq && structuredClone(l.eq) } : structuredClone(l)
+    // (A stab lane's room and sidechain follow how its stabs are placed.)
+    const stab = STAB_ROLES.includes(laneRole(l.name)!) ? { room: l.room, duck: l.duck, duckBeats: l.duckBeats } : {}
+    return own ? { ...own, levelDb: l.levelDb, eq: l.eq && structuredClone(l.eq), ...stab } : structuredClone(l)
   })
   const clips = groupClips(r.project, roles).map((c) => ({ ...c, laneId: lanes.find((l) => l.name === r.project.lanes.find((x) => x.id === c.laneId)!.name)!.id }))
   project.lanes = project.lanes.filter((l) => !inGroup(l.name))
@@ -2342,8 +3026,11 @@ function rerollBuildup(all: SampleListItem[], opts: GenerateOptions, g: Generati
  * on it swapped for another of the same kind (a clap for a clap, a 4-bar top loop for a top
  * loop), FX for ones that end the same way and fit the key; the clips stay where they are, the
  * rest of the track exactly as it is. Not for rendered parts (the bass: another patch). Null when the library has nothing else.
+ * `choose` picks the swap itself (the critic, critic.ts): from a sample on the lane and the ones
+ * that could take its place, the one that does, or null to leave that sample where it is.
  */
-export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Generation, laneId: string, seed: number): Generation | null {
+export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Generation, laneId: string, seed: number,
+                             choose?: (s: SampleListItem, cands: SampleListItem[]) => SampleListItem | null): Generation | null {
   const lane = g.project.lanes.find((l) => l.id === laneId)
   const role = lane && laneRole(lane.name)
   if (!lane || !role) return null
@@ -2362,7 +3049,8 @@ export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Ge
         && (s.kind !== 'event' || looped || (bodyBars(x) === bodyBars(s) && gapsAgree(gapOf(x), gapOf(s))))
         && (!TONAL.includes(s.category) || !fits || !x.key_label || fits.has(x.key_label)))
       const fresh = same.filter((x) => !inProject.has(x.rel_path))
-      const pick = fresh.length ? rng.pick(fresh) : same.length ? rng.pick(same) : null
+      const from = fresh.length ? fresh : same
+      const pick = !from.length ? null : choose ? choose(s, from) : rng.pick(from)
       if (pick) inProject.add(pick.rel_path)
       swaps.set(s.rel_path, pick)
     }
@@ -2388,7 +3076,7 @@ export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Ge
     return c.type === 'audio' && s.kind === 'event' && !looped ? { ...next, length: Math.min(c.length, (x.bars ?? 1) * BEATS_PER_BAR) } : next
   })
   if (!swapped) return null
-  balanceLanes(project, all, opts, g.sections, new Set([laneId]))
+  balanceLanes(project, all, opts, g.sections, new Set([laneId]), (g.rules.lead as Lead | null | undefined) ?? null)
   const picks = { ...g.picks }
   const was = picks[role] && swaps.get(picks[role]!.rel_path)
   if (was) picks[role] = was

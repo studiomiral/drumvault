@@ -54,7 +54,7 @@ const SORTS: Record<string, string> = {
  * groove (v7), `shapeCol` the event shape (v9).
  */
 export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', grooveCol = 's.groove',
-                                 shapeCol = 's.shape', energyCol = 's.energy_db', toneCol = 's.tone'): { sql: string; params: (string | number)[] } {
+                                 shapeCol = 's.shape', energyCol = 's.energy_db', toneCol = 's.tone', punchCol = 's.punch_db'): { sql: string; params: (string | number)[] } {
   const where: string[] = []
   const params: (string | number)[] = []
   const inList = (col: string, values: (string | number)[]) => {
@@ -89,7 +89,7 @@ export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', groov
   const sql = `
     SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${bodyCol} AS body_bars, s.key_label, s.key_camelot,
            s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${grooveCol} AS groove,
-           ${shapeCol} AS shape, ${energyCol} AS energy_db, ${toneCol} AS tone
+           ${shapeCol} AS shape, ${energyCol} AS energy_db, ${toneCol} AS tone, ${punchCol} AS punch_db
     FROM samples s JOIN zips z ON z.id = s.zip_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY ${SORTS[f.sort ?? 'name'] ?? SORTS.name}`
@@ -193,8 +193,9 @@ export class LibraryReader {
     const kind = this.all<{ name: string }>('PRAGMA table_info(hits)').some((c) => c.name === 'kind') ? "COALESCE(kind, 'disco')" : "'disco'"
     const energy = this.hasColumn('hits', 'energy_db') ? 'energy_db' : 'NULL AS energy_db'
     const tone = this.hasColumn('hits', 'tone') ? 'tone' : 'NULL AS tone'
+    const more = this.hasColumn('hits', 'voices') ? 'punch_db, voices' : 'NULL AS punch_db, NULL AS voices'
     return this.all<Omit<HitItem, 'name' | 'tone'> & { tone: string | null }>(
-      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}, ${tone}
+      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}, ${tone}, ${more}
        FROM hits ORDER BY id`)
       .map((r) => ({ ...r, tone: toneOf(r.tone), pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
@@ -236,12 +237,17 @@ export class LibraryReader {
   }
 
   /** `s.tone`, or NULL before schema v14. */
+  /** `s.punch_db`, or NULL before schema v15. */
+  private punchCol(): string {
+    return this.hasColumn('samples', 'punch_db') ? 's.punch_db' : 'NULL'
+  }
+
   private toneCol(): string {
     return this.hasColumn('samples', 'tone') ? 's.tone' : 'NULL'
   }
 
   querySamples(filter: SampleFilter): SampleListItem[] {
-    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol(), this.energyCol(), this.toneCol())
+    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol(), this.energyCol(), this.toneCol(), this.punchCol())
     return this.all<SampleRow>(sql, ...params).map(toListItem)
   }
 
@@ -267,10 +273,14 @@ export class LibraryReader {
       `SELECT COUNT(*) AS n FROM samples WHERE kind = 'event'${this.hasColumn('samples', 'shape') ? ' AND shape IS NULL' : ''}`)[0]?.n ?? 0
     if (events) return true
     // Loudness (v13) and tone (v14): every sample and hit.
-    if (!this.hasColumn('samples', 'tone')) return true
+    if (!this.hasColumn('samples', 'tone') || !this.hasColumn('samples', 'punch_db')) return true
+    if ((this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples WHERE punch_db IS NULL')[0]?.n ?? 0) > 0) return true
     if ((this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples WHERE energy_db IS NULL OR tone IS NULL')[0]?.n ?? 0) > 0) return true
     if (this.hasTable('hits') && this.hasColumn('hits', 'tone')
         && (this.all<{ n: number }>('SELECT COUNT(*) AS n FROM hits WHERE energy_db IS NULL OR tone IS NULL')[0]?.n ?? 0) > 0) return true
+    // Punch and voices (v16): every hit.
+    if (this.hasTable('hits') && (!this.hasColumn('hits', 'voices')
+        || (this.all<{ n: number }>('SELECT COUNT(*) AS n FROM hits WHERE punch_db IS NULL OR voices IS NULL')[0]?.n ?? 0) > 0)) return true
     // Imports from before the library kept its own copy: kept while the zip or folder is still there.
     const lib = this.library
     if (lib && this.all<{ source_code: string; original_path: string | null }>(
@@ -303,7 +313,7 @@ export class LibraryReader {
       out.push(...this.all<SampleRow>(
         `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${body} AS body_bars, s.key_label, s.key_camelot,
                 s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, ${this.grooveCol()} AS groove,
-                ${this.shapeCol()} AS shape, ${this.energyCol()} AS energy_db, ${this.toneCol()} AS tone
+                ${this.shapeCol()} AS shape, ${this.energyCol()} AS energy_db, ${this.toneCol()} AS tone, ${this.punchCol()} AS punch_db
          FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.rel_path IN (${chunk.map(() => '?').join(', ')})`,
         ...chunk).map(toListItem))
     }

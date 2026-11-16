@@ -10,7 +10,10 @@ import type { AudioClip } from '../types/project'
 import { Module } from './Module'
 import { Button } from './ui'
 
-const WHERE: Record<string, string> = { drops: 'in the drops', all: 'all through the track', inner: 'between the intro and the outro' }
+const WHERE: Record<string, string> = {
+  later: 'from the second drop', halves: 'in the second half of drops', breaks: 'in the breakdowns',
+  drops: 'in the drops', all: 'all through the track', inner: 'between the intro and the outro',
+}
 
 /** Strings (SCOPE.md §6.10): which Strings page sample this track plays under it, where, and the sidechain. */
 export function StringsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
@@ -66,7 +69,7 @@ export function StringsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
             </span>
           </div>
           <p className="text-faint text-[11.5px]">
-            The sample plays as it was recorded, starting again on every 8-bar line, moved into the track key with its length kept
+            The sample plays as it was recorded, starting again on every line of its own length (8 bars at most), moved into the track key with its length kept
             (only samples within {STRINGS_MAX_SHIFT} semitones of the key). Where it plays is the track's choice below.
           </p>
         </div>

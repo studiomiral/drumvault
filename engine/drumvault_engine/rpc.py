@@ -22,14 +22,14 @@ from typing import Any, Callable, TextIO
 
 from pydantic import ValidationError
 
-from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, stretch
+from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, splice as splicemod, stretch
 from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
     HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams,
     ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
-    SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
+    ScanSpliceParams, SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
 )
 from .db import LibraryDB
 
@@ -42,7 +42,7 @@ DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSam
                   "stretch_samples": StretchSamplesParams, "import_midi": ImportMidiParams,
                   "render_bass": RenderBassParams, "serum_presets": SerumPresetsParams,
                   "save_midi": SaveMidiParams, "set_midi_meta": SetMidiMetaParams,
-                  "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams,
+                  "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams, "scan_splice": ScanSpliceParams,
                   "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams,
                   "master_mixdown": MasterMixdownParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams}
 
@@ -223,6 +223,8 @@ class RpcServer:
                 self._reply(req_id, pipeline.delete_midi(settings, p.midi_ids))
             elif method == "import_hits":
                 self._reply(req_id, hitsmod.import_hits(settings, p.paths, p.kind))
+            elif method == "scan_splice":
+                self._reply(req_id, splicemod.scan(settings, p.folder))
             elif method == "set_hit_meta":
                 self._reply(req_id, hitsmod.set_hit_meta(settings, p.hit_id, p.key_label, p.clear_key, p.pitch_fix))
             elif method == "delete_hits":

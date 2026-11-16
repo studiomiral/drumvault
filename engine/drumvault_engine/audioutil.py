@@ -108,6 +108,25 @@ def k_energy_db(x: np.ndarray, sr: int) -> float | None:
     return round(-0.691 + 10 * np.log10(e), 2) if e > EPS else None
 
 
+def k_punch_db(x: np.ndarray, sr: int, window_s: float) -> float | None:
+    """How loud `x` (its mono mix) is at its loudest: the K-weighted level (as LUFS) of its loudest
+    `window_s` seconds. A hit shorter than the window counts as that long (the ear integrates about
+    that much), so a snappy hit and a washy one of the same energy differ: the washy one's energy
+    is spread out, and its punch is lower. None when silent."""
+    mono = x.mean(axis=1) if x.ndim == 2 else x
+    if not mono.size:
+        return None
+    p = np.square(k_weight(mono, sr))
+    n = max(1, int(round(window_s * sr)))
+    if len(p) <= n:
+        best = float(p.sum())
+    else:
+        c = np.concatenate([[0.0], np.cumsum(p)])
+        best = float((c[n:] - c[:-n]).max())
+    e = best / n
+    return round(-0.691 + 10 * np.log10(e), 2) if e > EPS else None
+
+
 def causal_envelope(x: np.ndarray, window: int) -> np.ndarray:
     """Running max of |x| over the trailing `window` samples.
 

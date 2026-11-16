@@ -35,7 +35,7 @@ export function bassy(s: Pick<SampleListItem, 'category' | 'tone'>): boolean {
 /** Each lane's low cut (Hz); none on the kick and the bass. */
 const LOW_CUT_HZ: Partial<Record<Role, number>> = {
   clap: 150, clap2: 150, clap3: 150, buildup: 120, hats: 250, hats2: 250, ride: 250, perc: 180, perc2: 180,
-  top: 150, top2: 150, top3: 150, top4: 150, groove: 120, stab: 120, stab2: 120, stab3: 120, strings: 150, vocal: 150, vchop: 200, disco: 120, disco2: 120,
+  top: 150, top2: 150, top3: 150, top4: 150, groove: 120, stab: 120, stab2: 120, stab3: 120, strings: 150, pad: 150, bed: 200, vocal: 150, vchop: 200, disco: 120, disco2: 120,
   fills: 120, fx: 120, fx2: 120, crash: 250, atmos: 120,
 }
 /**
@@ -95,6 +95,30 @@ export function bandPower(b: EqBand, f: number, sr = SR): number {
     return re * re + im * im
   }
   return mag2(c[0], c[1], c[2]) / mag2(c[3], c[4], c[5])
+}
+
+/** Power gain (linear) of a clip filter (a Web Audio low- or high-pass, its Q in dB) at `f` Hz. */
+export function filterPower(type: 'lowpass' | 'highpass', hz: number, qDb: number, f: number, sr = SR): number {
+  const w0 = (2 * Math.PI * Math.min(hz, sr / 2 - 1)) / sr
+  const cos = Math.cos(w0)
+  const alpha = Math.sin(w0) / (2 * 10 ** (qDb / 20))
+  const b = type === 'lowpass' ? [(1 - cos) / 2, 1 - cos, (1 - cos) / 2] : [(1 + cos) / 2, -(1 + cos), (1 + cos) / 2]
+  const a = [1 + alpha, -2 * cos, 1 - alpha]
+  const w = (2 * Math.PI * f) / sr
+  const mag2 = (x: number[]) => (x[0] + x[1] * Math.cos(w) + x[2] * Math.cos(2 * w)) ** 2 + (x[1] * Math.sin(w) + x[2] * Math.sin(2 * w)) ** 2
+  return mag2(b) / mag2(a)
+}
+
+/**
+ * What a clip filter takes from a sound of `tone`'s loudness (dB, K-weighted as the balance
+ * measures it; 0 or less). Null when the tone isn't measured.
+ */
+export function filterLoss(tone: number[] | null | undefined, type: 'lowpass' | 'highpass', hz: number, qDb = 0.7): number | null {
+  if (!tone || tone.length !== BANDS) return null
+  const p = lin(tone)
+  const before = p.reduce((n, v, i) => n + v * K_AT[i], 0)
+  const after = p.reduce((n, v, i) => n + v * K_AT[i] * filterPower(type, hz, qDb, BAND_HZ[i]), 0)
+  return before > 0 && after > 0 ? Math.min(0, 10 * Math.log10(after / before)) : null
 }
 
 /** An EQ's response at `f` (dB). */
@@ -199,10 +223,40 @@ export function loudnessChange(bands: EqBand[], tone: number[] | null): number {
   return before > 0 && after > 0 ? 10 * Math.log10(after / before) : 0
 }
 
+/** Layers carved for the lane they layer: a second hat, perc or top loop, the groove under the tops (clap layers are one sound). */
+const CARVED = new Set<Role>(['hats2', 'perc2', 'top2', 'top3', 'top4', 'groove'])
+/** A layer is carved when its tone is this much its main lane's (what they share, 0…1), by this much, this wide, between these. */
+export const CARVE_MASK = 0.6
+export const CARVE_DB = -2.5
+const CARVE_Q = 1
+const CARVE_FROM_HZ = 300
+const CARVE_TO_HZ = 8000
+
+/** What two tones share (0…1; 1 the same). */
+function shared(a: number[], b: number[]): number {
+  const pa = lin(a), pb = lin(b)
+  const ta = pa.reduce((x, y) => x + y, 0), tb = pb.reduce((x, y) => x + y, 0)
+  return ta > 0 && tb > 0 ? pa.reduce((n, v, i) => n + Math.min(v / ta, pb[i] / tb), 0) : 0
+}
+
+/**
+ * Room for the main lane (SCOPE.md §6.6): a layer whose tone is much the same as the lane it
+ * layers gets a broad dip where that lane is strongest, so the two don't pile up in one place.
+ * Null when they differ enough, or either isn't measured.
+ */
+export function carveBand(main: number[] | null, layer: number[] | null): EqBand | null {
+  if (!main || !layer || main.length !== BANDS || layer.length !== BANDS || shared(main, layer) < CARVE_MASK) return null
+  let best = -1
+  main.forEach((v, i) => {
+    if (BAND_HZ[i] >= CARVE_FROM_HZ && BAND_HZ[i] <= CARVE_TO_HZ && (best < 0 || v > main[best])) best = i
+  })
+  return best < 0 ? null : { type: 'peaking', freq: Math.round(BAND_HZ[best]), gainDb: CARVE_DB, q: CARVE_Q }
+}
+
 /**
  * Every generated lane's EQ (`Lane.eq`), or `only` these lanes': its low cut, its part's bands
- * towards the user's tracks (one set for all the lanes of a part, from their tone together), and
- * the makeup gain. A lane with nothing to do gets none.
+ * towards the user's tracks (one set for all the lanes of a part, from their tone together), a
+ * layer's dip for the lane it layers, and the makeup gain. A lane with nothing to do gets none.
  */
 export function eqLanes(project: Project, samples: Map<string, SampleListItem>, arrangements: TrackArrangement[],
                         drops: [number, number][], roleOf: (laneName: string) => Role | undefined, only?: Set<string>): void {
@@ -225,12 +279,19 @@ export function eqLanes(project: Project, samples: Map<string, SampleListItem>, 
     const role = roles.get(lane.id)
     if (!role) continue
     const clips = clipsOf(lane.id)
-    // A build-up playing the kick (a kick roll) keeps its low end.
-    const cut = role === 'buildup' && clips.some((c) => c.sample.category === 'kick') ? undefined : LOW_CUT_HZ[role]
+    // A build-up playing the kick (a kick roll) keeps its low end; so does a breakdown layer that is a reese (a low note).
+    const low = role === 'pad' && clips.some((c) => c.type === 'audio' && c.bass?.notes?.some((n) => n[2] < 48))
+    const cut = low || (role === 'buildup' && clips.some((c) => c.sample.category === 'kick')) ? undefined : LOW_CUT_HZ[role]
     const bands: EqBand[] = [
       ...(cut ? [{ type: 'highpass' as const, freq: cut, gainDb: 0, q: FLAT_Q_DB }] : []),
       ...bandsFor(GROUP[role] ?? role),
     ]
+    if (CARVED.has(role)) {
+      const main = project.lanes.find((l) => roles.get(l.id) === GROUP[role])
+      const dip = main ? carveBand(clipsTone(clipsOf(main.id), samples, project.bpm, drops), clipsTone(clips, samples, project.bpm, drops)) : null
+      // (Not on top of a bell the part's own match already put there.)
+      if (dip && !bands.some((b) => b.type === 'peaking' && Math.abs(Math.log2(b.freq / dip.freq)) < 0.5)) bands.push(dip)
+    }
     if (!bands.length) {
       delete lane.eq
       continue

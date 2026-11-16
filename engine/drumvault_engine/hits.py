@@ -19,12 +19,12 @@ from pathlib import Path
 import numpy as np
 
 from . import arrangement, key as keymod, naming, normalize, oneshots as osmod, zipio
-from .audioutil import db_to_amp, k_energy_db, load, resample, write_wav
+from .audioutil import db_to_amp, k_energy_db, k_punch_db, load, resample, write_wav
 from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "strings": "Strings"}
+FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "strings": "Strings", "bass": "Bass Samples", "ambience": "Ambience"}
 KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
@@ -88,13 +88,20 @@ def trim_hit(data: np.ndarray, sr: int, settings: Settings, max_len_s: float | N
     return hit
 
 
-def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[str | None, str | None]:
+def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings, kind: str = "disco") -> tuple[str | None, str | None]:
     """(key label, "name" | "detected"): the name's key, a bare note in it with the sound's scale,
-    else the sound's key."""
+    else the sound's key. A bass sample (one note) has no scale: its note from the name ("…_A"),
+    else from its pitch, as that note's major key (only its root is used)."""
     named = name_key(name)
     if named:
         return named[0], "name"
     m = _KEY_BARE.search(Path(name).stem)
+    if kind == "bass":
+        if m:
+            return keymod.make_label(keymod.normalize_pitch(m.group(1)), "major"), "name"
+        from . import basssample
+        pc = basssample.sample_pitch_class(mono, sr, settings)
+        return (keymod.make_label(pc, "major"), "detected") if pc is not None else (None, None)
     detected = keymod.detect_key_audio(mono, sr, settings.thresholds)
     if m:
         pc = keymod.normalize_pitch(m.group(1))
@@ -105,7 +112,7 @@ def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[s
 
 
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
-    """Add disco hits (or chord stabs, or strings) from files, folders and zips. Files already
+    """Add disco hits (or chord stabs, strings, bass samples) from files, folders and zips. Files already
     imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s."""
     if kind not in FOLDERS:
         raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
@@ -131,11 +138,12 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             except Exception as e:  # noqa: BLE001 - one bad file doesn't stop the rest
                 failed.append(f"{name}: {e}")
                 continue
-            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind == "strings" else None)
+            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind in ("strings", "ambience") else None)
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue
-            label, source = hit_key(name, hit.mean(axis=1), audio.sr, settings)
+            # (A texture has no key: the bed is never moved.)
+            label, source = (None, None) if kind == "ambience" else hit_key(name, hit.mean(axis=1), audio.sr, settings, kind)
             y = resample(hit, audio.sr, out_sr)
             y, pk_db, _ = normalize.peak_normalize(y, settings.thresholds.hit_peak_dbfs)
             base = naming.slugify(Path(name).stem, 60) or "hit"
@@ -148,6 +156,8 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
                                 key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                                 key_source=source, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                                 channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
+                                punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000),
+                                voices=keymod.count_voices(y.mean(axis=1), out_sr, settings.thresholds),
                                 tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())
             imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}

@@ -10,12 +10,13 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  applyMix, bassBars, bassRenderOf, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  applyMix, bassBars, bassRenderOf, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
   setStabRhythm, setTrackRule, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
+import { refine, type RefineOptions } from '../generate/critic'
 import { bassPath } from '../audio/schedule'
-import { bassSettings, loadBass, saveBassSettings, useBass } from './bass'
+import { bassPatches, bassSettings, loadBass, saveBassSettings, useBass, type BassSource } from './bass'
 import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
@@ -35,12 +36,15 @@ export interface GenerateSettings {
   maxMinutes: number
   zipIds: number[] | null
   useRatings: boolean
+  /** The critic (critic.ts): every track made is listened back to and its clashing loops swapped. */
+  listenBack: boolean
   /** Lane volume sliders (dB on top of the starting mix), per lane role. */
   mix: Mix
   /** Tempo per track: null = the library BPM, else a whole BPM from min–max (equal: fixed). */
   tempo: { min: number; max: number } | null
   /** Bass on/off, its sidechain depth under the kick (0…1) and new basslines' length (null: any). */
-  bass: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null }
+  /** …and what plays it: Serum patches, Bass Samples page one-shots, or either (SCOPE.md §6.7a). */
+  bass: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null; source: BassSource }
   /** Reverb builds on/off, on which parts, also every 8 or 16 bars, and how far the send rises. */
   verb: { enabled: boolean } & VerbOptions
   /** Disco hits on/off: when on, some tracks get one or two (SCOPE.md §6.8). */
@@ -49,6 +53,10 @@ export interface GenerateSettings {
   stabs: { enabled: boolean }
   /** Strings on/off (when on, some tracks get them, SCOPE.md §6.10) and the Strings lane's sidechain depth (0…1). */
   strings: { enabled: boolean; sidechain: number }
+  /** The breakdown layer on/off: when on, tracks may get a pad or a reese in their breakdowns (SCOPE.md §6.7b). */
+  pads: { enabled: boolean }
+  /** The ambience bed on/off: when on, most tracks get a very quiet texture under them (SCOPE.md §6.10a). */
+  ambience: { enabled: boolean }
   /** Choices locked for every next track (choices.ts), by rule. */
   locks: Rules
 }
@@ -57,9 +65,9 @@ const BASS_KEY = 'drumvault.generate.bass'
 
 function savedBass(): GenerateSettings['bass'] {
   try {
-    return { enabled: true, sidechain: 0.6, bars: null, ...JSON.parse(localStorage.getItem(BASS_KEY) ?? '{}') }
+    return { enabled: true, sidechain: 0.6, bars: null, source: 'both', ...JSON.parse(localStorage.getItem(BASS_KEY) ?? '{}') }
   } catch {
-    return { enabled: true, sidechain: 0.6, bars: null }
+    return { enabled: true, sidechain: 0.6, bars: null, source: 'both' }
   }
 }
 
@@ -79,6 +87,25 @@ function savedDisco(): GenerateSettings['disco'] {
 }
 
 const STRINGS_KEY = 'drumvault.generate.strings'
+
+const PADS_KEY = 'drumvault.generate.pads'
+const AMBIENCE_KEY = 'drumvault.generate.ambience'
+
+function savedAmbience(): GenerateSettings['ambience'] {
+  try {
+    return { enabled: true, ...JSON.parse(localStorage.getItem(AMBIENCE_KEY) ?? '{}') }
+  } catch {
+    return { enabled: true }
+  }
+}
+
+function savedPads(): GenerateSettings['pads'] {
+  try {
+    return { enabled: true, ...JSON.parse(localStorage.getItem(PADS_KEY) ?? '{}') }
+  } catch {
+    return { enabled: true }
+  }
+}
 
 function savedStrings(): GenerateSettings['strings'] {
   try { return { enabled: true, sidechain: 0.6, ...JSON.parse(localStorage.getItem(STRINGS_KEY) ?? '{}') } }
@@ -170,7 +197,7 @@ export const useGenerate = create<GenerateState>((set) => ({
   templates: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), locks: savedLocks() },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), locks: savedLocks() },
   keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
@@ -208,7 +235,8 @@ export function arrangeTrack(project: Project): Generation | null {
 function bassOfClips(b: GenerationBass | null, project: Project): GenerationBass | null {
   const r = project.clips.find((c): c is AudioClip => c.type === 'audio' && !!c.bass && (c.bass.role ?? 'bass') === 'bass')?.bass
   if (!b || !r) return b
-  const { presets, basslines: midis } = useBass.getState()
+  const { basslines: midis } = useBass.getState()
+  const presets = bassPatches()
   const preset = r.preset === b.preset.path ? b.preset : presets.find((p) => p.path === r.preset) ?? { ...b.preset, path: r.preset, name: r.presetName }
   const midi = r.midiId === b.midi.id ? b.midi
     : midis.find((m) => m.id === r.midiId) ?? { ...b.midi, id: r.midiId, name: r.midiName, notes: r.notes ?? b.midi.notes, bars: r.bars ?? b.midi.bars }
@@ -281,6 +309,8 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
     for (const role of STAB_ROLES) if (g.picks[role]) picks[role] = g.picks[role]
     Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits' })
   }
+  // A kept bed plays on.
+  if (k.lanes.includes('bed') && g.picks.bed) rules.bedIn = true
   // Kept strings play where they did.
   if (k.lanes.includes('strings') && g.picks.strings) {
     Object.assign(rules, { stringsIn: true, ...Object.fromEntries(STRINGS_RULES.map((r) => [r, g.rules[r]])) })
@@ -298,7 +328,8 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
 
 function options(): GenerateOptions {
   const { settings, templates } = useGenerate.getState()
-  const { basslines, presets } = useBass.getState()
+  const { basslines } = useBass.getState()
+  const presets = bassPatches(settings.bass.source)
   const bass = settings.bass.enabled && basslines.length && presets.length
     ? { midis: basslines, presets, favorites: bassSettings().favorites, octaves: bassSettings().octaves, sidechain: settings.bass.sidechain, bars: settings.bass.bars } : null
   const { enabled, ...verb } = settings.verb
@@ -312,15 +343,25 @@ function options(): GenerateOptions {
   // Vocals are made in Arrange, one for the track open there (SCOPE.md §6.11): Generate sings none.
   const take = inArrange() ? projectTake(useProject.getState().project) : null
   const vocals = take ? { takes: [take] } : null
-  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, vocals, templates }
+  const padPresets = useBass.getState().padPresets
+  const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
+  const bedHits = hits.filter((h) => h.kind === 'ambience')
+  const ambience = settings.ambience.enabled && bedHits.length ? { hits: bedHits } : null
+  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates }
 }
 
 function make(seed = randomSeed()): Generation | null {
   const { samples, keep } = useGenerate.getState()
   if (!samples?.length) return null
-  const g = generate(samples, options(), seed, keepFrom(generated(), keep))
+  const g = listenBack(generate(samples, options(), seed, keepFrom(generated(), keep)), { locked: keep.lanes })
   applyLaneToggles(g.project, useGenerate.getState().lanes)
   return g
+}
+
+/** The track as the critic leaves it (critic.ts): its clashing loops swapped; as it is with "Listen back" off. */
+function listenBack(g: Generation, o: RefineOptions = {}): Generation {
+  const { samples, settings } = useGenerate.getState()
+  return samples && settings.listenBack ? refine(samples, options(), g, o) : g
 }
 
 function applyLaneToggles(project: Project, t: LaneToggles): void {
@@ -366,8 +407,9 @@ export function rerollLane(laneId: string): boolean {
   const role = laneRole(lane.name)
   if (role && STAB_ROLES.includes(role)) return newChordStabs()
   if (role === 'disco' || role === 'disco2') return newDiscoHits()
-  const next = rerollSounds(samples, options(), g, laneId, randomSeed())
-  if (!next) return false
+  const made = rerollSounds(samples, options(), g, laneId, randomSeed())
+  if (!made) return false
+  const next = role ? listenBack(made, { only: [role] }) : made
   // The lane keeps its mix (volume, pan, sidechain, mute/solo): only its clips are new.
   apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.laneId === laneId).map((c) => c.id), `Remake ${lane.name}`)
   return true
@@ -385,7 +427,7 @@ export function newSound(laneId: string): boolean {
   if (!g || !samples || !lane) return false
   const role = laneRole(lane.name)
   if (role === 'bass') {
-    const others = useBass.getState().presets.filter((p) => p.path !== g.bass?.preset.path)
+    const others = bassPatches(useGenerate.getState().settings.bass.source).filter((p) => p.path !== g.bass?.preset.path)
     if (!g.bass || !others.length) return false
     setGenerationBass({ preset: others[Math.floor(Math.random() * others.length)] }, g)
     return true
@@ -426,7 +468,7 @@ export function setChoice(rule: string, value: unknown): boolean {
   const choice = CHOICES.find((c) => c.rule === rule)
   if (!g || !samples || !choice) return false
   if (rule in settings.locks) saveLocks({ ...settings.locks, [rule]: value })
-  const next = setTrackRule(samples, options(), g, rule, value, choice.roles)
+  const next = listenBack(setTrackRule(samples, options(), g, rule, value, choice.roles), { only: choice.roles })
   apply(next, clipIds(g, next, (name) => choice.roles.includes(laneRole(name)!)), choice.label)
   return true
 }
@@ -595,9 +637,12 @@ export function setBassOptions(patch: Partial<GenerateSettings['bass']>): void {
   const { settings, history, pending, set } = useGenerate.getState()
   const bass = { ...settings.bass, ...patch }
   set({ settings: { ...settings, bass } })
-  for (const g of [...history, pending]) {
-    const lane = g?.project.lanes.find((l) => l.name === 'Bass')
-    if (lane) lane.duck = bass.sidechain
+  // (Only when the amount itself moves: each track's sidechain was set for its own kick and bassline.)
+  if (patch.sidechain !== undefined) {
+    for (const g of [...history, pending]) {
+      const lane = g?.project.lanes.find((l) => l.name === 'Bass')
+      if (lane) lane.duck = bass.sidechain
+    }
   }
   if (patch.sidechain !== undefined) duckInArrange('Bass', bass.sidechain)
   try {
@@ -660,6 +705,55 @@ export function setStringsOptions(patch: Partial<GenerateSettings['strings']>): 
  * New strings for the current generation (the Strings module's button): another sample and
  * placement, or strings in a track that had none. A new step in the history (← goes back).
  */
+/** The ambience bed on or off for new generations (remembered). */
+export function setAmbienceOptions(patch: Partial<GenerateSettings['ambience']>): void {
+  const { settings, set } = useGenerate.getState()
+  const ambience = { ...settings.ambience, ...patch }
+  set({ settings: { ...settings, ambience } })
+  try {
+    localStorage.setItem(AMBIENCE_KEY, JSON.stringify(ambience))
+  } catch {
+    // not remembered
+  }
+  if (patch.enabled !== undefined) invalidate()
+}
+
+/** Another ambience bed for the current track (another texture), or one in a track without; the rest as it is. */
+export function newBed(): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  if (!g || !samples) return false
+  const bedHits = useHits.getState().hits.filter((h) => h.kind === 'ambience')
+  const next = rerollBed(samples, { ...options(), ambience: bedHits.length ? { hits: bedHits } : null }, g, randomSeed())
+  if (!next) return false
+  apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.type === 'audio' && c.bass?.role === 'ambience').map((c) => c.id), 'New ambience')
+  return true
+}
+
+/** The breakdown layer on or off for new generations (remembered). */
+export function setPadsOptions(patch: Partial<GenerateSettings['pads']>): void {
+  const { settings, set } = useGenerate.getState()
+  const pads = { ...settings.pads, ...patch }
+  set({ settings: { ...settings, pads } })
+  try {
+    localStorage.setItem(PADS_KEY, JSON.stringify(pads))
+  } catch {
+    // not remembered
+  }
+  if (patch.enabled !== undefined) invalidate()
+}
+
+/** Another breakdown layer for the current track (another patch), or one in a track without; the rest as it is. */
+export function newPad(): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  if (!g || !samples) return false
+  const next = rerollPad(samples, { ...options(), pads: useBass.getState().padPresets.length ? { presets: useBass.getState().padPresets } : null }, g, randomSeed())
+  if (!next) return false
+  apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.type === 'audio' && c.bass?.role === 'pad').map((c) => c.id), 'New break layer')
+  return true
+}
+
 export function newStrings(): boolean {
   const { samples } = useGenerate.getState()
   const g = current()

@@ -106,6 +106,7 @@ export function MidiView() {
         </button>
 
         <SerumFolders module="bass" />
+        <SerumFolders module="pads" />
 
         {bassModel && <Learned model={bassModel} />}
 

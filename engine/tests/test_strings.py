@@ -73,6 +73,21 @@ def test_a_short_sample_plays_once_then_silence(tmp_path):
     assert np.abs(y[int(7 * sr):]).max() < 1e-4                               # padded, not repeated
 
 
+def test_a_four_bar_sample_fills_a_four_bar_part(tmp_path):
+    # A 4-bar loop cut at 125 BPM, played as a 4-bar part at 124: it ends a moment before the line.
+    seconds = 4 * 4 * 60 / 125
+    s, rel = imported(tmp_path, "Loop Strings Am.wav", held([57], seconds))
+    r = pipeline.render_bass(s, rel, 0, 0, BPM, ".drumvault/strings/c-0-b4-0-124.wav", bars=4)
+    y, sr = sf.read(Path(s.library_path) / r["path"], always_2d=True)
+    n = strings.part_frames(BPM, 4, sr)
+    assert y.shape[0] == n
+    # Sounding nearly to the end of the part: no bars of silence, only the short gap, faded into.
+    assert np.abs(y[int(0.9 * n): int(0.95 * n)]).max() > 0.01
+    gap = n - int(seconds * sr)
+    assert 0 < gap < 0.02 * n
+    assert np.abs(y[n - gap:]).max() < 1e-4
+
+
 @pytest.mark.skipif(not shutil.which("rubberband"), reason="Rubber Band not installed")
 def test_moved_into_the_key_with_its_length_kept(tmp_path):
     s, rel = imported(tmp_path, "Strings A.wav", held([57], 12.0))

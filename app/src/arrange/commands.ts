@@ -11,7 +11,7 @@ import { useLibrary } from '../store/library'
 import { useProject } from '../store/project'
 import type { BassRender, Clip, SampleRef } from '../types/project'
 import { bassPath } from '../audio/schedule'
-import { loadBass, useBass } from '../store/bass'
+import { loadBass, useBass, bassPatches } from '../store/bass'
 import { bassModel, generateBassline, generatedMidi, isGenerated, keyOfLine } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
 
@@ -317,7 +317,9 @@ export async function newClipBassline(): Promise<void> {
 /** Next / previous / a random patch or bassline from the pool, for the selected bass clips. */
 export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random'): Promise<void> {
   if (!useBass.getState().loaded) await loadBass()
-  const { presets, basslines } = useBass.getState()
+  const { basslines } = useBass.getState()
+  // (Serum patches and Bass Samples page one-shots: a bass plays through either.)
+  const presets = bassPatches()
   const pickFrom = <T,>(list: T[], i: number) => {
     if (!list.length) return null
     if (dir === 'random') return list[Math.floor(Math.random() * list.length)]
@@ -325,7 +327,7 @@ export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random
   }
   if (what === 'patch') {
     if (!presets.length) {
-      useApp.getState().toast('info', 'No Serum 2 patches: tick folders for it under Settings → Serum 2.')
+      useApp.getState().toast('info', 'No Serum 2 patches or bass samples: tick folders under Settings → Serum 2, or add one-shots on the Bass Samples page.')
       return
     }
     await changeBass('Change bass patch', (b) => {

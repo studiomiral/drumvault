@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { serumPresetRoot, useApp } from '../store/app'
-import { bassSettings, loadBass, saveBassSettings, useBass } from '../store/bass'
+import { bassSettings, loadBass, padsSettings, saveBassSettings, savePadsSettings, useBass } from '../store/bass'
 import { IconChevron } from './icons'
 import { cx } from './ui'
 
 /** The modules that draw patches from Serum 2's presets: each picks its own folders under it. */
 export const SERUM_MODULES = [
   { id: 'bass', label: 'Bass', what: 'basslines', settings: bassSettings, save: saveBassSettings, load: loadBass },
+  // The breakdown layer (SCOPE.md §6.7b): a patch with "reese" (or bass, sub) in its name, folder or tags holds one low note; any other a chord.
+  { id: 'pads', label: 'Pads', what: 'pad and reese', settings: padsSettings, save: savePadsSettings, load: loadBass },
 ] as const
 
 export type SerumModule = (typeof SERUM_MODULES)[number]['id']
@@ -21,8 +23,8 @@ export function SerumFolders({ module }: { module: SerumModule }) {
   const m = SERUM_MODULES.find((x) => x.id === module)!
   const root = serumPresetRoot()
   const setView = useApp((s) => s.setView)
-  const pool = { bass: useBass((s) => s.presets.length) }[module]
-  const skipped = { bass: useBass((s) => s.skipped) }[module]
+  const pool = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length) }[module]
+  const skipped = { bass: useBass((s) => s.skipped), pads: useBass((s) => s.padSkipped) }[module]
   const [open, setOpen] = useState(false)
   const [folders, setFolders] = useState<{ folder: string; count: number }[] | null>(null)
   const [error, setError] = useState<string | null>(null)

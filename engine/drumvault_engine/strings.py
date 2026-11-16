@@ -1,5 +1,6 @@
 """Strings (SCOPE.md §6.10): a long string sample from the Strings page, heard as it was recorded,
-restarting on every 8-bar line of the track.
+restarting on every line of its own length (8 bars at most; the app asks for as many bars as the
+sample fills, so a 4-bar sample starts again every 4 bars and never leaves bars of silence).
 
 A part is the sample from its start, moved `semitones` into the track key with its length kept
 (Rubber Band: no faster or slower), cut to `bars` bars at the track tempo with a short fade where
@@ -40,6 +41,12 @@ def make_part(settings: Settings, rel_path: str, semitones: int, bpm: float, bar
         fade = min(n, int(round(settings.thresholds.strings_fade_s * sr)))
         x[n - fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]
     else:
+        # A sample that ends before the part does (a 4-bar loop cut at a slightly faster tempo): its
+        # end fades over a moment, so it doesn't click into the gap before the next start.
+        x = x.copy()
+        fade = min(x.shape[0], int(round(settings.thresholds.strings_tail_fade_s * sr)))
+        if fade > 1:
+            x[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]
         x = np.pad(x, ((0, n - x.shape[0]), (0, 0)))
     return np.ascontiguousarray(x, dtype=np.float32)
 

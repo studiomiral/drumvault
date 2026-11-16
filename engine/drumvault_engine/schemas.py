@@ -106,7 +106,7 @@ class Overrides(BaseModel):
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
                  "render_bass", "serum_presets", "save_midi", "set_midi_meta",
-                 "delete_midi", "import_hits", "set_hit_meta", "delete_hits", "master_mixdown", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
+                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -266,7 +266,13 @@ class SaveMidiParams(BaseModel):
 class ImportHitsParams(BaseModel):
     """Add disco hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
     paths: list[str]
-    kind: Literal["disco", "stab", "strings"] = "disco"
+    kind: Literal["disco", "stab", "strings", "bass", "ambience"] = "disco"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScanSpliceParams(BaseModel):
+    """List the sounds in the Splice folder that could go on the Chord Stabs, Disco Hits or Strings page (SCOPE.md §6.12)."""
+    folder: str
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

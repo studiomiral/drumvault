@@ -56,6 +56,10 @@ export const CHOICES: Choice[] = [
     options: [{ value: 'lean', label: 'leaner at first, full halfway' }, { value: 'full', label: 'full from the start' }] },
   { rule: 'mixHp', label: 'Mix high-passed', group: 'Drops', roles: MIX,
     options: [{ value: 0, label: 'no' }, { value: 1, label: 'the bar before' }, { value: 2, label: '2 bars before' }, { value: 4, label: '4 bars before' }] },
+  { rule: 'glue', label: 'Groove', group: 'Breakdowns', roles: ['clap', ...HATS, 'perc', 'perc2', 'top', 'top2', 'top3', 'groove', 'ride'], when: has('break'), unset: false,
+    options: yesNo('carries through, filtered', 'each breakdown its own') },
+  { rule: 'gluePerc', label: 'Perc', group: 'Breakdowns', roles: ['perc'], when: (g) => !!g.rules.glue && has('break')(g),
+    options: [{ value: 'through', label: 'low-passed' }, { value: 'leave', label: 'fades out' }] },
   { rule: 'topsBreaks', label: 'Tops', group: 'Breakdowns', roles: ['top'], when: has('break'),
     options: [{ value: 'filtered', label: 'low-passed' }, { value: 'open', label: 'open' }, { value: 'none', label: 'out' }] },
   { rule: 'hatsInBreaks', label: 'Hats', group: 'Breakdowns', roles: ['hats'], when: has('break'), options: yesNo('high-passed', 'out') },
@@ -94,7 +98,8 @@ export const CHOICES: Choice[] = [
   { rule: 'stabTurns', label: 'Stabs take turns', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.picks.stab2 && !g.picks.stab3, unset: 'hits',
     options: [{ value: 'bars', label: 'bar by bar' }, { value: 'hits', label: 'hit by hit' }] },
   { rule: 'stringsAt', label: 'Strings', group: 'Sound', roles: ['strings'], when: (g) => !!g.picks.strings,
-    options: [{ value: 'drops', label: 'in the drops' }, { value: 'all', label: 'all through' }, { value: 'inner', label: 'all but intro and outro' }] },
+    options: [{ value: 'later', label: 'from the second drop' }, { value: 'halves', label: 'the second half of drops' }, { value: 'breaks', label: 'in the breakdowns' },
+      { value: 'drops', label: 'in every drop' }, { value: 'inner', label: 'all but intro and outro' }, { value: 'all', label: 'all through' }] },
   { rule: 'vocalUse', label: 'Vocal', group: 'Sound', roles: ['vocal', 'vchop'], when: (g) => !!g.picks.vocal,
     options: [{ value: 'phrase', label: 'its phrase' }, { value: 'chops', label: 'chopped' }, { value: 'both', label: 'phrase and chops' }] },
   { rule: 'vocalAt', label: 'Vocal phrase', group: 'Sound', roles: ['vocal', 'vchop'], when: (g) => !!g.picks.vocal && g.rules.vocalUse !== 'chops',
@@ -105,6 +110,33 @@ export const CHOICES: Choice[] = [
   { rule: 'fx', label: 'FX', group: 'Sound', roles: ['fx', 'fx2', 'hits'],
     options: [{ value: 'sparse', label: 'sparse' }, { value: 'normal', label: 'normal' }, { value: 'busy', label: 'busy' }] },
 ]
+
+CHOICES.push(
+  { rule: 'lead', label: 'Lead', group: 'Sound', roles: [...STAB_ROLES, 'bass', 'perc'], unset: null,
+    when: (g) => !!g.rules.character,
+    options: [{ value: 'stab', label: 'the stabs' }, { value: 'bass', label: 'the bassline' }, { value: 'perc', label: 'the percussion' }, { value: null, label: 'none' }] },
+  { rule: 'padIn', label: 'Break layer', group: 'Breakdowns', roles: ['pad'], when: (g) => has('break')(g) && !!g.rules.padPreset, unset: false,
+    options: yesNo('a pad or a reese', 'none') },
+)
+
+/** The stab choices of tracks whose stabs are written for them (rule `stabFit`). */
+const fitted = (g: Generation) => !!g.rules.stabs && !!g.rules.stabFit
+CHOICES.push(
+  { rule: 'stabFit', label: 'Stabs', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs, unset: false,
+    options: yesNo('written for the track', 'placed as before') },
+  { rule: 'stabTurn', label: 'Stabs every 8 bars', group: 'Every 8 and 16 bars', roles: STAB_ROLES, when: fitted,
+    options: [{ value: 'none', label: 'no turn' }, { value: 'drop', label: 'the last stab left out' }, { value: 'push', label: 'the last stab early' },
+      { value: 'double', label: 'the last stab twice' }] },
+  { rule: 'stabEcho', label: 'Stab delay throws', group: 'Every 8 and 16 bars', roles: STAB_ROLES, when: fitted,
+    options: [{ value: 'none', label: 'none' }, { value: '8', label: 'every 8 bars' }, { value: '16', label: 'every 16 bars' }, { value: 'breaks', label: 'into breakdowns' }] },
+  { rule: 'stabsOpen', label: 'Stab filter', group: 'Drops', roles: STAB_ROLES, when: fitted,
+    options: [{ value: 'none', label: 'open' }, { value: 'first', label: 'opens over drop 1' }, { value: 'each', label: 'opens over every drop' }] },
+  { rule: 'stabsGrow', label: 'Stabs in drop 1', group: 'Drops', roles: STAB_ROLES, when: fitted, options: yesNo('lean at first, full halfway', 'full from the start') },
+  { rule: 'stabsRest', label: 'Stabs in long drops', group: 'Drops', roles: STAB_ROLES, when: (g) => fitted(g) && g.sections.some((s) => s.kind === 'drop' && s.bars >= 32),
+    options: yesNo('rest for a phrase', 'play through') },
+  { rule: 'stabsTease', label: 'Stabs', group: 'Intro & outro', roles: STAB_ROLES,
+    when: (g) => fitted(g) && g.sections[0]?.kind === 'intro' && g.sections[0].bars >= 24, options: yesNo('teased at the end of the intro', 'not before the drop') },
+)
 
 export const CHOICE_GROUPS = ['Drops', 'Breakdowns', 'Builds', 'Intro & outro', 'Every 8 and 16 bars', 'Sound'] as const
 
