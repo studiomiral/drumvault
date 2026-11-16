@@ -151,6 +151,8 @@ export type RpcRequest =
   | { id: string; method: "analyze_vocal"; params: { folder: string; settings: EngineSettings } }
   | { id: string; method: "clean_renders"; params: { keep: string[]; dry_run?: boolean; settings: EngineSettings } }
   | { id: string; method: "master_mixdown"; params: { mix_path: string; out_path: string; format?: "pcm24" | "float32"; settings: EngineSettings } }
+  | { id: string; method: "preflight"; params: { mix_path: string; master_path?: string | null; bpm: number; sections?: PreflightSection[] | null; key_label?: string | null; whole?: boolean; settings: EngineSettings } }
+  | { id: string; method: "scan_references"; params: { analyze?: boolean; settings: EngineSettings } }
   | { id: string; method: "import_hits"; params: { paths: string[]; kind?: "disco" | "stab" | "strings"; settings: EngineSettings } }
   | { id: string; method: "set_hit_meta"; params: { hit_id: number; key_label?: string | null; clear_key?: boolean; pitch_fix?: number | null; settings: EngineSettings } }
   | { id: string; method: "delete_hits"; params: { hit_ids: number[]; settings: EngineSettings } }
@@ -203,6 +205,108 @@ export interface MasterResult {
   peak_db: number;
   gain_db: number;
   passes: number;
+}
+
+/** A section as the pre-flight takes it (schemas.PreflightSection): bars from the file's start. */
+export interface PreflightSection {
+  kind: string;
+  start: number;
+  bars: number;
+}
+
+/** A drop in a mix profile: where it starts, and its first bars against the bars before. */
+export interface ProfileDrop {
+  bar: number;
+  bars: number;
+  lufs: number;
+  lift_lu: number | null;
+  lift_low_db: number | null;
+}
+
+/** The first or the last bars of a mix: its lows on the beats against between them, and against the drops'. */
+export interface ProfileEdge {
+  bars: number;
+  pulse_db: number | null;
+  low_rel_db: number | null;
+}
+
+/** A whole mix measured (mixprofile.measure): an export's mixdown or master, or a reference track. */
+export interface MixProfile {
+  seconds: number;
+  bpm: number;
+  bars: number;
+  sections_known: boolean;
+  lufs: number | null;
+  peak_db: number | null;
+  true_peak_db: number | null;
+  /** True peak over integrated loudness. */
+  plr_db: number | null;
+  bar_lufs: (number | null)[];
+  full_bars: number;
+  full_lufs: number | null;
+  /** dB of the whole, in the drops: lows, low mids, mids, high mids, highs. */
+  regions: number[] | null;
+  /** The sides against the middle, in the drops. */
+  width_db: number | null;
+  low_side_db: number | null;
+  drops: ProfileDrop[];
+  lift_lu: number | null;
+  lift_low_db: number | null;
+  break_depth_lu: number | null;
+  dc_db: number | null;
+  head_ms: number | null;
+  tail_db: number | null;
+  intro: ProfileEdge | null;
+  outro: ProfileEdge | null;
+}
+
+export interface PreflightCheck {
+  id: string;
+  label: string;
+  /** "info": a number with nothing to hold it against. */
+  status: "ok" | "warn" | "info";
+  value: string;
+  detail: string;
+}
+
+/** preflight's answer (preflight.run). */
+export interface PreflightResult {
+  /** What the checks are of: the master when it was made. */
+  subject: "master" | "mixdown";
+  mix: MixProfile;
+  master: MixProfile | null;
+  /** What is wrong first. */
+  checks: PreflightCheck[];
+  warnings: number;
+  references: { tracks: number; pending: number };
+}
+
+/** The references' median and range of a measure. */
+export interface ReferenceStat {
+  median: number;
+  min: number;
+  max: number;
+  n: number;
+}
+
+export interface ReferenceTrack {
+  rel_path: string;
+  name: string;
+  bpm: number | null;
+  key_label: string | null;
+  grid_confidence: number | null;
+  error: string | null;
+  analyzed_at: string;
+  profile: MixProfile | null;
+}
+
+/** scan_references' answer (references.scan). */
+export interface ReferencesResult {
+  folder: string;
+  tracks: ReferenceTrack[];
+  /** Files in the folder not measured yet. */
+  pending: number;
+  summary: ({ tracks: number; regions: (ReferenceStat | null)[] | null } & Record<string, unknown>) | null;
 }
 
 export interface HealthResult {

@@ -311,6 +311,46 @@ class Thresholds:
     master_glue_release_ms: float = 120.0
     master_soft_clip_mix: float = 50.0      # % of the Maximizer's soft clip (less limiting for the loudness)
 
+    # ---- mix profile (mixprofile.py): a whole mix measured, a render or a reference track ----
+    # The regions its tone is given in (Hz edges): lows, low mids, mids, high mids, highs (the app's REGIONS).
+    profile_region_edges_hz: tuple = (40.0, 150.0, 500.0, 2000.0, 6000.0, 16000.0)
+    profile_low_hz: float = 150.0           # the kick's and the bass's region: "the lows"
+    profile_mono_hz: float = 120.0          # under this the two sides should be one
+    profile_full_pct: float = 90.0          # without sections: a bar is full within...
+    profile_full_rel_lu: float = -3.0       # ...this of that percentile of the bars' loudness...
+    profile_full_low_rel_db: float = -8.0   # ...with its lows within this of that percentile of the lows
+    profile_drop_min_bars: int = 8          # a run of full bars this long is a drop...
+    profile_drop_gap_bars: int = 1          # ...bridging gaps this long (a fill, a bar of silence)...
+    profile_drop_before_bars: int = 4       # ...after this many bars that aren't full
+    profile_lift_bars: int = 8              # a drop's first bars against as many before it
+    profile_dj_bars: int = 16               # the mix-in and mix-out: the first and the last bars
+    profile_pulse_share: float = 0.4        # a kick's lows sit in this first share of each beat
+    profile_head_db: float = -60.0          # the first sample over this is where the sound starts
+    profile_tail_ms: float = 10.0           # the file's end: its peak over these last ms
+    profile_true_peak_oversample: int = 4
+    profile_true_peak_window_db: float = 3.0  # only blocks peaking within this of the highest are oversampled
+
+    # ---- pre-flight (preflight.py): the export's masters checked before they go out -----
+    preflight_lufs_min: float = -9.0        # House of Tracks takes -9 … -5 LUFS integrated
+    preflight_lufs_max: float = -5.0
+    preflight_true_peak_max_db: float = 1.0  # between the samples: over this converters clip audibly
+    preflight_limiter_max_db: float = 12.0  # peaks the master lost against its loudness (the mixdown's crest less the master's)
+    preflight_lift_loss_lu: float = 1.5     # the master may take this much off a drop's lift
+    preflight_lift_min_lu: float = 1.0      # a drop lands: this much louder than the bars before...
+    preflight_lift_min_low_db: float = 3.0  # ...or this much more low end
+    preflight_low_side_max_db: float = -12.0  # the sides under profile_mono_hz against the middle
+    preflight_dc_max_db: float = -50.0
+    preflight_head_max_ms: float = 30.0     # bar 1 starts sounding within this
+    preflight_tail_max_db: float = -40.0    # the last ms: louder and the end is cut off
+    preflight_pulse_min_db: float = 3.0     # a kick on every beat: the lows this much stronger on the beats
+    preflight_dj_low_rel_db: float = -15.0  # ...and within this of the drops' lows
+    preflight_key_confidence: float = 0.6   # a key read with less doesn't count against the label
+    preflight_tone_off_db: float = 3.0      # a region is off: this far from the references' median and outside them all
+    preflight_width_off_db: float = 4.0
+    reference_min_tracks: int = 3           # fewer references: nothing is compared
+    reference_bpm_min: float = 110.0        # the tempo a reference is searched in
+    reference_bpm_max: float = 150.0
+
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200
     peaks_loop_per_bar: int = 1024

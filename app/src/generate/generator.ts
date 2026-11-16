@@ -31,6 +31,8 @@ import {
 } from './character'
 import { balanceFrom, dropRanges, evenClips, levelLanes, punchRefs, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
+import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
+import type { Score } from './score'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
@@ -452,6 +454,8 @@ export interface Generation {
   template?: string | null
   /** The drop's tone against the user's tracks, and what was moved for it (mix.ts); null or absent: not checked. */
   mix?: MixCheck | null
+  /** How it scored, and how many candidates it was the best of (score.ts); absent: made as it came. */
+  score?: Score | null
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +569,9 @@ function complements(a: SampleListItem, b: SampleListItem): number | null {
 
 /** A loop fits the track's feel from here on (feelFit: 1 the same swing). */
 const GOOD_FIT = 0.5
+/** Of the samples a pick scores (palette, interlock), those within this share of the best stay; weighted by the score to this power. */
+const SCORE_KEEP = 0.7
+const SCORE_POW = 2
 
 class Picker {
   private used = new Map<number, number>()
@@ -602,6 +609,11 @@ class Picker {
     tonal?: boolean; weight?: (s: SampleListItem) => number; not?: SampleListItem | null
     /** How well a sample fits the track (its feel): good fits come first, before the zip spread. */
     fit?: (s: SampleListItem) => number
+    /**
+     * How well it sits with what the track has already (its palette, how it interlocks; 0…1): only
+     * those near the best are kept, before the zip spread, and weighted by it.
+     */
+    score?: (s: SampleListItem) => number
   } = {}): SampleListItem | null {
     let c = opts.not ? cands.filter((s) => s.id !== opts.not!.id) : cands
     if (!c.length) c = cands
@@ -618,9 +630,14 @@ class Picker {
       const good = c.filter((s) => opts.fit!(s) >= GOOD_FIT)
       if (good.length) c = good
     }
+    const sc = opts.score ? new Map(c.map((s) => [s.id, opts.score!(s)])) : null
+    if (sc) {
+      const best = Math.max(...sc.values())
+      c = c.filter((s) => sc.get(s.id)! >= best * SCORE_KEEP)
+    }
     const least = Math.min(...c.map((s) => this.used.get(s.zip_id) ?? 0))
     c = c.filter((s) => (this.used.get(s.zip_id) ?? 0) === least)
-    return this.use(this.rng.pickBy(c, (s) => this.weight(s) * (opts.weight?.(s) ?? 1)))
+    return this.use(this.rng.pickBy(c, (s) => this.weight(s) * (opts.weight?.(s) ?? 1) * (sc ? sc.get(s.id)! ** SCORE_POW : 1)))
   }
 }
 
@@ -981,42 +998,73 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const preferShort = (s: SampleListItem) => ((s.bars ?? 1) <= 4 ? 2 : 1)
 
   /** Up to `n` different samples: `first`, then others from `cands`. */
-  const layers = (first: SampleListItem | null, cands: SampleListItem[], n: number, fit?: (s: SampleListItem) => number) => {
+  const layers = (first: SampleListItem | null, cands: SampleListItem[], n: number, fit?: (s: SampleListItem) => number,
+                  score?: (s: SampleListItem) => number) => {
     const out = first ? [first] : []
     while (out.length < n) {
       const left = cands.filter((s) => !out.some((o) => o.id === s.id))
-      const s = left.length ? picker.pick(left, { fit }) : null
+      // (Each layer interlocks with the ones before it too.)
+      const s = left.length ? picker.pick(left, { fit, score: score && ((x) => score(x) * (x.kind === 'loop' ? interlockFit(x, out) : 1)) }) : null
       if (!s) break
       out.push(s)
     }
     return out
   }
 
-  const kick = keptOr('kick', () => picker.pick(pool(of('oneshot', 'kick'))))
+  // ---- the track's character (SCOPE.md §6.6, "Identity"; an RNG of its own), drawn first: it
+  // sets where the sound palette leans. A kept or locked value stands; a track made before has none ----
+  const crng = new Rng(seed ^ 0x43484152)
+  // The arc and the track's variations: RNGs of their own too.
+  const hrng = new Rng(seed ^ 0x484f4c44)
+  // A track made again (a lane re-rolled, a choice changed: all its rules come along, `dropGaps` among
+  // them) from before a rule existed keeps going without it: nothing else in it changes.
+  const madeBefore = (rule: string) => !!keep.rules && 'dropGaps' in keep.rules && !(rule in keep.rules)
+  const xrng = new Rng(seed ^ 0x47455354)
+  const drawnCharacter = crng.pick(CHARACTERS)
+  // (A track made again carries its own, also when it has none: one made before characters.)
+  const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
+  const charRules = characterRules(drawnCharacter, crng, KICK_PHRASE_ENDS)
+
+  // ---- picked as a record (SCOPE.md §6.6): the kick is the anchor, the character sets where the
+  // palette leans, every other drum sample is picked by how it sits there; the loops as a set that
+  // interlocks (each by how little it lands on the 16ths of those chosen before it, in their tone) ----
+  const refs = paletteRefs(samples)
+  const kick = keptOr('kick', () => picker.pick(pool(of('oneshot', 'kick')), { score: (s) => paletteFit(s, paletteFor(character, null, refs), refs) }))
+  const palette: Palette = paletteFor(character, kick, refs)
+  const loopSet: SampleListItem[] = []
+  const addLoop = <T extends SampleListItem | null>(s: T): T => {
+    if (s?.kind === 'loop' && !loopSet.some((x) => x.id === s.id)) loopSet.push(s)
+    return s
+  }
+  /** How a drum sample sits with the track: in its palette, and (a loop) interlocking with the loops it has. */
+  const sits = (s: SampleListItem) => paletteFit(s, palette, refs) * (s.kind === 'loop' ? interlockFit(s, loopSet) : 1)
   // The main loops first: the track's feel comes from one of them, the other loops are picked to fit it.
   const topLoops = loopsOf('top')
-  const top0 = keptOr('top', () => picker.pick(topLoops))
-  const groove = keptOr('groove', () => picker.pick(loopsOf('groove')))
+  const top0 = addLoop(keptOr('top', () => picker.pick(topLoops, { score: sits })))
+  const groove = addLoop(keptOr('groove', () => picker.pick(loopsOf('groove'), { score: sits })))
   let feelSrc = [groove, top0].find(hasFeel) ?? null
   const fits = (s: SampleListItem) => feelFit(s.groove, feelSrc?.groove)
   const clapShots = pool(of('oneshot', 'clap', 'snare'))
-  const clap = keptOr('clap', () => picker.pick(clapShots))
+  const clap = keptOr('clap', () => picker.pick(clapShots, { score: sits }))
   // Layered claps (never a second kick): played together on the backbeat in drops.
-  const claps = layers(clap, clapShots, rng.weighted([[1, 2], [2, 3], [3, 2]] as const))
+  const claps = layers(clap, clapShots, rng.weighted([[1, 2], [2, 3], [3, 2]] as const), undefined, sits)
   const hatLoops = loopsOf('hat', 'hat_closed', 'hat_open', 'shaker')
-  // Rides come in later (drops only), never in intros and outros.
-  const ride = picker.pick(loopsOf('ride'), { fit: fits }) ?? picker.pick(pool(of('oneshot', 'ride')))
-  const rideSteps = steps(rng.chance(0.5) ? FOUR.map((s) => s + 2) : EIGHTHS, 2)
-  const hats = keptOr('hats', () => picker.pick(hatLoops, { weight: preferShort, fit: fits })
-    ?? picker.pick(pool(of('oneshot', 'hat_closed', 'hat', 'hat_open'))))
-  const hats2 = hats?.kind === 'loop' && rng.chance(0.55) ? picker.pick(hatLoops, { not: hats, fit: fits }) : null
+  const hats = addLoop(keptOr('hats', () => picker.pick(hatLoops, { weight: preferShort, fit: fits, score: sits })
+    ?? picker.pick(pool(of('oneshot', 'hat_closed', 'hat', 'hat_open')), { score: sits })))
   const percLoops = loopsOf('perc')
-  const perc = keptOr('perc', () => picker.pick(percLoops, { weight: preferShort, fit: fits }) ?? picker.pick(pool(of('oneshot', 'perc', 'shaker'))))
-  const perc2 = perc?.kind === 'loop' && rng.chance(0.6) ? picker.pick(percLoops, { not: perc, fit: fits }) : null
+  const perc = addLoop(keptOr('perc', () => picker.pick(percLoops, { weight: preferShort, fit: fits, score: sits })
+    ?? picker.pick(pool(of('oneshot', 'perc', 'shaker')), { score: sits })))
   // Top loops fill the track up: two to four of them, layered in drops and builds.
-  const tops = layers(top0, topLoops, rng.weighted([[2, 2], [3, 3], [4, 2]] as const), fits)
+  const tops = layers(top0, topLoops, rng.weighted([[2, 2], [3, 3], [4, 2]] as const), fits, sits)
+  tops.forEach(addLoop)
   const top = tops[0] ?? null
-  const groove2 = groove ? picker.pick(loopsOf('groove'), { not: groove, fit: fits }) : null
+  // The layers last, so they interlock with everything above. Rides come in later (drops only),
+  // never in intros and outros.
+  const hats2 = hats?.kind === 'loop' && rng.chance(0.55) ? addLoop(picker.pick(hatLoops, { not: hats, fit: fits, score: sits })) : null
+  const perc2 = perc?.kind === 'loop' && rng.chance(0.6) ? addLoop(picker.pick(percLoops, { not: perc, fit: fits, score: sits })) : null
+  const ride = addLoop(picker.pick(loopsOf('ride'), { fit: fits, score: sits }) ?? picker.pick(pool(of('oneshot', 'ride')), { score: sits }))
+  const rideSteps = steps(rng.chance(0.5) ? FOUR.map((s) => s + 2) : EIGHTHS, 2)
+  const groove2 = groove ? picker.pick(loopsOf('groove'), { not: groove, fit: fits, score: sits }) : null
   feelSrc ??= [perc, hats].find(hasFeel) ?? null
   const picks: Partial<Record<Role, SampleListItem>> = {}
   for (const [role, s] of [['kick', kick], ['clap', clap], ['hats', hats], ['perc', perc], ['top', top], ['groove', groove]] as const) {
@@ -1110,7 +1158,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const lifts = pool((s) => s.kind === 'event' && rising(s) && s.category !== 'fx_riser')
   const downs = pool((s) => s.kind === 'event' && falling(s))
   const impacts = pool(of('event', 'fx_impact'))
-  const crash = picker.pick(pool(of('oneshot', 'cymbal')))
+  const crash = picker.pick(pool(of('oneshot', 'cymbal')), { score: sits })
 
   // ---- the producer's own FX into a drop ----
   // Events of one track that lead into the same bar (bodies ending there) or start on it (an
@@ -1140,11 +1188,6 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // ---- the track's character and its lead (SCOPE.md §6.6, "Identity"; an RNG of their own): one of
   // a few kinds of club track, which sets the rules that go together, and the one element the track
   // is built around. A kept or locked value stands; a track made before has neither ----
-  const crng = new Rng(seed ^ 0x43484152)
-  const drawnCharacter = crng.pick(CHARACTERS)
-  // (A track made again carries its own, also when it has none: one made before characters.)
-  const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
-  const charRules = characterRules(drawnCharacter, crng, KICK_PHRASE_ENDS)
   const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
   const drawnLead = pickLead(character ?? drawnCharacter, crng, hasLead)
   const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : opts.locks && 'lead' in opts.locks ? opts.locks.lead : undefined
@@ -1281,6 +1324,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     bedIn: bedHits.length > 0 && arng.chance(BED_CHANCE),
     // The feel: how much of the main loop's groove the one-shots and the bass take on.
     feel: rng.int(70, 100) / 100,
+    // Where the sound palette sits (brightness, compactness; the kick's place and the character's lean).
+    palette,
+    // The arc: one element held back for the last drop (an RNG of its own).
+    hold: (madeBefore('hold') ? 'none' : hrng.weighted(HOLD_LEAN[character ?? 'none'])) as Hold,
+    // The track's own variations: two small ones every 8 bars, one at 16, a big one at 32 (an RNG of its own).
+    gestures: madeBefore('gestures') ? null as Gestures | null : drawGestures(xrng, character),
     // Loop variations: a top layer (or the second perc / hat loop) a little higher or lower, and
     // in the intro (mirrored in the outro) loops repeating only their first bar or two at first.
     pitchTop: tops.length > 1 && rng.chance(0.35) ? [rng.int(1, tops.length - 1), rng.weighted(PITCHES)] as [number, number] : null,
@@ -2118,10 +2167,31 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
   }
 
-  // ---- something changes every 8 bars: where the arrangement doesn't, a subtle variation ----
-  const varied = everyEightBars(lanes, sections, rng, {
-    kick, fill: fills.length ? endOn : null, fills, shapedBreaks: !!rules.glue,
+  // ---- the arc (SCOPE.md §6.6): one element held back for the last drop, so the peak has something
+  // the track hasn't played yet. It must play there and somewhere before it, else the next one the
+  // character leans to is held; none when nothing qualifies ----
+  const allDrops = sections.filter((x) => x.kind === 'drop')
+  const peakDrop = allDrops.length >= 2 ? allDrops[allDrops.length - 1] : null
+  let held: Hold = 'none'
+  if (peakDrop && rules.hold && rules.hold !== 'none') {
+    const plays = (r: Role, a: number, z: number) => (lanes.segs.get(r) ?? []).some((x) => x.start < z * BEATS_PER_BAR && x.start + x.length > a * BEATS_PER_BAR)
+      || Array.from({ length: Math.max(0, z - a) }, (_, k) => lanes.bar(r, a + k)).some(Boolean)
+    const ok = (h: Hold) => h !== 'none' && plays(h, peakDrop.start, peakDrop.start + peakDrop.bars) && plays(h, 0, peakDrop.start)
+    const lean = [...HOLD_LEAN[character ?? 'none']].sort((x, y) => y[1] - x[1]).map(([h]) => h)
+    held = [rules.hold as Hold, ...lean].find(ok) ?? 'none'
+    if (held !== 'none') {
+      lanes.cut(held, 0, peakDrop.start * BEATS_PER_BAR, true)
+      for (let b = 0; b < peakDrop.start; b++) lanes.setBar(held, b, null)
+    }
+  }
+  rules.hold = held
+
+  // ---- something changes every 8 bars: where the arrangement doesn't, a variation from the track's
+  // own vocabulary (small every 8 bars, bigger at 16 and 32) ----
+  const eight = everyEightBars(lanes, sections, rng, {
+    kick, fill: fills.length ? endOn : null, fills, shapedBreaks: !!rules.glue, gestures: (rules.gestures as Gestures | null) ?? null,
   })
+  const varied = eight.added
 
   // ---- disco hits on the 1 of key moments, taking turns when there are two (after the 8-bar
   // variations, so the rest of the track is the same with or without them) ----
@@ -2464,7 +2534,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (liftOf(sections[0]).length || liftOf(sections[sections.length - 1]).length) choices.push('the intro fills up into the drop, the outro thins out')
   if (rules.firstDrop === 'lean' && sections[1]?.kind === 'drop') choices.push('drop 1 starts leaner')
   if (rules.ioShort) choices.push(`intro loops on their first ${rules.ioShort === 1 ? 'bar' : '2 bars'} at first`)
-  if (varied) choices.push(`${varied} small variations at 8-bar marks`)
+  if (varied) {
+    const g = rules.gestures as Gestures | null
+    choices.push(g ? `${varied} variations of its own: ${g.small.map((t) => TWEAK_LABEL[t]).join(' or ')} every 8 bars, ${TWEAK_LABEL[g.medium]} at 16, ${TWEAK_LABEL[g.big]} at 32`
+      : `${varied} small variations at 8-bar marks`)
+  }
+  if (held !== 'none' && peakDrop) choices.push(`${HOLD_LABEL[held]} held back for the last drop`)
+  if (character || kick) {
+    const lean = (v: number, lo: string, hi: string) => (Math.abs(v) < 0.25 ? null : `${v < 0 ? lo : hi}`)
+    const how = [lean(palette.bright, 'dark', 'bright'), lean(palette.compact, 'soft', 'punchy')].filter(Boolean).join(' and ')
+    choices.push(`drums picked as one palette around the kick${how ? ` (${how})` : ''}, loops picked to interlock`)
+  }
   if (ridden.parts.size) {
     const own = tpl && ridden.from.size === 1 && ridden.from.has(tpl.source)
     choices.push(`filter and volume rides on ${[...ridden.parts].join(', ')}${own ? ` as in ${tpl!.source}` : ` after ${[...ridden.from].sort().join(', ')}`}`)
@@ -2508,7 +2588,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   if (tops.length > 1) choices.push(`${Math.min(tops.length, tracks.tops + 1)} top loops`)
   if (claps.length > 1) choices.push(`${claps.length} layered claps`)
-  if (ride) choices.push({ late: 'ride later in drop 1', second: 'ride from drop 2', both: 'ride late in drop 1, then all through' }[rules.ride])
+  if (ride && held !== 'ride') choices.push({ late: 'ride later in drop 1', second: 'ride from drop 2', both: 'ride late in drop 1, then all through' }[rules.ride])
   if (rules.dropKickOut) choices.push('four kicks out before drops')
   const early = Object.values(dropGaps).filter((t) => t > TO_THE_LINE)
   if (early.length) {
@@ -2531,8 +2611,57 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 type EndOn = (job: string, role: Role, cands: SampleListItem[], endBeat: number, room: number, want: number,
               tonal?: boolean, gap?: number, weight?: (s: SampleListItem) => number) => SampleListItem | null
 
-/** Which way a variation goes (the last one is less likely next time, so they don't repeat). */
-type Tweak = 'kick' | 'hatGap' | 'layerOut' | 'loopVary' | 'clap' | 'fill' | 'lift'
+/** Which way a variation goes. */
+export type Tweak = 'kick' | 'hatGap' | 'layerOut' | 'loopVary' | 'clap' | 'fill' | 'lift'
+export const TWEAKS: Tweak[] = ['kick', 'hatGap', 'layerOut', 'loopVary', 'clap', 'fill', 'lift']
+export const TWEAK_LABEL: Record<Tweak, string> = {
+  kick: 'a kick variation', hatGap: 'the hats stopping', layerOut: 'a layer out', loopVary: 'a loop playing another part',
+  clap: 'a clap ghost', fill: 'a fill', lift: 'a high-pass lift',
+}
+
+/**
+ * A track's own variations (rule `gestures`): instead of something new at every 8-bar mark, a small
+ * vocabulary used again and again, in a hierarchy: one of two small ones every 8 bars, a medium one
+ * at 16, a big one at 32 (there the medium one comes with it). Repetition is the identity.
+ */
+export interface Gestures { small: Tweak[]; medium: Tweak; big: Tweak }
+
+/** Which variations each character leans to. */
+const GESTURE_LEAN: Record<Character | 'none', Record<Tweak, number>> = {
+  dub: { kick: 1, hatGap: 1, layerOut: 3, loopVary: 3, clap: 0.5, fill: 0.5, lift: 2 },
+  disco: { kick: 1, hatGap: 1, layerOut: 1, loopVary: 1, clap: 3, fill: 3, lift: 2 },
+  drums: { kick: 3, hatGap: 3, layerOut: 1, loopVary: 2, clap: 2, fill: 1, lift: 0.5 },
+  deep: { kick: 1, hatGap: 1, layerOut: 2, loopVary: 3, clap: 1, fill: 0.5, lift: 2 },
+  none: { kick: 1, hatGap: 1, layerOut: 1, loopVary: 1, clap: 1, fill: 1, lift: 1 },
+}
+/** A variation of the track's vocabulary weighs this much more at its marks; one outside it this much less. */
+const VOCAB_BOOST = 6
+const VOCAB_OTHER = 0.25
+
+export function drawGestures(rng: Rng, character: Character | null | undefined): Gestures {
+  const lean = GESTURE_LEAN[character ?? 'none']
+  const left = [...TWEAKS]
+  const take = () => {
+    const t = rng.pickBy(left, (x) => lean[x])
+    left.splice(left.indexOf(t), 1)
+    return t
+  }
+  const small = [take(), take()]
+  const medium = take()
+  // The big one: the strongest the character has left (a fill or a lift where it can).
+  return { small, medium, big: take() }
+}
+
+/** What the arc can hold back for the last drop (rule `hold`). */
+export type Hold = 'ride' | 'perc2' | 'hats2' | 'groove' | 'none'
+export const HOLD_LABEL: Record<Exclude<Hold, 'none'>, string> = { ride: 'the ride', perc2: 'the second perc', hats2: 'the second hat loop', groove: 'the groove loop' }
+const HOLD_LEAN: Record<Character | 'none', [Hold, number][]> = {
+  dub: [['ride', 3], ['perc2', 2], ['groove', 1], ['hats2', 1], ['none', 1]],
+  disco: [['groove', 3], ['ride', 2], ['hats2', 2], ['perc2', 1], ['none', 1]],
+  drums: [['perc2', 3], ['groove', 2], ['hats2', 2], ['ride', 1], ['none', 1]],
+  deep: [['ride', 3], ['hats2', 2], ['perc2', 1], ['groove', 1], ['none', 1]],
+  none: [['ride', 2], ['perc2', 2], ['hats2', 1], ['groove', 1], ['none', 1]],
+}
 
 /**
  * Every 8-bar mark inside a section gets a change: where nothing in the arrangement changes
@@ -2543,7 +2672,8 @@ type Tweak = 'kick' | 'hatGap' | 'layerOut' | 'loopVary' | 'clap' | 'fill' | 'li
  * steady kick and hats. Returns how many were added.
  */
 function everyEightBars(lanes: Lanes, sections: Section[], rng: Rng,
-                        ctx: { kick: SampleListItem | null; fill: EndOn | null; fills: SampleListItem[]; shapedBreaks?: boolean }): number {
+                        ctx: { kick: SampleListItem | null; fill: EndOn | null; fills: SampleListItem[]; shapedBreaks?: boolean; gestures?: Gestures | null }):
+  { added: number; used: Partial<Record<Tweak, number>> } {
   // (Not the stabs: their 2-bar rhythm changes every bar, and the drums are the same with or without them.)
   const changed = (b: number) => lanes.roles().filter((r) => !STAB_ROLES.includes(r)).some((r) => {
     const s1 = lanes.state(r, b - 1)
@@ -2553,6 +2683,8 @@ function everyEightBars(lanes: Lanes, sections: Section[], rng: Rng,
   const VARY: Role[] = ['top', 'top2', 'top3', 'top4', 'groove', 'perc', 'perc2', 'hats2']
   let last: Tweak | null = null
   let added = 0
+  const used: Partial<Record<Tweak, number>> = {}
+  const voc = ctx.gestures
   for (const sec of sections) {
     // (A breakdown with the groove carried through has its own shape: nothing is taken out of it here,
     // least of all the one part that keeps time.)
@@ -2619,20 +2751,32 @@ function everyEightBars(lanes: Lanes, sections: Section[], rng: Rng,
       if (lift.length) {
         cands.push(['lift', 1, () => lanes.vary(rng.pick(lift), B - 4, B, { filter: { type: 'highpass', from: 200, to: 2500, q: 0.8 } })])
       }
+      // The mark's place in the section: every 8 bars, at 16, at 32 (the track's vocabulary for each).
+      const k = (b - sec.start) / PHRASE
+      const tier = k % 4 === 0 ? 'big' : k % 2 === 0 ? 'medium' : 'small'
+      const vocab: Tweak[] | null = voc ? (tier === 'small' ? voc.small : [voc[tier]]) : null
+      const weigh = ([t, w]: [Tweak, number, () => void]) => vocab ? w * (vocab.includes(t) ? VOCAB_BOOST : VOCAB_OTHER) : t === last ? w * 0.3 : w
       // One that really changes something (another if it didn't, say a rotation landing in phase).
       while (cands.length) {
-        const pick = rng.pickBy(cands, ([k, w]) => (k === last ? w * 0.3 : w))
+        const pick = rng.pickBy(cands, weigh)
         pick[2]()
         cands.splice(cands.indexOf(pick), 1)
         if (changed(b)) {
           last = pick[0]
+          used[pick[0]] = (used[pick[0]] ?? 0) + 1
           added++
+          // At 32 bars the medium one comes with it: a bigger change.
+          const also = tier === 'big' && voc ? cands.find(([t]) => t === voc.medium) : undefined
+          if (also) {
+            also[2]()
+            used[also[0]] = (used[also[0]] ?? 0) + 1
+          }
           break
         }
       }
     }
   }
-  return added
+  return { added, used }
 }
 
 /** The track rules each lane owns: re-rolling the lane draws these again, the others stay. */

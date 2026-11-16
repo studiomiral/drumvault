@@ -7,7 +7,7 @@ import { attempt, serumPresetRoot, useApp } from '../store/app'
 import { SERUM_MODULES } from '../components/SerumFolders'
 import { loadBass, useBass } from '../store/bass'
 import { cleanRenders } from '../store/renders'
-import type { CleanRendersResult } from '../types/engine'
+import type { CleanRendersResult, ReferencesResult } from '../types/engine'
 import type { ElevenStatus, LibraryFacets } from '../types/api'
 import type { Category } from '../types/engine'
 
@@ -167,6 +167,8 @@ export function SettingsView() {
 
           <SerumSettingsSection />
 
+          <ReferencesSection />
+
           <StorageSection />
 
           <ElevenLabsSection />
@@ -321,6 +323,87 @@ function StorageSection() {
           </Button>
         </span>
       </Field>
+    </section>
+  )
+}
+
+const signed = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? '–' : `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(digits)}`)
+
+/**
+ * References (SCOPE.md §5.17): finished tracks dropped into the library's References folder, each
+ * measured as a whole mix. An export's masters are held against them (the pre-flight).
+ */
+function ReferencesSection() {
+  const { engine, toast } = useApp()
+  const ready = engine.state === 'ready'
+  const [refs, setRefs] = useState<ReferencesResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = async (analyze: boolean) => {
+    try {
+      setRefs(await api.scanReferences(analyze))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  useEffect(() => {
+    if (ready) void load(false)
+  }, [ready])
+  const measure = async () => {
+    setBusy(true)
+    await load(true)
+    setBusy(false)
+    toast('info', 'References measured.')
+  }
+  const measured = refs?.tracks.filter((t) => t.profile) ?? []
+  return (
+    <section>
+      <SectionTitle right={refs && <Button variant="ghost" onClick={() => void api.openFolder(refs.folder)}>Open folder</Button>}>References</SectionTitle>
+      <Field label="Reference tracks" hint="finished tracks (WAV, AIFF, FLAC, MP3) in the library's References folder: an export's masters are checked against them">
+        <span className="text-[12.5px] flex items-center gap-3">
+          {!ready ? <span className="text-muted">Waiting for the engine…</span>
+            : error ? <span className="text-bad select-text">{error}</span>
+              : !refs ? <span className="text-muted">Reading…</span>
+                : (
+                  <span className="text-muted">
+                    {measured.length} measured
+                    {refs.pending > 0 && <> · <span className="text-text">{refs.pending} new</span></>}
+                    {measured.length < 3 && <> · 3 or more are needed to compare against</>}
+                  </span>
+                )}
+          <Button variant="secondary" disabled={!ready || busy || !refs?.pending} onClick={() => void measure()}
+                  title="Measure the new and changed files: tempo, key, loudness, drops, tone and width (some seconds a track)">
+            {busy ? 'Measuring…' : 'Measure new tracks'}
+          </Button>
+        </span>
+      </Field>
+      {refs && refs.tracks.length > 0 && (
+        <table className="w-full mt-2 text-[12px]">
+          <thead>
+            <tr className="text-faint text-left">
+              <th className="font-normal py-1">Track</th><th className="font-normal">BPM</th><th className="font-normal">Key</th>
+              <th className="font-normal">LUFS</th><th className="font-normal" title="True peak over loudness">Crest</th>
+              <th className="font-normal">Drops</th><th className="font-normal" title="A drop's first 8 bars against the 8 before">Lift</th>
+              <th className="font-normal" title="The sides against the middle, in the drops">Width</th>
+            </tr>
+          </thead>
+          <tbody>
+            {refs.tracks.map((t) => (
+              <tr key={t.rel_path} className="border-t border-line">
+                <td className="py-1 pr-2 truncate max-w-[260px] select-text" title={t.rel_path}>{t.name}</td>
+                {t.profile ? (
+                  <>
+                    <td>{t.bpm ?? '–'}</td><td>{t.key_label ?? '–'}</td><td>{signed(t.profile.lufs)}</td>
+                    <td>{signed(t.profile.plr_db)} dB</td><td>{t.profile.drops.length}</td>
+                    <td>{t.profile.lift_lu === null ? '–' : `${signed(t.profile.lift_lu)} LU`}</td><td>{signed(t.profile.width_db)} dB</td>
+                  </>
+                ) : <td colSpan={7} className="text-warn select-text">{t.error ?? 'not measured'}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </section>
   )
 }

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -114,6 +114,19 @@ CREATE TABLE IF NOT EXISTS hits (
   punch_db REAL,                    -- as samples.punch_db (v16): the level a stab is set by, hit for hit
   voices INTEGER,                   -- how many notes it plays (v16): 1–2 a single note, 3 or more a chord
   created_at TEXT
+);
+
+-- Reference tracks (schema v17): finished tracks in <Library>/References/, each measured as a whole
+-- mix (mixprofile.py). The pre-flight holds an export's masters against them.
+CREATE TABLE IF NOT EXISTS reference_tracks (
+  id INTEGER PRIMARY KEY,
+  rel_path TEXT UNIQUE,             -- under <Library>/References/
+  size INTEGER, mtime REAL,         -- the file as it was measured: changed, it is measured again
+  bpm REAL, key_label TEXT,
+  grid_confidence REAL,             -- how well its beats were found (tempo.py)
+  profile TEXT,                     -- JSON, mixprofile.measure
+  error TEXT,                       -- why it couldn't be measured (then no profile)
+  analyzed_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_samples_cat ON samples(kind, category);
@@ -368,6 +381,19 @@ class LibraryDB:
 
     def midi_path_taken(self, rel_path: str) -> bool:
         return self.conn.execute("SELECT 1 FROM midi_files WHERE rel_path = ?", (rel_path,)).fetchone() is not None
+
+    # ---- reference tracks ---------------------------------------------------
+    def list_references(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM reference_tracks ORDER BY rel_path COLLATE NOCASE").fetchall()
+
+    def set_reference(self, rel_path: str, **fields: Any) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM reference_tracks WHERE rel_path = ?", (rel_path,))
+            self._insert("reference_tracks", {"rel_path": rel_path, "analyzed_at": now_iso(), **fields})
+
+    def delete_reference(self, rel_path: str) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM reference_tracks WHERE rel_path = ?", (rel_path,))
 
     def loops_without_groove(self) -> list[sqlite3.Row]:
         return self.conn.execute(

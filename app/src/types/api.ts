@@ -1,7 +1,7 @@
 // The contract between the Electron main process and the renderer
 // (exposed by electron/preload.ts as `window.drumvault`).
 
-import type { Category, CleanRendersResult, EngineSettings, GridPreview, HealthResult, MasterResult, Overrides, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
+import type { Category, CleanRendersResult, EngineSettings, GridPreview, HealthResult, MasterResult, Overrides, PreflightResult, PreflightSection, ReferencesResult, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
 import type { ProjectFileInfo } from './project'
 import type { VocalMeta, VocalRequest } from '../vocals/plan'
 
@@ -493,6 +493,14 @@ export interface DrumvaultAPI {
   writeExportFile(dir: string, name: string, data: ArrayBuffer): Promise<void>
   /** Master `mix` (a .wav in `dir`) through Ozone 11 into `out` next to it, on the loudness target. */
   masterMixdown(dir: string, mix: string, out: string, format: 'pcm24' | 'float32'): Promise<MasterResult>
+  /**
+   * The pre-flight (SCOPE.md §6.5a): `mix` and the master made from it (both .wav in `dir`; no
+   * `master`, the mixdown alone) measured and checked. `sections`: a generated track's, in bars
+   * from the file's start; `whole`: the files are the whole track, not a loop region.
+   */
+  preflight(dir: string, mix: string, master: string | null, o: { bpm: number; sections: PreflightSection[] | null; key: string | null; whole: boolean }): Promise<PreflightResult>
+  /** The reference tracks in `<Library>/References`; with `analyze`, new files are measured first (some seconds each). */
+  scanReferences(analyze: boolean): Promise<ReferencesResult>
   /**
    * The bass and strings renders (and older tracks' keys, stab and drone ones) and stretched FX
    * that aren't in `keep` (library-relative) nor made in the last 10 minutes: deleted, or with

@@ -7,6 +7,7 @@ import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import type { WavFormat } from '../audio/wav'
+import { Preflight } from './Preflight'
 import { exportDir, exportFolderName, exportStems, exportTargets, hasVocals, MASTERED_FILE, MASTERED_INSTRUMENTAL_FILE, midiParts, safeName, type ExportOptions, type ExportResult } from './exporter'
 
 type Phase =
@@ -122,6 +123,10 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                 peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
               </p>
             )}
+            {phase.result?.preflight && <Preflight result={phase.result.preflight} />}
+            {phase.result?.preflightError && (
+              <p className="text-warn mb-2 select-text">The masters were not checked: {phase.result.preflightError}</p>
+            )}
             <p className="text-muted mb-3">
               {phase.files.length} file{phase.files.length === 1 ? '' : 's'} in <span className="text-text select-text">{dir}/{safeName(base.folder)}</span>.
               In Logic, set the project to <b className="text-text">{formatBpm(project.bpm)} BPM</b> and import them at
@@ -183,7 +188,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             <input type="checkbox" className="accent-[#e2c35f]" checked={master} disabled={running} onChange={(e) => setMaster(e.target.checked)} />
             <span className="font-medium">Masters</span>
             <span className="text-[11px] text-faint">
-              mixdown.wav (all unmuted lanes) and mastered.wav (Ozone 11, −6.5 LUFS, 0 dB ceiling){hasVocals(project) ? ', and both without the vocals (instrumental)' : ''}
+              mixdown.wav (all unmuted lanes) and mastered.wav (Ozone 11, −6.5 LUFS, 0 dB ceiling){hasVocals(project) ? ', and both without the vocals (instrumental)' : ''}, checked before they go out
             </span>
           </label>
           <label className={cx('flex items-center gap-2 col-span-2', !parts.length && 'text-faint')}>

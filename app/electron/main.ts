@@ -517,6 +517,21 @@ function registerIpc(): void {
       mix_path: exportFile(dir, mix), out_path: exportFile(dir, out), format, settings: engineSettings(),
     }, 600_000)
   })
+  // The masters as they were written, measured and checked (the engine's preflight.py).
+  ipcMain.handle('export:preflight', async (_e, dir: string, mix: string, master: string | null,
+                                            o: { bpm: number; sections: { kind: string; start: number; bars: number }[] | null; key: string | null; whole: boolean }) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    if (!/\.wav$/i.test(mix) || (master !== null && !/\.wav$/i.test(master))) throw new Error(`Bad export path: ${master ?? mix}`)
+    return sidecar.request('preflight', {
+      mix_path: exportFile(dir, mix), master_path: master === null ? null : exportFile(dir, master),
+      bpm: o.bpm, sections: o.sections, key_label: o.key, whole: o.whole, settings: engineSettings(),
+    }, 300_000)
+  })
+  // The reference tracks in <Library>/References: listed, or (analyze) the new ones measured first.
+  ipcMain.handle('references:scan', async (_e, analyze: boolean) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    return sidecar.request('scan_references', { analyze, settings: engineSettings() }, 1_800_000)
+  })
   ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
   ipcMain.handle('shell:openFolder', (_e, path: string) => shell.openPath(path))
 
