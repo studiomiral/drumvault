@@ -28,6 +28,37 @@ export interface Lane {
   height: number       // px
   /** Sidechain: the lane ducks under every kick hit by this much (0…1); none when undefined. */
   duck?: number
+  /** How long each duck takes to recover, in beats (the kick's length, SCOPE.md §6.6); most of a beat when undefined. */
+  duckBeats?: number
+  /**
+   * The lane's low end below this (Hz) is summed to mono (SCOPE.md §6.6): the kick's and the
+   * bass's, so the low end holds up on a mono club system. Stereo all the way down when undefined.
+   */
+  monoBelow?: number
+  /** The lane's reverb is a short room (what stabs sit in) instead of the hall of the reverb builds. */
+  room?: boolean
+  /**
+   * The lane's level in the generated mix (SCOPE.md §6.6): dB that bring its samples to their
+   * place in the balance, on top of `volumeDb` (the slider stays the producer's).
+   */
+  levelDb?: number
+  /** The lane's EQ in the generated mix (SCOPE.md §6.6), in playback and baked into its stem. */
+  eq?: LaneEq
+}
+
+/** One band of a lane EQ (Web Audio biquads: a high-pass's Q in dB, a bell's as is; shelves have none). */
+export interface EqBand {
+  type: 'highpass' | 'lowshelf' | 'peaking' | 'highshelf'
+  freq: number
+  gainDb: number
+  q: number
+}
+
+/** A lane EQ: its bands, the makeup gain that keeps the lane as loud as without them, and off (bypassed). */
+export interface LaneEq {
+  bands: EqBand[]
+  gainDb: number
+  off?: boolean
 }
 
 /**
@@ -62,6 +93,11 @@ interface ClipBase {
   sample: SampleRef
   filter?: ClipFilter
   verb?: ClipReverb
+  /**
+   * A delay throw (SCOPE.md §6.9): the clip sent, by this much (0…1), to its lane's delay, which
+   * repeats it a dotted 8th later and again, each time quieter and thinner. In the lane's stem.
+   */
+  echo?: number
   /** Fade-in / fade-out lengths in beats: linear gain ramps from the clip's edges. */
   fadeIn?: number
   fadeOut?: number
@@ -74,10 +110,13 @@ interface ClipBase {
 
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
-  /** Absent on older bass projects. Keys and Serum chord stabs (§6.9) share the render pipeline. */
-  role?: 'bass' | 'keys' | 'stab'
+  /**
+   * Absent on older bass projects. Strings (§6.10) and vocal phrases (§6.11) share the render
+   * pipeline; keys parts, Serum chord stabs and drones only in tracks made before they were removed.
+   */
+  role?: 'bass' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal' | 'pad' | 'ambience'
   keyLabel?: string | null
-  /** Absolute path of the .SerumPreset. */
+  /** Absolute path of the .SerumPreset; strings' is a Strings page sample (library-relative). */
   preset: string
   presetName: string
   midiId: number
@@ -92,8 +131,12 @@ export interface BassRender {
   bars?: number
   /** The track's groove: per 16th step, how late (in 16ths) notes starting there play. */
   groove?: number[]
-  /** A chord stab part: the patch's own chord (semitones from the root), or its root alone (a patch that plays a chord from one key). */
+  /** An older track's Serum chord stab part: the patch's own chord (semitones from the root), or its root alone. */
   stab?: { voicing?: number[]; oneKey?: boolean }
+  /** An older track's drone: how it was made (its file is named after it; it isn't made again). */
+  drone?: { rhythm: string; warp?: string; start?: number }
+  /** A vocal phrase: the key it's sung in (`transpose` moves it from there) and its take's id. */
+  vocal?: { key: string | null; take: string }
 }
 
 /** A loop on the bar grid; extending it repeats the loop. */
@@ -117,6 +160,8 @@ export interface PatternClip extends ClipBase {
   steps: Velocity[]    // patternBars * 16
   /** Played with a loop's feel: per 16th step of the bar, how late (16ths) and how loud (dB). */
   groove?: StepGroove
+  /** Each hit plays at most this long (beats), fading out at its end (a gated stab); to its end when unset. */
+  gate?: number
 }
 
 /** A groove applied to one-shot steps (taken from a loop, see LoopGroove in api.ts). */
@@ -157,8 +202,8 @@ export interface Project {
   createdAt: string
   updatedAt: string
   /**
-   * A project sent from Generate: the track it was made as (structure, key, rules, picks, bass
-   * and keys), so its lanes keep their modules in Arrange: a new sound, the lane made again.
+   * A project sent from Generate: the track it was made as (structure, key, rules, picks, bass),
+   * so its lanes keep their modules in Arrange: a new sound, the lane made again.
    */
   generation?: GenerationMeta
 }

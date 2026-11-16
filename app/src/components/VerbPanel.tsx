@@ -10,16 +10,15 @@ const EVERY = [
   { value: '8', label: '+ every 8 bars' },
 ]
 
-/** Reverb builds (SCOPE.md §6.6): the top loops and/or keys washing out into drops and breaks. */
+/** Reverb builds (SCOPE.md §6.6): the top loops washing out into drops and breaks. */
 export function VerbPanel({ fixed }: { fixed?: boolean }) {
   const opts = useGenerate((s) => s.settings.verb)
   const dragging = useRef(false)
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px]'
-  const on = [opts.tops && 'tops', opts.keys && 'keys'].filter(Boolean).join(' and ')
   const where = `into drops and breaks${opts.every ? `, every ${opts.every} bars` : ''}`
   const summary = !opts.enabled ? 'Off: G generates without reverb builds'
-    : !on ? 'On, but on no part: choose tops and/or keys'
-      : <><span className="text-text">{on[0].toUpperCase() + on.slice(1)}</span> · {where} · {Math.round(opts.amount * 100)}%</>
+    : !opts.tops ? 'On, but on no part: choose the top loops'
+      : <><span className="text-text">Tops</span> · {where} · {Math.round(opts.amount * 100)}%</>
 
   return (
     <Module id="verb" title="Reverb builds" fixed={fixed} enabled={opts.enabled} onEnabled={(enabled) => setVerbOptions({ enabled })}
@@ -30,8 +29,6 @@ export function VerbPanel({ fixed }: { fixed?: boolean }) {
         <span className="flex flex-wrap items-center gap-1.5">
           <button className={cx(btn, opts.tops && 'bg-accent/20 text-accent')} onClick={() => setVerbOptions({ tops: !opts.tops })}
                   title="The top loops still playing wash out into the line">Top loops</button>
-          <button className={cx(btn, opts.keys && 'bg-accent/20 text-accent')} onClick={() => setVerbOptions({ keys: !opts.keys })}
-                  title="The keys part washes out into the line">Keys</button>
         </span>
         <span className="text-muted">Where</span>
         <span className="flex flex-wrap items-center gap-2">

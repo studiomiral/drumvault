@@ -5,17 +5,18 @@ import { laneRole } from '../generate/generator'
 import type { ProjectFileInfo } from '../types/project'
 
 /** What the lane panel shows (Generate's, and Arrange's beside the timeline): a module, or a lane (by name). */
-export type Panel = { module: 'bass' | 'chords' | 'disco' | 'verb' } | { lane: string }
+export type Panel = { module: 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb' } | { lane: string }
 
-/** The panel a lane opens: its module (Bass, Chords, Disco Hits), else the lane itself. */
+/** The panel a lane opens: its module (Bass, Chords, Strings, Disco Hits), else the lane itself. */
 export function panelOf(laneName: string): Panel {
   const role = laneRole(laneName)
-  return role === 'bass' ? { module: 'bass' } : role === 'keys' || role === 'stab' ? { module: 'chords' }
-    : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
+  return role === 'bass' ? { module: 'bass' } : role === 'stab' || role === 'stab2' || role === 'stab3' ? { module: 'chords' }
+    : role === 'vocal' || role === 'vchop' ? { module: 'vocals' } : role === 'strings' ? { module: 'strings' } : role === 'pad' ? { module: 'pads' } : role === 'bed' ? { module: 'ambience' } : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
 }
 
 export const MIN_PX_PER_BEAT = 0.5  // 192 bars fit in ~400 px
 export const MAX_PX_PER_BEAT = 160
+export const DEFAULT_PX_PER_BEAT = 12
 
 interface ArrangeState {
   pxPerBeat: number
@@ -34,7 +35,7 @@ interface ArrangeState {
 }
 
 export const useArrange = create<ArrangeState>((set) => ({
-  pxPerBeat: 12,
+  pxPerBeat: DEFAULT_PX_PER_BEAT,
   scrollX: 0,
   scrollY: 0,
   libraryOpen: true,

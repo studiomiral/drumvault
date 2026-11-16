@@ -1,32 +1,67 @@
 import { useEffect, useState } from 'react'
 import { audition } from '../audio/audition'
-import { choicesOfRole, optionKey, type Choice } from '../generate/choices'
+import { choicesOfRole, choiceValue, optionKey, type Choice } from '../generate/choices'
 import { laneRole, type Generation, type Role } from '../generate/generator'
 import { useApp } from '../store/app'
 import type { Panel } from '../store/arrange'
-import { laneKept, LOCKABLE, newSound, rerollLane, setChoice, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { eqSummary } from '../generate/eq'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
+import { StringsPanel } from './StringsPanel'
+import { PadsPanel } from './PadsPanel'
+import { AmbiencePanel } from './AmbiencePanel'
+import { VocalPanel } from './VocalPanel'
 import { IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
 import { VerbPanel } from './VerbPanel'
-import { cx } from './ui'
+import { cx, Toggle } from './ui'
 
 
 /** The lanes a module plays on. */
 const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   bass: () => ['Bass'],
-  chords: (g) => (g.keys ? ['Keys'] : ['Stab']),
+  chords: () => ['Stab', 'Stab 2', 'Stab 3'],
+  strings: () => ['Strings'],
+  pads: () => ['Pad'],
+  ambience: () => ['Ambience'],
+  vocals: () => ['Vocal', 'Vocal Chops'],
   disco: () => ['Disco Hit', 'Disco Hit 2'],
   verb: () => [],
 }
 
-const PILLS: { module: 'bass' | 'chords' | 'disco' | 'verb'; label: string }[] = [
-  { module: 'bass', label: 'Bass' }, { module: 'chords', label: 'Chords' }, { module: 'disco', label: 'Disco Hits' }, { module: 'verb', label: 'Reverb' },
+type ModuleId = 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb'
+
+/** The modules' pills; `only` the view one shows in (vocals are made in Arrange, reverb builds are G's). */
+const PILLS: { module: ModuleId; label: string; on?: string; off?: string; only?: 'generate' | 'arrange' }[] = [
+  { module: 'bass', label: 'Bass', on: 'On: G writes a bass for every new generation', off: 'Off: new generations have no bass' },
+  { module: 'chords', label: 'Chords', on: 'On: G writes chord stabs for every new generation', off: 'Off: new generations have no chord stabs' },
+  { module: 'vocals', label: 'Vocals', only: 'arrange' },
+  { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
+  { module: 'pads', label: 'Pads', on: 'On: new generations may get a pad or a reese in their breakdowns', off: 'Off: new generations have no breakdown layer' },
+  { module: 'ambience', label: 'Ambience', on: 'On: most new generations get a very quiet texture under them', off: 'Off: new generations have no ambience bed' },
+  { module: 'disco', label: 'Disco Hits', on: 'On: some new generations drop one or two disco hits', off: 'Off: new generations have no disco hits' },
+  { module: 'verb', label: 'Reverb', on: 'On: new generations get reverb builds', off: 'Off: new generations have no reverb builds', only: 'generate' },
 ]
 
+/** Whether G writes each module into new generations (the pills' switches, Generate only). */
+function useModulesOn(): Partial<Record<ModuleId, boolean>> {
+  const s = useGenerate((x) => x.settings)
+  return { bass: s.bass.enabled, chords: s.stabs.enabled, strings: s.strings.enabled, pads: s.pads.enabled, ambience: s.ambience.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
+}
+
+function setModuleOn(module: ModuleId, on: boolean): void {
+  if (module === 'bass') setBassOptions({ enabled: on })
+  else if (module === 'chords') setStabOptions({ enabled: on })
+  else if (module === 'strings') setStringsOptions({ enabled: on })
+  else if (module === 'pads') setPadsOptions({ enabled: on })
+  else if (module === 'ambience') setAmbienceOptions({ enabled: on })
+  else if (module === 'disco') setDiscoOptions({ enabled: on })
+  else setVerbOptions({ enabled: on })
+}
+
 /**
- * The lane panel (SCOPE.md §6.6): the modules of the track (Bass, Chords, Disco Hits, Reverb
+ * The lane panel (SCOPE.md §6.6): the modules of the track (Bass, Chords, Strings, Disco Hits, Reverb
  * builds), one at a time, or a lane's sounds and the choices that shape it. Each lane on it can
  * get a new sound where it plays, be made again, and (in Generate) be kept for the next track.
  * In Generate it acts on the generation on screen, in Arrange on the open project.
@@ -40,21 +75,36 @@ export function LanePanel({ g, panel, onPanel, where }: {
   const lanes = 'lane' in panel ? [panel.lane] : MODULE_LANES[panel.module](g)
   const shown = lanes.filter((name) => g.project.lanes.some((l) => l.name === name))
   const role = 'lane' in panel ? laneRole(panel.lane) : null
+  const modulesOn = useModulesOn()
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        {PILLS.filter((p) => where === 'generate' || p.module !== 'verb').map((p) => (
-          <button key={p.module} onClick={() => onPanel({ module: p.module })}
-                  className={cx('h-7 px-2.5 rounded-lg text-[12px] transition-colors',
-                    'module' in panel && panel.module === p.module ? 'bg-accent-soft text-accent' : 'bg-raised text-muted hover:text-text')}>
-            {p.label}
-          </button>
-        ))}
+        {PILLS.filter((p) => !p.only || p.only === where).map((p) => {
+          const open = 'module' in panel && panel.module === p.module
+          return (
+            <span key={p.module} className={cx('h-7 rounded-lg inline-flex items-center transition-colors',
+              open ? 'bg-accent-soft' : 'bg-raised', where === 'generate' && 'pl-2')}>
+              {/* Generate only: whether G writes it (in Arrange it's the project's own). */}
+              {where === 'generate' && (
+                <Toggle checked={!!modulesOn[p.module]} onChange={(on) => setModuleOn(p.module, on)}
+                        label={`${p.label} in new generations`} title={modulesOn[p.module] ? p.on : p.off} />
+              )}
+              <button onClick={() => onPanel({ module: p.module })}
+                      className={cx('h-7 px-2.5 text-[12px]', open ? 'text-accent' : modulesOn[p.module] || where === 'arrange' ? 'text-muted hover:text-text' : 'text-faint hover:text-text')}>
+                {p.label}
+              </button>
+            </span>
+          )
+        })}
         {'lane' in panel && <span className="h-7 px-2.5 rounded-lg text-[12px] bg-accent-soft text-accent inline-flex items-center">{panel.lane}</span>}
       </div>
       {shown.map((name) => <LaneBar key={name} g={g} laneName={name} where={where} />)}
       {'module' in panel && panel.module === 'bass' && <BassPanel g={g} fixed />}
       {'module' in panel && panel.module === 'chords' && <ChordsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'vocals' && <VocalPanel g={g} where={where} fixed />}
+      {'module' in panel && panel.module === 'strings' && <StringsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'pads' && <PadsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'ambience' && <AmbiencePanel g={g} fixed />}
       {'module' in panel && panel.module === 'disco' && <DiscoPanel g={g} fixed />}
       {'module' in panel && panel.module === 'verb' && <VerbPanel fixed />}
       {'lane' in panel && !shown.length && <p className="text-muted text-[12.5px]">This track has no {panel.lane} lane.</p>}
@@ -73,27 +123,40 @@ function LaneBar({ g, laneName, where }: { g: Generation; laneName: string; wher
   const toast = useApp((s) => s.toast)
   const kept = role && laneKept(role, keep)
   const btn = 'h-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] inline-flex items-center gap-1.5'
-  const rendered = role === 'bass' || role === 'keys'
+  const rendered = role === 'bass'
+  // A track's vocal is its own take (made in Arrange): no other sound for it, and Remake sings it another way.
+  const sung = role === 'vocal' || role === 'vchop'
   return (
     <div className="rounded-xl border border-line bg-panel-2 px-3 h-11 flex items-center gap-2">
       <span className="w-2 h-5 rounded-full shrink-0" style={{ background: lane.color }} />
       <span className="font-medium text-[12.5px] truncate">{laneName}</span>
       <span className="flex-1" />
+      {lane.eq && (
+        <button className={cx(btn, !lane.eq.off && 'text-accent')} onClick={() => toggleLaneEq(lane.id)}
+                title={`EQ ${lane.eq.off ? 'off' : 'on'}: ${eqSummary(lane.eq.bands)}${lane.eq.gainDb ? `, makeup ${lane.eq.gainDb > 0 ? '+' : ''}${lane.eq.gainDb} dB` : ''} (in the stems; click: ${lane.eq.off ? 'on' : 'off'})`}>
+          EQ
+        </button>
+      )}
       {where === 'generate' && role && LOCKABLE.includes(role) && (
         <button className={cx(btn, kept && 'bg-accent/15 text-accent')} onClick={() => toggleLaneKeep(role)}
                 title={kept ? 'Kept: the next press of G keeps this lane' : 'Keep this lane on the next press of G'}>
           <IconLock className="w-3.5 h-3.5" open={!kept} />{kept ? 'Kept' : 'Keep'}
         </button>
       )}
-      <button className={btn} onClick={() => !newSound(lane.id) && toast('info', `No other sound for ${laneName} in the library.`)}
-              title={rendered ? 'Another patch for the same part' : 'Other sounds of the same kind, where the lane plays now: its clips stay'}>
-        <IconShuffle className="w-3.5 h-3.5" />New sound
-      </button>
-      <button className={btn} onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${laneName}.`)}
-              title={where === 'arrange' ? 'Write the lane again as Generate would: a new sound and where it plays (your edits on this lane are replaced; ⌘Z undoes)'
-                : 'Write the lane again: a new sound and where it plays; the rest stays (← goes back)'}>
-        <IconSparkle className="w-3.5 h-3.5 text-accent" />Remake
-      </button>
+      {!sung && (
+        <button className={btn} onClick={() => !newSound(lane.id) && toast('info', `No other sound for ${laneName} in the library.`)}
+                title={rendered ? 'Another patch for the same part' : 'Other sounds of the same kind, where the lane plays now: its clips stay'}>
+          <IconShuffle className="w-3.5 h-3.5" />New sound
+        </button>
+      )}
+      {(!sung || where === 'arrange') && (
+        <button className={btn} onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${laneName}.`)}
+                title={sung ? 'Sing the same vocal another way: its phrase, chops or both, and where (no credits; your edits on these lanes are replaced; ⌘Z undoes)'
+                  : where === 'arrange' ? 'Write the lane again as Generate would: a new sound and where it plays (your edits on this lane are replaced; ⌘Z undoes)'
+                  : 'Write the lane again: a new sound and where it plays; the rest stays (← goes back)'}>
+          <IconSparkle className="w-3.5 h-3.5 text-accent" />Remake
+        </button>
+      )}
     </div>
   )
 }
@@ -148,7 +211,7 @@ function LaneChoices({ g, roles, lockable }: { g: Generation; roles: Role[]; loc
  */
 export function ChoiceRow({ c, g, lockable, prefix }: { c: Choice; g: Generation; lockable: boolean; prefix?: boolean }) {
   const locks = useGenerate((s) => s.settings.locks)
-  const value = g.rules[c.rule] ?? null
+  const value = choiceValue(c, g)
   const options = c.options.some((o) => optionKey(o.value) === optionKey(value)) ? c.options : [...c.options, { value, label: String(value) }]
   const locked = c.rule in locks
   return (

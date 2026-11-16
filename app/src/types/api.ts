@@ -1,8 +1,9 @@
 // The contract between the Electron main process and the renderer
 // (exposed by electron/preload.ts as `window.drumvault`).
 
-import type { Category, EngineSettings, GridPreview, HealthResult, Overrides, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
+import type { Category, CleanRendersResult, EngineSettings, GridPreview, HealthResult, MasterResult, Overrides, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
 import type { ProjectFileInfo } from './project'
+import type { VocalMeta, VocalRequest } from '../vocals/plan'
 
 /** Engine settings as stored by the app (the library path is kept separately). */
 export type EngineOptions = Omit<EngineSettings, 'library_path'>
@@ -19,16 +20,17 @@ export interface AppSettings {
   /** Folder of the last stem export. */
   lastExportDir?: string | null
   /**
-   * Serum 2's presets folder (SCOPE.md §6.7), one for every module that plays Serum patches; each
-   * module (bass, keys, …) picks its own folders under it.
+   * Serum 2's presets folder (SCOPE.md §6.7) the bass picks its folders under.
    */
   serumPresetRoot?: string
   /** Bass (SCOPE.md §6.7): Serum 2 presets to draw patches from, and the ones you starred. */
   bass?: BassSettings
-  /** Independent Serum 2 patch pool for keys, piano and organ. */
-  keys?: BassSettings
-  /** Serum 2 patches that play chord stabs (SCOPE.md §6.9), beside the Chord Stabs page's samples. */
-  stabs?: BassSettings
+  /** The Splice folder the Splice page looks through (SCOPE.md §6.12); ~/Splice when not set. */
+  spliceFolder?: string | null
+  /** The breakdown layer (SCOPE.md §6.7b): the Serum 2 folders with pad and reese patches. */
+  pads?: { folders: string[] }
+  /** Chord stabs (SCOPE.md §6.9): what Generate's step sequencer saved. */
+  stabs?: StabsSettings
 }
 
 export interface BassSettings {
@@ -40,9 +42,10 @@ export interface BassSettings {
   favorites: string[]
   /** Octave set for a preset in Generate (semitones, a multiple of 12, by path): kept for every next track. */
   octaves?: Record<string, number>
-  /** Chord stab patches: set by hand, whether a patch plays a chord from one key (by path). */
-  chords?: Record<string, boolean>
-  /** Chord stabs: rhythms saved in the step sequencer, that Generate learns from. */
+}
+
+export interface StabsSettings {
+  /** Rhythms saved in the step sequencer, that Generate learns from. */
   rhythms?: SavedStabRhythm[]
 }
 
@@ -58,6 +61,7 @@ export interface MidiItem {
   file_name: string
   name: string
   rel_path: string
+  /** 'keys': a keys or chord part imported before keys parts were removed (never used). */
   role: 'bass' | 'keys' | 'other'
   bars: number
   key_label: string | null
@@ -69,11 +73,19 @@ export interface MidiItem {
   source_code: string | null
 }
 
+/** The ElevenLabs account (vocals, SCOPE.md §6.11): its plan and credits when the kept key works. */
+export interface ElevenStatus {
+  hasKey: boolean
+  tier?: string
+  credits?: { used: number; limit: number; resetsAt: string | null }
+  error?: string
+}
+
 /** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
 export interface HitItem {
   id: number
-  /** A disco hit (the Disco Hits page) or a chord stab (Chord Stabs); older rows are disco hits. */
-  kind: 'disco' | 'stab'
+  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs), strings (Strings) or a bass one-shot (Bass Samples); older rows are disco hits, 'drone' rows unused. */
+  kind: 'disco' | 'stab' | 'drone' | 'strings' | 'bass' | 'ambience'
   file_name: string
   name: string
   rel_path: string
@@ -85,6 +97,44 @@ export interface HitItem {
   pitch_fix: number
   duration_s: number
   channels: number
+  /** As SampleListItem.energy_db. */
+  energy_db?: number | null
+  /** As SampleListItem.tone. */
+  tone?: number[] | null
+  /** As SampleListItem.punch_db (schema v16; null until measured): the level a stab is set by, hit for hit. */
+  punch_db?: number | null
+  /** How many notes it plays (schema v16; null until measured): 1–2 a single note, 3 or more a chord. */
+  voices?: number | null
+}
+
+/** A sound in the Splice folder that could go on one of the music pages (SCOPE.md §6.12). */
+export interface SpliceCandidate {
+  /** Absolute path of the file in the Splice folder. */
+  path: string
+  name: string
+  /** The pack it is from (its folder under "packs"). */
+  pack: string
+  duration_s: number
+  channels: number
+  /** The key in its name ("Dm"), or only its root ("F": the scale is read from the sound on import). */
+  key_label: string | null
+  key_source: 'name' | 'root' | null
+  /** A tempo in its name. */
+  bpm: number | null
+  /** The page it is suggested for, and why. */
+  kind: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience'
+  why: string
+  /** The page it is on already. */
+  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | null
+}
+
+export interface SpliceScan {
+  folder: string
+  /** False when the folder doesn't exist. */
+  found: boolean
+  /** Audio files looked at. */
+  files: number
+  candidates: SpliceCandidate[]
 }
 
 export interface HitImportResult {
@@ -99,10 +149,13 @@ export interface SerumPreset {
   name: string
   folder: string
   tags: string[]
-  /** A chord stab patch that plays a chord from one key (SCOPE.md §6.9): it gets the root alone. */
-  chord?: boolean
-  /** A chord stab patch's own chord, from its clip player (semitones from the root): played on every step. */
-  voicing?: number[] | null
+  /** Sample files it names that aren't on this Mac (made on another computer): left out of the pools. */
+  missing?: number
+  /**
+   * Not a Serum preset but a Bass Samples page one-shot (SCOPE.md §6.7a): `path` is its
+   * library-relative file, and the engine plays the bassline with it like a sampler.
+   */
+  sample?: boolean
 }
 
 export interface MidiImportResult {
@@ -199,6 +252,18 @@ export interface SampleListItem {
   groove?: LoopGroove | null
   /** Events: how it plays (engine events.shape); null until measured. */
   shape?: EventShape | null
+  /**
+   * How loud it plays (schema v13; null until measured): K-weighted energy of its mono mix in dB,
+   * LUFS + 10·log10(seconds). Played for T seconds it is `energy_db − 10·log10(T)` LUFS loud.
+   */
+  energy_db?: number | null
+  /** Its tone (schema v14; null until measured): power in the engine's 24 bands (40 Hz–16 kHz), dB against its total. */
+  tone?: number[] | null
+  /**
+   * How hard it hits (schema v15; null until measured): the K-weighted level (as LUFS) of its
+   * loudest 200 ms. Against `energy_db` it tells a snappy hit from a washy one.
+   */
+  punch_db?: number | null
 }
 
 /**
@@ -247,6 +312,12 @@ export interface TrackArrangement {
    * above, thinner, a high-pass). Null where the part is silent.
    */
   detail?: Record<string, { db: (number | null)[]; bright: (number | null)[] }> | null
+  /**
+   * The producer's balance (schema v13; absent until measured): each part's K-weighted loudness
+   * (LUFS of its mono mix) in its full bars. `normalized`: the stems were normalised one by one,
+   * so the balance isn't the producer's.
+   */
+  levels?: { parts: Record<string, number>; normalized: boolean; spectra?: Record<string, number[]> } | null
 }
 
 export interface LibraryFacets {
@@ -345,15 +416,14 @@ export interface DrumvaultAPI {
   /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
   stretchSamples(relPaths: string[], bpm: number): Promise<void>
   /**
-   * Add learning material to the MIDI page's bass or keys section from .mid files, MIDI zips and
-   * folders: every file becomes that part (from a zip of several parts, the ones named for it).
+   * Add basslines to learn from (the MIDI page) from .mid files, MIDI zips and folders: every
+   * file is a bassline (from a zip of several parts, the ones named for the bass).
    */
-  importMidi(paths: string[], role: 'bass' | 'keys'): Promise<MidiImportResult>
+  importMidi(paths: string[]): Promise<MidiImportResult>
   /** File dialog for MIDI zips, .mid files and folders. */
   chooseMidi(): Promise<string[]>
   /** Correct a bassline's key (null: no key, so it isn't transposed). */
   setMidiKey(midiId: number, key: string | null): Promise<void>
-  setMidiRole(midiId: number, role: MidiItem['role']): Promise<void>
   deleteMidi(midiIds: number[]): Promise<void>
   /** Imported MIDI files. */
   listMidi(): Promise<MidiItem[]>
@@ -361,6 +431,12 @@ export interface DrumvaultAPI {
   importHits(paths: string[], kind?: HitItem['kind']): Promise<HitImportResult>
   /** File dialog for disco hits: audio files, folders, zips. */
   chooseHits(title?: string): Promise<string[]>
+  /** Look through the Splice folder (the saved one, else ~/Splice) for sounds for the music pages. Reads only. */
+  scanSplice(): Promise<SpliceScan>
+  /** Pick another Splice folder (saved in the settings); null when cancelled. */
+  chooseSpliceFolder(): Promise<string | null>
+  /** A file in the Splice folder, to listen to it. */
+  readSplice(path: string): Promise<ArrayBuffer>
   /** Correct a hit's key (null: no key, never moved into the track key). */
   setHitKey(hitId: number, key: string | null): Promise<void>
   /** The semitones a hit plays off from the track key, −12…12 (a key read wrong, fixed once). */
@@ -371,16 +447,11 @@ export interface DrumvaultAPI {
   arrangements(): Promise<TrackArrangement[]>
   /** Preset folders under `root` with counts, and the presets in `folders`. */
   serumPresets(root: string, folders: string[] | null): Promise<{ folders: { folder: string; count: number }[]; presets: SerumPreset[] }>
-  /**
-   * Per chord stab patch (read and measured once by the engine): the chord its clip player plays
-   * (semitones from C4, null without one), and whether it plays a chord from one key anyway.
-   */
-  stabChords(presets: string[]): Promise<{ chords: Record<string, boolean>; voicings: Record<string, number[] | null> }>
   /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
-  /** Save an edited loop to its bass or keys MIDI library; returns its id. */
-  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null; role?: 'bass' | 'keys' }): Promise<number>
+  /** Save an edited bassline to the MIDI library; returns its id. */
+  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
   /** Deleted samples, newest first. */
   listRemoved(): Promise<RemovedSample[]>
   /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */
@@ -420,6 +491,27 @@ export interface DrumvaultAPI {
   /** Which of `names` already exist in `dir`. */
   existingFiles(dir: string, names: string[]): Promise<string[]>
   writeExportFile(dir: string, name: string, data: ArrayBuffer): Promise<void>
+  /** Master `mix` (a .wav in `dir`) through Ozone 11 into `out` next to it, on the loudness target. */
+  masterMixdown(dir: string, mix: string, out: string, format: 'pcm24' | 'float32'): Promise<MasterResult>
+  /**
+   * The bass and strings renders (and older tracks' keys, stab and drone ones) and stretched FX
+   * that aren't in `keep` (library-relative) nor made in the last 10 minutes: deleted, or with
+   * `dryRun` only counted.
+   */
+  cleanRenders(keep: string[], dryRun: boolean): Promise<CleanRendersResult>
+  /** ElevenLabs: whether a key is kept (in the keychain), and the plan and credits it has. */
+  elevenStatus(): Promise<ElevenStatus>
+  setElevenKey(key: string): Promise<ElevenStatus>
+  clearElevenKey(): Promise<void>
+  /** Make a vocal take with ElevenLabs (it costs credits) into <Library>/Vocals/<id>/. */
+  makeVocal(req: VocalRequest): Promise<VocalMeta>
+  listVocals(): Promise<VocalMeta[]>
+  /** Remove a vocal take and its folder. */
+  deleteVocal(id: string): Promise<void>
+  /** Find a take's phrase loops, chops and key (takes made before the engine did). */
+  analyzeVocal(id: string): Promise<VocalMeta>
+  /** These takes were exported in `track` (House of Tracks takes each vocal once). */
+  markVocalsUsed(ids: string[], track: string): Promise<void>
   revealPath(path: string): Promise<void>
   /** Open a folder in Finder; resolves to an error message, or '' when it opened. */
   openFolder(path: string): Promise<string>

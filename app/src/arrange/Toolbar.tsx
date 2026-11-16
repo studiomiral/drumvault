@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { playback } from '../audio/engine'
 import { IconPlay, IconStop } from '../components/icons'
+import { Range } from '../components/Range'
 import { Button, cx, inputClass, PageTitle } from '../components/ui'
 import { formatBpm } from '../lib/format'
 import { beatToSec, BEATS_PER_BAR, formatPosition, formatTime } from '../lib/project'
-import { MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
+import { DEFAULT_PX_PER_BEAT, MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import { createProject, deleteCurrentProject, openProject } from './persistence'
@@ -12,7 +13,9 @@ import { createProject, deleteCurrentProject, openProject } from './persistence'
 export function Toolbar() {
   const project = useProject((s) => s.project)
   const { past, future, undo, redo, edit, dirty } = useProject()
-  const { pxPerBeat, setView, libraryOpen, saving, projects } = useArrange()
+  const { pxPerBeat, setView, libraryOpen, saving, projects, lanePanel } = useArrange()
+  // A generated track makes its vocal here (SCOPE.md §6.11): the lane panel's Vocals module.
+  const vocalsOpen = !!lanePanel && 'module' in lanePanel && lanePanel.module === 'vocals'
   const [, force] = useState(0)
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
 
@@ -61,14 +64,21 @@ export function Toolbar() {
 
       <div className="flex-1" />
       <span className="text-[11px] text-faint ml-3">Zoom</span>
-      <input type="range" min={Math.log(MIN_PX_PER_BEAT)} max={Math.log(MAX_PX_PER_BEAT)} step={0.01}
-             value={Math.log(pxPerBeat)} className="w-28 mr-3 accent-[#e2c35f]"
-             onChange={(e) => {
-               const next = Math.exp(Number(e.target.value))
+      <Range min={Math.log(MIN_PX_PER_BEAT)} max={Math.log(MAX_PX_PER_BEAT)} step={0.01}
+             value={Math.log(pxPerBeat)} reset={Math.log(DEFAULT_PX_PER_BEAT)} className="w-28 mr-3 accent-[#e2c35f]"
+             title="Zoom (⌥-click or double-click: the default zoom)"
+             onValue={(v) => {
+               const next = Math.exp(v)
                const st = useArrange.getState()
                const centre = (st.scrollX + 400) / st.pxPerBeat
                setView({ pxPerBeat: next, scrollX: Math.max(0, centre * next - 400) })
              }} />
+      {project.generation && (
+        <Button variant={vocalsOpen ? 'secondary' : 'ghost'} title="Make a vocal for this track (ElevenLabs), or another one"
+                onClick={() => useArrange.getState().set({ lanePanel: vocalsOpen ? null : { module: 'vocals' } })}>
+          Vocals
+        </Button>
+      )}
       <Button variant="primary" title="Export stems (⌘E)" onClick={() => useApp.getState().setModal('export')}>Export…</Button>
       <Button variant={libraryOpen ? 'secondary' : 'ghost'} onClick={() => setView({ libraryOpen: !libraryOpen })}>
         Library {libraryOpen ? '›' : '‹'}

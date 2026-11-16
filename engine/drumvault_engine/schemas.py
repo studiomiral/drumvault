@@ -105,8 +105,8 @@ class Overrides(BaseModel):
 
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
-                 "render_bass", "serum_presets", "stab_chords", "save_midi", "set_midi_meta",
-                 "delete_midi", "import_hits", "set_hit_meta", "delete_hits", "shutdown"]
+                 "render_bass", "serum_presets", "save_midi", "set_midi_meta",
+                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -185,9 +185,8 @@ class StretchSamplesParams(BaseModel):
 
 
 class ImportMidiParams(BaseModel):
-    """Add MIDI files or folders of them to a section of the MIDI page (SCOPE.md §6.7)."""
+    """Add basslines to learn from (the MIDI page, SCOPE.md §6.7): MIDI files, zips or folders of them."""
     paths: list[str]
-    role: Literal["bass", "keys"] = "bass"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -203,13 +202,48 @@ class RenderBassParams(BaseModel):
     bars: Optional[int] = Field(default=None, ge=1, le=16)
     # The track's groove: per 16th step of the bar, how late (16ths) notes starting there play.
     groove: Optional[list[float]] = Field(default=None, min_length=16, max_length=16)
+    # A strings part (out_rel under .drumvault/strings/): `preset` is the Strings page sample.
     settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnalyzeVocalParams(BaseModel):
+    """Find a take's phrase loop, chops and key again (pipeline.analyze_vocal)."""
+    folder: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportVocalParams(BaseModel):
+    """Unpack a vocal take's stems and write its vocal (pipeline.import_vocal)."""
+    folder: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class CleanRendersParams(BaseModel):
+    """Delete (or, with dry_run, count) the renders nothing in `keep` uses (pipeline.clean_renders)."""
+    keep: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class MasterMixdownParams(BaseModel):
+    """Master an exported mixdown through Ozone 11 into a .wav next to it (master.py)."""
+    mix_path: str
+    out_path: str
+    format: Literal["pcm24", "float32"] = "pcm24"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class MasterResult(BaseModel):
+    lufs: float
+    peak_db: float
+    gain_db: float
+    passes: int
 
 
 class SetMidiMetaParams(BaseModel):
     """Correct an imported MIDI file's role or key."""
     midi_id: int
-    role: Optional[Literal["bass", "keys", "other"]] = None
+    role: Optional[Literal["bass", "other"]] = None
     key_label: Optional[str] = None
     clear_key: bool = False
     settings: dict[str, Any] = Field(default_factory=dict)
@@ -221,19 +255,24 @@ class DeleteMidiParams(BaseModel):
 
 
 class SaveMidiParams(BaseModel):
-    """Save an edited loop as a new MIDI file in the library."""
+    """Save an edited bassline as a new MIDI file in the library."""
     name: str
     notes: list[list[float]]
     bars: int = Field(ge=1, le=16)
     key_label: Optional[str] = None
-    role: Literal["bass", "keys", "other"] = "bass"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImportHitsParams(BaseModel):
-    """Add disco hits (SCOPE.md §6.8) or chord stabs (§6.9) from audio files, folders and zips."""
+    """Add disco hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
     paths: list[str]
-    kind: Literal["disco", "stab"] = "disco"
+    kind: Literal["disco", "stab", "strings", "bass", "ambience"] = "disco"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScanSpliceParams(BaseModel):
+    """List the sounds in the Splice folder that could go on the Chord Stabs, Disco Hits or Strings page (SCOPE.md §6.12)."""
+    folder: str
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -248,12 +287,6 @@ class SetHitMetaParams(BaseModel):
 
 class DeleteHitsParams(BaseModel):
     hit_ids: list[int]
-    settings: dict[str, Any] = Field(default_factory=dict)
-
-
-class StabChordsParams(BaseModel):
-    """Which chord stab patches play a chord from one key (SCOPE.md §6.9)."""
-    presets: list[str]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

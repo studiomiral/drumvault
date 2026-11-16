@@ -179,3 +179,24 @@ def mix_for_key(stems: list[tuple[np.ndarray, int, bool]], th: Thresholds) -> tu
     if peak > 0:
         mix /= peak
     return mix, sr
+
+
+def count_voices(mono: np.ndarray, sr: int, th: Thresholds) -> int:
+    """How many notes a hit plays: the pitch classes holding at least `hit_voice_rel` of the
+    strongest one's power over its first `hit_voice_window_s`. A single note shows one or two (the
+    fifth rings in its harmonics), a chord three or more. 0 for silence."""
+    import librosa
+
+    y = np.asarray(mono, dtype=np.float32)[: int(th.hit_voice_window_s * sr)]
+    if not y.size or not np.any(y):
+        return 0
+    n_fft = 4096
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    spec = (np.abs(librosa.stft(y, n_fft=n_fft, hop_length=512)) ** 2).mean(axis=1)
+    f = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    use = (f >= th.hit_voice_lo_hz) & (f <= th.hit_voice_hi_hz)
+    pcs = np.zeros(12)
+    np.add.at(pcs, np.round(69 + 12 * np.log2(f[use] / 440.0)).astype(int) % 12, spec[use])
+    top = float(pcs.max())
+    return int((pcs >= th.hit_voice_rel * top).sum()) if top > 0 else 0

@@ -32,6 +32,8 @@ export const ENGINE_DEFAULTS: Required<Omit<EngineOptions, 'thresholds' | 'rubbe
   workers: 4,
   serum_plugin: '/Library/Audio/Plug-Ins/VST3/Serum2.vst3',
   serum_plugin_name: 'Serum 2',
+  ozone_dynamics_plugin: '/Library/Audio/Plug-Ins/VST3/Ozone 11 Dynamics.vst3',
+  ozone_maximizer_plugin: '/Library/Audio/Plug-Ins/VST3/Ozone 11 Maximizer.vst3',
 }
 
 /** Serum 2's presets folder, shared by the modules that play Serum patches. */
@@ -43,11 +45,6 @@ export const BASS_DEFAULTS = {
   folders: [] as string[],
   favorites: [] as string[],
 }
-
-export const KEYS_DEFAULTS = { ...BASS_DEFAULTS, folders: [] as string[], favorites: [] as string[] }
-
-/** Chord stab patch pool (SCOPE.md §6.9): the House chord stabs folder until others are picked. */
-export const STABS_DEFAULTS = { ...BASS_DEFAULTS, folders: ['House - Chord Stabs'], favorites: [] as string[] }
 
 export type ResolvedEngineOptions = typeof ENGINE_DEFAULTS & EngineOptions
 

@@ -6,6 +6,7 @@
   "description": "Club house tracks from your own stems: the Drumvault drum library, bass, keys, disco hits and an arrangement.",
   "main": "out/main/index.js",
   "scripts": {
+    "postinstall": "zsh scripts/brand-electron.sh",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",

@@ -18,7 +18,7 @@ function libraryBpm(): number {
 
 /** Refresh sample ids/lengths from the library by path; report samples that are gone. */
 export async function resolveSamples(project: Project): Promise<Project> {
-  // Bass and keys clips play a Serum render, not a library sample: it's made again when it's gone.
+  // Bass clips (and other rendered parts) play a render, not a library sample: it's made again when it's gone.
   const paths = [...new Set(project.clips.filter((c) => !(c.type === 'audio' && c.bass)).map((c) => c.sample.relPath))]
   const rows = paths.length ? await api.samplesByPath(paths) : []
   const byPath = new Map(rows.map((r) => [r.rel_path, r]))
@@ -26,8 +26,9 @@ export async function resolveSamples(project: Project): Promise<Project> {
   const hits = paths.some((p) => !byPath.has(p)) ? new Set((await api.listHits()).map((h) => h.rel_path)) : new Set<string>()
   useArrange.getState().set({ missing: new Set(paths.filter((p) => !byPath.has(p) && !hits.has(p))) })
   return produce(project, (d) => {
-    // The project tempo always follows the library BPM (loops are rendered at it).
-    d.bpm = libraryBpm()
+    // The project keeps its own tempo (a generation's, or the BPM field's): loops are sliced
+    // and FX stretched to it (SCOPE.md §6.4a). Only a project without one takes the library BPM.
+    if (!(d.bpm >= 60 && d.bpm <= 200)) d.bpm = libraryBpm()
     for (const c of d.clips) {
       const r = byPath.get(c.sample.relPath)
       if (r) Object.assign(c.sample, { id: r.id, bars: r.bars, durationS: r.duration_s, name: r.name, category: r.category })
@@ -50,7 +51,20 @@ export async function refreshProjectList(): Promise<void> {
   useArrange.getState().set({ projects: await api.listProjects() })
 }
 
-export async function saveNow(): Promise<void> {
+let saves: Promise<void> = Promise.resolve()
+
+/**
+ * Save the open project if it has changes. One save at a time: a save asked for while another
+ * runs waits for it (then saves only what changed since), so two never race for the same file
+ * or both make a new project's file.
+ */
+export function saveNow(): Promise<void> {
+  const next = saves.catch(() => {}).then(save)
+  saves = next
+  return next
+}
+
+async function save(): Promise<void> {
   const { project, file, dirty, markSaved } = useProject.getState()
   if (!dirty && file) return
   useArrange.getState().set({ saving: true })

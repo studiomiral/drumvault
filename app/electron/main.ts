@@ -4,8 +4,9 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
 import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
 import { keptDir, LibraryReader } from './db'
@@ -14,6 +15,8 @@ import {
   augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist,
   readProjectFile, saveSettings, which, writeProjectFile,
 } from './fs'
+import * as eleven from './eleven'
+import { compositionPlan, type VocalAnalysis, type VocalMeta, type VocalRequest } from '../src/vocals/plan'
 import { JobTracker } from './jobs'
 import { Sidecar } from './sidecar'
 
@@ -278,10 +281,10 @@ function registerIpc(): void {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('stretch_samples', { rel_paths: relPaths, bpm, settings: engineSettings() }, 600_000)
   })
-  ipcMain.handle('midi:import', async (_e, paths: string[], role: 'bass' | 'keys') => {
+  ipcMain.handle('midi:import', async (_e, paths: string[]) => {
     if (!sidecar) throw new Error('Engine is not running')
     // The engine searches folders and opens MIDI zips itself.
-    const r = await sidecar.request('import_midi', { paths, role, settings: engineSettings() }, 600_000)
+    const r = await sidecar.request('import_midi', { paths, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
   })
@@ -297,22 +300,36 @@ function registerIpc(): void {
     await sidecar.request('set_midi_meta', { midi_id: midiId, key_label: key, clear_key: key == null, settings: engineSettings() })
     send('library-changed')
   })
-  ipcMain.handle('midi:role', async (_e, midiId: number, role: 'bass' | 'keys' | 'other') => {
-    if (!sidecar) throw new Error('Engine is not running')
-    await sidecar.request('set_midi_meta', { midi_id: midiId, role, settings: engineSettings() })
-    send('library-changed')
-  })
   ipcMain.handle('midi:delete', async (_e, midiIds: number[]) => {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('delete_midi', { midi_ids: midiIds, settings: engineSettings() })
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
-  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' = 'disco') => {
+  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' | 'bass' | 'ambience' = 'disco') => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request('import_hits', { paths, kind, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
+  })
+  // The Splice page (SCOPE.md §6.12): the engine looks through the folder (names and headers only).
+  const spliceFolder = () => settings.spliceFolder || join(homedir(), 'Splice')
+  ipcMain.handle('splice:scan', async () => {
+    if (!sidecar) throw new Error('Engine is not running')
+    return sidecar.request('scan_splice', { folder: spliceFolder(), settings: engineSettings() }, 300_000)
+  })
+  ipcMain.handle('dialog:splice', async () => {
+    const r = await dialog.showOpenDialog(win!, { title: 'Choose your Splice folder', buttonLabel: 'Choose', defaultPath: spliceFolder(), properties: ['openDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return null
+    await applySettings({ spliceFolder: r.filePaths[0] })
+    return r.filePaths[0]
+  })
+  ipcMain.handle('splice:read', async (_e, path: string) => {
+    // Only files inside the Splice folder are read.
+    const rel = relative(resolve(spliceFolder()), resolve(path))
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`Path outside the Splice folder: ${path}`)
+    const buf = await readFile(resolve(path))
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   })
   ipcMain.handle('dialog:hits', async (_e, title = 'Add disco hits') => {
     const r = await dialog.showOpenDialog(win!, {
@@ -341,11 +358,6 @@ function registerIpc(): void {
     if (!sidecar) throw new Error('Engine is not running')
     return sidecar.request('serum_presets', { root, folders, settings: engineSettings() }, 120_000)
   })
-  ipcMain.handle('serum:stabChords', async (_e, presets: string[]) => {
-    if (!sidecar) throw new Error('Engine is not running')
-    // Renders a note through every patch not measured yet (the first loads Serum 2).
-    return sidecar.request('stab_chords', { presets, settings: engineSettings() }, 600_000)
-  })
   ipcMain.handle('bass:render', async (_e, p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: number[][]; bars?: number; groove?: number[] }) => {
     if (!sidecar) throw new Error('Engine is not running')
@@ -355,10 +367,10 @@ function registerIpc(): void {
       notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, settings: engineSettings(),
     }, 300_000)
   })
-  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null; role?: 'bass' | 'keys' }) => {
+  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request<{ id: number }>('save_midi', {
-      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, role: p.role ?? 'bass', settings: engineSettings(),
+      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, settings: engineSettings(),
     }, 60_000)
     send('library-changed')
     return r.id
@@ -408,6 +420,102 @@ function registerIpc(): void {
     const tmp = join(dir, `.${name}.part`)
     await writeFile(tmp, Buffer.from(data))
     await rename(tmp, path)
+  })
+  // The mixdown through Ozone 11 into a master next to it (the engine's master.py; a few passes over the track).
+  // Renders nothing uses any more: counted (dryRun) or deleted by the engine (pipeline.clean_renders).
+  // ElevenLabs (vocals): the key in the keychain, the plan and its credits.
+  ipcMain.handle('eleven:status', () => eleven.status())
+  ipcMain.handle('eleven:setKey', (_e, k: string) => eleven.setKey(k))
+  ipcMain.handle('eleven:clearKey', () => eleven.clearKey())
+  // A vocal take (SCOPE.md §6.11): composed by ElevenLabs, its vocal split from it, into
+  // <Library>/Vocals/<id>/ (take.mp3, stems.zip → stems/, vocal.wav, meta.json).
+  ipcMain.handle('vocals:make', async (_e, req: VocalRequest): Promise<VocalMeta> => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const id = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+    const rel = `Vocals/${id}`
+    const dir = join(lib(), rel)
+    await mkdir(dir, { recursive: true })
+    const before = (await eleven.status()).credits?.used ?? null
+    // Starter plans get 128 kbps MP3 (192 from Creator, WAV from Pro).
+    const format = 'mp3_44100_128'
+    const plan = compositionPlan(req)
+    let take: eleven.Take
+    try {
+      take = await eleven.compose(plan, format)
+    } catch (e) {
+      await rm(dir, { recursive: true, force: true })  // nothing was made (nor paid for)
+      throw e
+    }
+    await writeFile(join(dir, 'take.mp3'), take.audio)
+    const meta: VocalMeta = {
+      ...req, id, createdAt: new Date().toISOString(), source: 'elevenlabs', model: 'music_v1', format, headers: take.headers,
+      credits: null, take: `${rel}/take.mp3`, vocal: null, stems: [], durationS: null, keyHeard: null, usedIn: [],
+    }
+    const save = () => writeFile(join(dir, 'meta.json'), JSON.stringify({ ...meta, plan }, null, 2))
+    await save()
+    await writeFile(join(dir, 'stems.zip'), await eleven.separate(take.audio, 'take.mp3', format))
+    const r = await sidecar.request<{ vocal: string; stems: string[]; duration_s: number; key_heard: string | null; analysis: VocalAnalysis }>(
+      'import_vocal', { folder: rel, settings: engineSettings() }, 300_000)
+    const after = (await eleven.status()).credits?.used ?? null
+    // (The account's count can lag behind: no difference yet is no measurement.)
+    Object.assign(meta, { vocal: r.vocal, stems: r.stems, durationS: r.duration_s, keyHeard: r.key_heard, analysis: r.analysis,
+      credits: before != null && after != null && after > before ? after - before : null })
+    await save()
+    send('library-changed')
+    return meta
+  })
+  // A take made before the engine analysed them: its phrase loops, chops and key, into its meta.json.
+  ipcMain.handle('vocals:analyze', async (_e, id: string): Promise<VocalMeta> => {
+    if (!sidecar) throw new Error('Engine is not running')
+    if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
+    const file = join(lib(), 'Vocals', id, 'meta.json')
+    const m = JSON.parse(await readFile(file, 'utf8'))
+    m.analysis = await sidecar.request<VocalAnalysis>('analyze_vocal', { folder: `Vocals/${id}`, settings: engineSettings() }, 300_000)
+    if (m.analysis.key) m.keyHeard = m.analysis.key
+    await writeFile(file, JSON.stringify(m, null, 2))
+    const { plan: _p, ...meta } = m
+    return meta as VocalMeta
+  })
+  // Exported in a track: House of Tracks takes each vocal only once.
+  ipcMain.handle('vocals:used', async (_e, ids: string[], track: string) => {
+    for (const id of ids) {
+      if (!/^[\w-]+$/.test(id)) continue
+      const file = join(lib(), 'Vocals', id, 'meta.json')
+      if (!existsSync(file)) continue
+      const m = JSON.parse(await readFile(file, 'utf8'))
+      m.usedIn = [...new Set([...(m.usedIn ?? []), track])]
+      await writeFile(file, JSON.stringify(m, null, 2))
+    }
+  })
+  ipcMain.handle('vocals:delete', async (_e, id: string) => {
+    if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
+    await rm(join(lib(), 'Vocals', id), { recursive: true, force: true })
+    send('library-changed')
+  })
+  ipcMain.handle('vocals:list', async (): Promise<VocalMeta[]> => {
+    const root = join(lib(), 'Vocals')
+    if (!existsSync(root)) return []
+    const out: VocalMeta[] = []
+    for (const d of await readdir(root)) {
+      try {
+        const { plan: _p, ...m } = JSON.parse(await readFile(join(root, d, 'meta.json'), 'utf8'))
+        out.push(m as VocalMeta)
+      } catch {
+        // not a take (or one still being made)
+      }
+    }
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  })
+  ipcMain.handle('renders:clean', async (_e, keep: string[], dryRun: boolean) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    return sidecar.request('clean_renders', { keep, dry_run: dryRun, settings: engineSettings() }, 300_000)
+  })
+  ipcMain.handle('export:master', async (_e, dir: string, mix: string, out: string, format: 'pcm24' | 'float32') => {
+    if (!sidecar) throw new Error('Engine is not running')
+    if (!/\.wav$/i.test(mix) || !/\.wav$/i.test(out)) throw new Error(`Bad export path: ${out}`)
+    return sidecar.request('master_mixdown', {
+      mix_path: exportFile(dir, mix), out_path: exportFile(dir, out), format, settings: engineSettings(),
+    }, 600_000)
   })
   ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
   ipcMain.handle('shell:openFolder', (_e, path: string) => shell.openPath(path))
@@ -516,6 +624,10 @@ function buildMenu(): void {
         { label: 'MIDI', accelerator: 'CmdOrCtrl+6', click: () => send('menu', 'view:midi') },
         { label: 'Disco Hits', accelerator: 'CmdOrCtrl+7', click: () => send('menu', 'view:hits') },
         { label: 'Chord Stabs', click: () => send('menu', 'view:stabs') },
+        { label: 'Strings', click: () => send('menu', 'view:strings') },
+        { label: 'Bass Samples', click: () => send('menu', 'view:basses') },
+        { label: 'Ambience', click: () => send('menu', 'view:ambience') },
+        { label: 'Splice', click: () => send('menu', 'view:splice') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

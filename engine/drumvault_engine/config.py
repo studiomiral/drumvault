@@ -116,19 +116,16 @@ class Thresholds:
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
     bass_peak_dbfs: float = -1.0
-    # Chord stab patches (SCOPE.md §6.9): one note (C3) is rendered through the patch; partials at
-    # least stab_chord_peak_rel of the strongest (stab_chord_lo_hz–stab_chord_hi_hz, from
-    # stab_chord_from_s to stab_chord_to_s) that aren't overtones (within stab_chord_tol semitones)
-    # of the note, nor of a sub-octave sounding under it, mean it plays a chord from one key, when
-    # there are stab_chord_min_others of them.
-    stab_chord_test_note: int = 48
-    stab_chord_peak_rel: float = 0.4
-    stab_chord_tol: float = 0.35
-    stab_chord_lo_hz: float = 25.0
-    stab_chord_hi_hz: float = 1500.0
-    stab_chord_from_s: float = 0.05
-    stab_chord_to_s: float = 0.6
-    stab_chord_min_others: int = 2
+    # Bass from a one-shot sample (basssample.py): a note fades out over bass_sample_release_ms once
+    # let go, and over bass_sample_cut_ms where the next note cuts it; the softest note plays at
+    # bass_sample_min_velocity of full; the sample's own note is read from its first
+    # bass_sample_pitch_window_s, between these frequencies.
+    bass_sample_release_ms: float = 30.0
+    bass_sample_cut_ms: float = 5.0
+    bass_sample_min_velocity: float = 0.4
+    bass_sample_pitch_window_s: float = 1.0
+    bass_sample_min_hz: float = 27.0
+    bass_sample_max_hz: float = 260.0
     # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0
@@ -136,6 +133,14 @@ class Thresholds:
     hit_tail_hold_ms: float = 50.0
     hit_fade_out_ms: float = 10.0
     hit_peak_dbfs: float = -1.0
+    # How many notes a hit plays (key.count_voices): the pitch classes within hit_voice_rel of the
+    # strongest, over its first hit_voice_window_s, between these frequencies. A single note shows one
+    # or two (its fifth rings in its harmonics); from hit_chord_voices it is a chord.
+    hit_voice_window_s: float = 0.6
+    hit_voice_rel: float = 0.35
+    hit_voice_lo_hz: float = 55.0
+    hit_voice_hi_hz: float = 5000.0
+    hit_chord_voices: int = 3
     tempo_confidence_window_ms: float = 10.0
     tempo_attack_rel: float = 0.1           # sample-accurate attack threshold
     tempo_attack_search_ms: float = 40.0    # look this far past the onset for the hit peak
@@ -217,6 +222,7 @@ class Thresholds:
     # An event's shape (events.shape): where its sound ends before the body's last bar line
     # (the producer's silence before the drop), where it peaks and which way it goes. A 16th
     # still sounds within this of the event's loudest 16th...
+    punch_window_ms: float = 200.0          # a sample's punch: the level of its loudest window this long
     shape_sound_rel_db: float = -24.0
     # ...and it rises (falls) when it gets this much louder (quieter) from its first to its last
     # 16ths of sound, or this many octaves brighter (darker) in spectral centroid.
@@ -245,11 +251,65 @@ class Thresholds:
     arrangement_bands: int = 24
     arrangement_band_lo_hz: float = 40.0
     arrangement_band_hi_hz: float = 16000.0
+    # The mix balance (K-weighted loudness of each part in its full bars, the app's reference
+    # levels): unless the stems were normalised one by one, when this share of them (and at
+    # least this many) peaks within this of full scale.
+    arrangement_normalized_peak_db: float = -1.0
+    arrangement_normalized_share: float = 0.8
+    arrangement_normalized_min_stems: int = 3
 
     # ---- loose samples (samples.py): Splice and other packs ----------------------
     sample_loop_fit_s: float = 0.03         # a loop's length within this of whole bars (else a tail is cut)
     sample_loop_max_bars: int = 16          # longer files are not loops (stems belong in a zip)
     sample_oneshot_max_s: float = 4.0       # a file this short without loop hints is a one-shot
+
+    # ---- strings (strings.py): a long string sample, restarting on every 8-bar line --------
+    # The Splice scan (splice.py): a sound shorter than splice_min_len_s is a click, not a stab; a string
+    # sound from splice_strings_min_len_s goes to the Strings page; a number in this range in a name is a tempo.
+    splice_min_len_s: float = 0.15
+    splice_strings_min_len_s: float = 3.0
+    splice_ambience_min_len_s: float = 4.0  # a texture for the bed lies under a section: no shorter than this
+    splice_stab_max_len_s: float = 12.0     # a one-shot or stab by name may ring this long (the import trims it to hit_max_len_s)
+    splice_bpm_min: float = 70.0
+    splice_bpm_max: float = 180.0
+    strings_max_len_s: float = 60.0         # a dropped-in string sample keeps this much (a hit only hit_max_len_s)
+    # The ambience bed (ambience.py): its loop's end crossfades into its start over this; loudness-matched like strings.
+    ambience_xfade_s: float = 1.5
+    ambience_lufs_target: float = -14.0
+    ambience_peak_dbfs: float = -1.0
+    strings_tail_fade_s: float = 0.02       # a sample ending before its part does fades out over this (no click)
+    strings_fade_s: float = 0.25            # where a part cuts the sample (the next 8-bar line), it fades out over this
+    strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)
+    strings_peak_dbfs: float = -1.0
+
+    # ---- vocals (vocal.py): a take's phrase loop, chops and key ------------------
+    vocal_hop: int = 256                    # pYIN / level frame hop at 22.05 kHz (≈ 11.6 ms)
+    vocal_fmin_hz: float = 70.0
+    vocal_fmax_hz: float = 1100.0
+    vocal_period_min_s: float = 1.5         # a repetition is at least this long (a 1-bar line at 160 BPM)
+    vocal_period_min_score: float = 0.45    # how well a take must line up with itself to have a phrase loop
+    vocal_period_tie: float = 0.05          # lags this close to the best one are repetitions too (phrase loops)
+    vocal_max_stretch: float = 0.2          # a phrase is stretched at most this much to whole bars
+    vocal_silence_db: float = -30.0         # below the take's loudest by this: a rest
+    vocal_rest_s: float = 0.15              # a line starts after a rest this long
+    vocal_preroll_s: float = 0.02           # the phrase starts this much before its line (the consonant)
+    vocal_fade_ms: float = 8.0
+    vocal_onset_delta: float = 0.12         # onset detection threshold for chops
+    vocal_chop_min_s: float = 0.08
+    vocal_chop_max_s: float = 0.6
+    vocal_chops: int = 8                    # chops kept per take: the clearest and loudest
+
+    # ---- mastering (master.py): the mixdown through Ozone 11 into mastered.wav -----
+    master_target_lufs: float = -6.5        # integrated loudness of mastered.wav (House of Tracks: -9 … -5)
+    master_ceiling_db: float = 0.0          # the Maximizer's output ceiling (House of Tracks: -2 … 0 dB)
+    master_tolerance_lu: float = 0.1        # the Maximizer's gain is solved until the result is this close
+    master_max_passes: int = 10             # passes through the chain to get there
+    master_pre_lufs: float = -14.0          # the mixdown is brought here first: the chain sees one level
+    master_glue_threshold_db: float = -12.0  # the glue compressor (Ozone Dynamics), against that level
+    master_glue_ratio: float = 1.5
+    master_glue_attack_ms: float = 30.0
+    master_glue_release_ms: float = 120.0
+    master_soft_clip_mix: float = 50.0      # % of the Maximizer's soft clip (less limiting for the loudness)
 
     # ---- peaks -------------------------------------------------------------
     peaks_oneshot_per_second: int = 200
@@ -287,6 +347,9 @@ class Settings:
     # Serum 2, hosted by the engine to render basslines (SCOPE.md §6.7).
     serum_plugin: str = "/Library/Audio/Plug-Ins/VST3/Serum2.vst3"
     serum_plugin_name: str = "Serum 2"
+    # Ozone 11, hosted the same way to master the mixdown (master.py).
+    ozone_dynamics_plugin: str = "/Library/Audio/Plug-Ins/VST3/Ozone 11 Dynamics.vst3"
+    ozone_maximizer_plugin: str = "/Library/Audio/Plug-Ins/VST3/Ozone 11 Maximizer.vst3"
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     # ---------------------------------------------------------------------

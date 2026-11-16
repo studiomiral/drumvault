@@ -143,3 +143,29 @@ def test_hits_from_before_chord_stabs_are_disco_hits(tmp_path):
     with LibraryDB(s.library_path):
         pass
     assert [x["kind"] for x in rows(s)] == ["disco"]
+
+
+def test_a_hit_knows_how_hard_it_hits_and_whether_it_is_a_chord(tmp_path):
+    from drumvault_engine import key as keymod, pipeline
+
+    s = settings(tmp_path)
+    src = tmp_path / "drop"
+    write(src / "Organ Stab Cm.wav", stab(C_MINOR, seconds=0.5))
+    write(src / "Synth Note C.wav", stab([60], seconds=0.5))
+    hits.import_hits(s, [str(src)], kind="stab")
+    by = {x["file_name"]: x for x in rows(s)}
+    # Three notes, or one (its harmonics may add a second pitch class, never a third).
+    assert by["Organ Stab Cm.wav"]["voices"] >= s.thresholds.hit_chord_voices
+    assert 1 <= by["Synth Note C.wav"]["voices"] < s.thresholds.hit_chord_voices
+    assert all(-60 < r["punch_db"] < 10 for r in by.values())
+    assert keymod.count_voices(np.zeros(1000, dtype=np.float32), SR, s.thresholds) == 0
+    # A library from before: both are measured again by analyze_library, the same.
+    was = {n: (r["punch_db"], r["voices"]) for n, r in by.items()}
+    conn = sqlite3.connect(Path(s.library_path) / ".drumvault" / "library.sqlite")
+    conn.execute("UPDATE hits SET punch_db = NULL, voices = NULL")
+    conn.commit()
+    conn.close()
+    pipeline.analyze_library(s)
+    again = {x["file_name"]: (x["punch_db"], x["voices"]) for x in rows(s)}
+    assert {n: v[1] for n, v in again.items()} == {n: v[1] for n, v in was.items()}
+    assert {n: v[0] for n, v in again.items()} == pytest.approx({n: v[0] for n, v in was.items()}, abs=0.05)

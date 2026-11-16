@@ -121,6 +121,8 @@ export interface EngineSettings {
   workers?: number;
   serum_plugin?: string;
   serum_plugin_name?: string;
+  ozone_dynamics_plugin?: string;
+  ozone_maximizer_plugin?: string;
   thresholds?: Record<string, unknown>;
 }
 
@@ -139,15 +141,18 @@ export type RpcRequest =
   | { id: string; method: "restore_samples"; params: { removed_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "shift_sample"; params: { sample_id: number; beats: number; settings: EngineSettings } }
   | { id: string; method: "stretch_samples"; params: { rel_paths: string[]; bpm: number; settings: EngineSettings } }
-  | { id: string; method: "import_midi"; params: { paths: string[]; role: "bass" | "keys"; settings: EngineSettings } }
+  | { id: string; method: "import_midi"; params: { paths: string[]; settings: EngineSettings } }
   | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; settings: EngineSettings } }
   | { id: string; method: "set_midi_meta"; params: { midi_id: number; role?: string | null; key_label?: string | null; clear_key?: boolean; settings: EngineSettings } }
   | { id: string; method: "delete_midi"; params: { midi_ids: number[]; settings: EngineSettings } }
-  | { id: string; method: "stab_chords"; params: { presets: string[]; settings: EngineSettings } }
-  | { id: string; method: "import_hits"; params: { paths: string[]; kind?: "disco" | "stab"; settings: EngineSettings } }
+  | { id: string; method: "import_vocal"; params: { folder: string; settings: EngineSettings } }
+  | { id: string; method: "analyze_vocal"; params: { folder: string; settings: EngineSettings } }
+  | { id: string; method: "clean_renders"; params: { keep: string[]; dry_run?: boolean; settings: EngineSettings } }
+  | { id: string; method: "master_mixdown"; params: { mix_path: string; out_path: string; format?: "pcm24" | "float32"; settings: EngineSettings } }
+  | { id: string; method: "import_hits"; params: { paths: string[]; kind?: "disco" | "stab" | "strings"; settings: EngineSettings } }
   | { id: string; method: "set_hit_meta"; params: { hit_id: number; key_label?: string | null; clear_key?: boolean; pitch_fix?: number | null; settings: EngineSettings } }
   | { id: string; method: "delete_hits"; params: { hit_ids: number[]; settings: EngineSettings } }
-  | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; role?: string; settings: EngineSettings } }
+  | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; settings: EngineSettings } }
   | { id: string; method: "serum_presets"; params: { root: string; folders: string[] | null; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }
@@ -180,6 +185,22 @@ export interface RpcResponse<T = unknown> {
 export interface JobAccepted {
   job_id: string;
   queue_position: number;
+}
+
+/** clean_renders' answer: what is (or would be) deleted, and what stays. */
+export interface CleanRendersResult {
+  files: number;
+  bytes: number;
+  kept_files: number;
+  kept_bytes: number;
+}
+
+/** master_mixdown's answer (schemas.MasterResult). */
+export interface MasterResult {
+  lufs: number;
+  peak_db: number;
+  gain_db: number;
+  passes: number;
 }
 
 export interface HealthResult {

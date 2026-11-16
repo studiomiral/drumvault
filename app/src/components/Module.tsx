@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { IconCheck, IconChevron } from './icons'
-import { cx } from './ui'
+import { IconChevron } from './icons'
+import { cx, Toggle } from './ui'
 
 const OPEN_KEY = 'drumvault.generate.modules'
 
@@ -14,9 +14,9 @@ function savedOpen(): Record<string, boolean> {
 
 /**
  * A Generate module (Bass, Chords, Disco Hits, Reverb builds): a panel that folds down to its
- * header. The header keeps the module's on/off check, so it shows at a glance whether G writes a
+ * header. The header keeps the module's on/off switch, so it shows at a glance whether G writes a
  * new one, plus a one-line summary while folded. Open or folded is remembered per module; in a
- * lane panel (`fixed`) it is always open.
+ * lane panel (`fixed`) it is always open, and its switch is on the module's pill instead.
  */
 export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, status, fixed, children }: {
   id: string
@@ -50,12 +50,8 @@ export function Module({ id, title, enabled, onEnabled, enabledTitle, summary, s
             <IconChevron className={cx('w-3.5 h-3.5 transition-transform', open && 'rotate-90')} />
           </button>
         )}
-        <button role="checkbox" aria-checked={enabled} title={enabledTitle}
-                onClick={(e) => { e.stopPropagation(); onEnabled(!enabled) }}
-                className={cx('w-[18px] h-[18px] rounded-[5px] flex items-center justify-center border transition-colors',
-                  enabled ? 'bg-accent border-accent text-on-accent' : 'border-[#55565c] text-transparent hover:border-accent/70')}>
-          <IconCheck className="w-3 h-3" />
-        </button>
+        {/* In the lane panel the switch is on the module's pill. */}
+        {!fixed && <Toggle checked={enabled} onChange={onEnabled} label={`${title} in new generations`} title={enabledTitle} />}
         <h3 className={cx('text-[11px] font-semibold uppercase tracking-wider', enabled ? 'text-text' : 'text-faint')}>{title}</h3>
         {!open && summary && <span className="min-w-0 truncate text-[12px] text-muted">{summary}</span>}
         <span className="flex-1" />

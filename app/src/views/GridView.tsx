@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { audioContext } from '../audio/context'
 import { IconPlay, IconStop } from '../components/icons'
+import { Range } from '../components/Range'
 import { Button, cx, Empty, inputClass, PageTitle, Segmented, StatusChip } from '../components/ui'
 import { beatsIn, blockPeaks, foldAttack, foldBeats, isDownbeat, roundMs } from '../grid/analysis'
-import { gridPlayer } from '../grid/player'
+import { GRID_LEVELS, gridPlayer } from '../grid/player'
 import { formatBpm } from '../lib/format'
 import { formatTime } from '../lib/project'
 import { attempt, useApp } from '../store/app'
@@ -198,11 +199,11 @@ export function GridView() {
                       metronome ? 'border-accent text-accent bg-accent-soft' : 'border-line text-muted hover:text-text')}>
               Metronome
             </button>
-            <Level label="Click" value={levels.click} onChange={(v) => {
+            <Level label="Click" value={levels.click} reset={GRID_LEVELS.click} onChange={(v) => {
               gridPlayer.setLevel('click', v)
               setLevels((l) => ({ ...l, click: v }))
             }} />
-            <Level label="Drums" value={levels.drums} onChange={(v) => {
+            <Level label="Drums" value={levels.drums} reset={GRID_LEVELS.drums} onChange={(v) => {
               gridPlayer.setLevel('drums', v)
               setLevels((l) => ({ ...l, drums: v }))
             }} />
@@ -266,12 +267,11 @@ export function GridView() {
   )
 }
 
-function Level({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+function Level({ label, value, reset, onChange }: { label: string; value: number; reset: number; onChange: (v: number) => void }) {
   return (
     <label className="flex items-center gap-1.5 text-[12px] text-muted">
       {label}
-      <input type="range" min={0} max={1} step={0.01} value={value} onChange={(e) => onChange(Number(e.target.value))}
-             className="w-16 accent-accent" />
+      <Range min={0} max={1} step={0.01} value={value} reset={reset} onValue={onChange} className="w-16 accent-accent" />
     </label>
   )
 }

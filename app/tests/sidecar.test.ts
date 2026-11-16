@@ -54,6 +54,24 @@ describe.skipIf(!uv || !fixturesDir)('Sidecar with the real engine', () => {
     await s?.stop()
   })
 
+  it('looks through a Splice folder: suggestions by name and length, nothing changed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'drumvault-splice-'))
+    const pack = join(root, 'sounds', 'packs', 'House Keys')
+    mkdirSync(pack, { recursive: true })
+    const tone = (seconds: number) => encodeWav([Float32Array.from({ length: Math.round(seconds * 22050) }, (_, i) => 0.4 * Math.sin(i * 0.06) * Math.exp(-i / 9000))], 22050, 'pcm24')
+    writeFileSync(join(pack, 'HK_piano_chord_Am.wav'), Buffer.from(tone(1)))
+    writeFileSync(join(pack, 'HK_124_drum_loop.wav'), Buffer.from(tone(2)))
+    writeFileSync(join(pack, 'HK_warm_strings_Dm.wav'), Buffer.from(tone(5)))
+    const lib = mkdtempSync(join(tmpdir(), 'drumvault-splice-lib-'))
+    const r = await s.request<import('../src/types/api').SpliceScan>('scan_splice', { folder: root, settings: { library_path: lib } })
+    expect(r.found).toBe(true)
+    expect(r.files).toBe(3)
+    expect(r.candidates.map((c) => [c.name, c.kind, c.pack, c.key_label, c.imported])).toEqual([
+      ['HK_piano_chord_Am', 'stab', 'House Keys', 'Am', null], ['HK_warm_strings_Dm', 'strings', 'House Keys', 'Dm', null],
+    ])
+    expect((await s.request<import('../src/types/api').SpliceScan>('scan_splice', { folder: join(root, 'nowhere'), settings: { library_path: lib } })).found).toBe(false)
+  })
+
   it('is healthy', async () => {
     expect(s.status.health?.version).toBeTruthy()
     const h = await s.request<HealthResult>('health')

@@ -32,7 +32,18 @@ export interface ScheduledEvent {
   fade?: EventFade
   /** A 16th slice of a loop played at another tempo: tiny fades at both ends against clicks. */
   declick?: boolean
+  /** A gated hit: it fades out over its last this many seconds. */
+  release?: number
+  /** A delay throw: the send (0…1), the delay time (seconds) and how much of each repeat comes round again. */
+  echo?: { send: number; time: number; feedback: number }
 }
+
+/** A delay throw repeats a dotted 8th later, each repeat this much of the last. */
+export const ECHO_BEATS = 0.75
+export const ECHO_FEEDBACK = 0.42
+/** A gated hit fades out over this share of its length, at most this long (seconds). */
+const GATE_RELEASE_SHARE = 0.3
+const GATE_RELEASE_MAX_S = 0.06
 
 // ---------------------------------------------------------------------------
 // Tempo (SCOPE.md §6.4a): samples are cut at the library BPM; a project may run at another.
@@ -69,12 +80,13 @@ export function tempoPath(relPath: string, bpm: number): string {
 }
 
 /** FNV-1a, hex: a short stable id for a preset path in render file names. */
-/** Where a part's renders go: bass, keys and stab parts each their own folder. */
-const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : 'bass')
+/** Where a part's renders go: bass, strings and vocal parts (and older tracks' keys, stab and drone parts) each their own folder. */
+const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones'
+  : b.role === 'strings' ? 'strings' : b.role === 'vocal' ? 'vocals' : b.role === 'pad' ? 'pads' : b.role === 'ambience' ? 'ambience' : 'bass')
 
-/** The start of every render of `preset` as a chord stab part (to tell a preset used in a track by its files). */
-export function stabRenderPrefix(preset: string): string {
-  return `.drumvault/stabs/${shortHash(preset)}-`
+/** The start of every render of the string sample `preset` (its rel path). */
+export function stringsRenderPrefix(preset: string): string {
+  return `.drumvault/strings/${shortHash(preset)}-`
 }
 
 function shortHash(s: string): string {
@@ -90,7 +102,12 @@ function shortHash(s: string): string {
 export function bassPath(b: BassRender, bpm: number): string {
   const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
   const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
-  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${feel}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+  // (An older track's drone: its file is named after how it was made.)
+  const d = b.drone
+  const drone = d ? `-${d.rhythm}${d.warp && d.warp !== 'none' ? `-${d.warp}` : ''}${d.start ? `-s${Math.round(d.start * 100)}` : ''}` : ''
+  // (A strings part shorter than 8 bars is another file than the 8-bar one.)
+  const len = (b.role === 'strings' && b.bars && b.bars !== 8) || b.role === 'ambience' ? `-b${b.bars ?? 8}` : ''
+  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${feel}${drone}${len}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
 }
 
 /** The file a clip plays at the project tempo. */
@@ -210,13 +227,17 @@ function withVerb(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
   return { ...ev, verb: Array.from({ length: n }, (_, i) => verbSend(clip, bpm, ev.start + (ev.duration! * i) / (n - 1))) }
 }
 
+function withEcho(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
+  return clip.echo ? { ...ev, echo: { send: clip.echo, time: beatToSec(ECHO_BEATS, bpm), feedback: ECHO_FEEDBACK } } : ev
+}
+
 function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
               gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number,
-              relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number } = {}): void {
+              relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number; release?: number } = {}): void {
   const rate = opts.rate ?? 1
-  const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}) }
+  const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}), ...(opts.release ? { release: opts.release } : {}) }
   if (start >= from - EPS && start < to - EPS) {
-    out.push(withRide(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm), clip, bpm))
+    out.push(withEcho(withRide(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm), clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
     const late = from - start
     out.push(withRide(withVerb(withFade(withFilter({
@@ -299,7 +320,10 @@ function patternEvents(clip: PatternClip, bpm: number, from: number, to: number,
     const inBar = (((startStep + i) % STEPS_PER_BAR) + STEPS_PER_BAR) % STEPS_PER_BAR
     const start = beatToSec(clip.start + (i + (g?.offsets[inBar] ?? 0)) / STEPS_PER_BEAT, bpm)
     const accent = g ? dbToGain(g.gains[inBar] ?? 0) : 1
-    push(out, clip, bpm, start, 0, null, gain * VELOCITY_GAIN[v] * accent, from, to, false, 0, clip.sample.relPath, { rate })
+    // A gated hit plays its gate's length and fades out at the end; any other rings to its end.
+    const dur = clip.gate ? beatToSec(clip.gate, bpm) : null
+    push(out, clip, bpm, start, 0, dur, gain * VELOCITY_GAIN[v] * accent, from, to, false, 0, clip.sample.relPath,
+      { rate, ...(dur ? { release: Math.min(GATE_RELEASE_MAX_S, dur * GATE_RELEASE_SHARE) } : {}) })
   }
 }
 
@@ -312,8 +336,11 @@ export function kickHits(project: Project, from: number, to: number): number[] {
   return [...new Set(out.map((e) => e.start))].sort((a, b) => a - b)
 }
 
-/** Release of the sidechain duck: most of a beat. */
-export const duckRelease = (bpm: number) => (0.6 * 60) / bpm
+/** A duck recovers over this many beats unless the lane says otherwise (`Lane.duckBeats`). */
+export const DUCK_BEATS = 0.6
+
+/** Release of the sidechain duck (seconds): most of a beat, or the lane's own `beats`. */
+export const duckRelease = (bpm: number, beats: number = DUCK_BEATS) => (beats * 60) / bpm
 
 /** Metronome clicks in [from, to): one per beat, `downbeat` on bar starts. */
 export function metronomeTicks(bpm: number, from: number, to: number): { start: number; downbeat: boolean }[] {

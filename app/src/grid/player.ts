@@ -8,6 +8,8 @@ import { playback } from '../audio/engine'
 import { beatsIn, isDownbeat } from './analysis'
 
 const LOOKAHEAD = 0.12
+/** The drums' and the click's starting levels (their sliders' ⌥-click). */
+export const GRID_LEVELS = { drums: 0.9, click: 0.5 }
 const TICK_MS = 25
 
 function clickBuffer(ctx: AudioContext, freq: number): AudioBuffer {
@@ -39,7 +41,7 @@ export class GridPlayer {
   private horizon = 0
   private timer: ReturnType<typeof setInterval> | null = null
   private listeners = new Set<Listener>()
-  private levels = { drums: 0.9, click: 0.5 }
+  private levels = { ...GRID_LEVELS }
 
   get playing(): boolean {
     return this.source != null

@@ -246,16 +246,14 @@ def test_import_midi_zip_names_parts_and_shares_the_key(tmp_path):
     z = make_midi_zip(tmp_path, "777_midi.zip", {"Bass": bass, "Organ": chords_fm(), "Pianist": chords_fm(1)})
     from drumvault_engine import zipio
     assert zipio.is_midi_zip(z)
-    r = pipeline.import_midi(s, [str(z)], "bass")
-    # Dropped on the bass section: only the part named for it; the others helped find the key.
+    r = pipeline.import_midi(s, [str(z)])
+    # Only the part named for the bass; the others helped find the key.
     assert [(m["file_name"], m["role"], m["key_label"]) for m in r["imported"]] == [("777 Bass.mid", "bass", "Fm")]
     assert r["ignored"] == 2
     row = sqlite3.connect(lib / ".drumvault" / "library.sqlite").execute(
         "SELECT source, rel_path, original_path FROM midi_files WHERE role = 'bass'").fetchone()
     assert row[0] == "777" and row[1] == "MIDI/Bass/777-bass.mid" and row[2].endswith("777_midi.zip!Midi/Bass.mid")
-    keys = pipeline.import_midi(s, [str(z)], "keys")   # and on the keys section: the organ
-    assert [(m["file_name"], m["role"], m["key_label"]) for m in keys["imported"]] == [("777 Organ.mid", "keys", "Fm")]
-    again = pipeline.import_midi(s, [str(z)], "bass")
+    again = pipeline.import_midi(s, [str(z)])
     assert (again["skipped"], again["imported"]) == (1, [])
 
 
@@ -297,59 +295,34 @@ def test_keys_roles_are_separate_from_bass(name):
     assert midimod.guess_role("Lead.mid", [], Thresholds()) == "other"
 
 
-def test_a_file_dropped_on_a_section_is_that_part_whatever_its_name(tmp_path):
+def test_a_loose_file_is_a_bassline_whatever_its_name(tmp_path):
     s = Settings(library_path=str(tmp_path / "lib"))
     write_midi(tmp_path / "mine" / "Lead idea.mid", [(0, 1, 60), (0, 1, 63), (0, 1, 67), (2, 1, 58), (2, 1, 62), (2, 1, 65)])
     write_midi(tmp_path / "mine" / "Groove 3.mid", f_minor_bass(1))
-    r = pipeline.import_midi(s, [str(tmp_path / "mine")], "keys")
-    assert sorted((m["file_name"], m["role"]) for m in r["imported"]) == [("Groove 3.mid", "keys"), ("Lead idea.mid", "keys")]
-    with pytest.raises(pipeline.PipelineError):
-        pipeline.import_midi(s, [str(tmp_path / "mine")], "other")
+    r = pipeline.import_midi(s, [str(tmp_path / "mine")])
+    assert sorted((m["file_name"], m["role"]) for m in r["imported"]) == [("Groove 3.mid", "bass"), ("Lead idea.mid", "bass")]
     assert midimod.named_role("Slow Chords.mid") == "keys" and midimod.named_role("Sub 2.mid") == "bass"
 
 
-def test_keys_import_save_reimport_and_role_correction(tmp_path):
+def test_a_zips_keys_parts_are_left_out_and_saved_edits_are_basslines(tmp_path):
     s = Settings(library_path=str(tmp_path / "lib"))
     z = make_midi_zip(tmp_path, "keys_midi.zip", {"Piano Cm": [(0, 1, 60), (0, 1, 63), (0, 1, 67)],
                                                "Bass Cm": [(0, 1, 36)], "Strings": [(0, 1, 84)]})
-    r = pipeline.import_midi(s, [str(z)], "keys")
-    assert [m["role"] for m in r["imported"]] == ["keys"]
+    r = pipeline.import_midi(s, [str(z)])
+    assert [(m["file_name"], m["role"]) for m in r["imported"]] == [("keys Bass Cm.mid", "bass")]
     assert r["ignored"] == 2
-    with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:
-        row = db.execute("SELECT rel_path, notes FROM midi_files WHERE role = 'keys'").fetchone()
-        assert row[0].startswith("MIDI/Keys/") and len(json.loads(row[1])) == 3
-    notes = [[0, 2, 60, 110], [0, 1.5, 63, 95], [0, 1.75, 67, 90]]
-    saved = pipeline.save_midi(s, "My piano edit", notes, 1, "Cm", "keys")
-    assert saved["rel_path"].startswith("MIDI/Keys/")
-    assert pipeline.save_midi(s, "My piano edit", notes, 1, "Cm", "keys")["id"] == saved["id"]
+    notes = [[0, 2, 36, 110], [2, 1.5, 39, 95]]
+    saved = pipeline.save_midi(s, "My bass edit", notes, 1, "Cm")
+    assert saved["rel_path"].startswith("MIDI/Bass/")
+    assert pipeline.save_midi(s, "My bass edit", notes, 1, "Cm")["id"] == saved["id"]
     restored = midimod.read_notes(Path(s.library_path) / saved["rel_path"])
-    assert [n.pitch for n in restored] == [60, 63, 67]
-    assert pipeline.import_midi(s, [str(z)], "keys")["skipped"] == 1
-    pipeline.set_midi_meta(s, saved["id"], "bass", None, False)
-    pipeline.set_midi_meta(s, saved["id"], "keys", None, False)
+    assert [n.pitch for n in restored] == [36, 39]
     with sqlite3.connect(Path(s.library_path) / ".drumvault/library.sqlite") as db:
-        assert db.execute("SELECT role FROM midi_files WHERE id = ?", (saved["id"],)).fetchone()[0] == "keys"
-
-
-@pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
-def test_render_polyphonic_keys_through_serum(tmp_path):
-    s = Settings(library_path=str(tmp_path / "lib"))
-    preset_root = FACTORY_BASS.parent
-    keys_presets = sorted((preset_root / "Piano").rglob("*.SerumPreset"))
-    if not keys_presets:
-        keys_presets = sorted(preset_root.rglob("*.SerumPreset"))
-    notes = [[0, 1.5, 60, 100], [0, 1.5, 63, 90], [0, 1.5, 67, 95], [2.5, 1, 70, 90]]
-    out = ".drumvault/keys/poly.wav"
-    result = pipeline.render_bass(s, str(keys_presets[0]), -1, 0, 124, out, notes=notes, bars=1)
-    audio, sr = sf.read(Path(s.library_path) / out, always_2d=True)
-    assert audio.shape == (round(4 * 60 / 124 * sr), 2)
-    assert np.isfinite(audio).all() and np.abs(audio).max() > 0.01
-    assert result["cached"] is False
-    assert pipeline.render_bass(s, str(keys_presets[0]), -1, 0, 124, out, notes=notes, bars=1)["cached"] is True
+        assert db.execute("SELECT role FROM midi_files WHERE id = ?", (saved["id"],)).fetchone()[0] == "bass"
 
 
 def test_chord_stab_parts_render_into_their_own_folder(tmp_path):
-    # A Serum patch playing chord stabs (SCOPE.md §6.9): the app's notes, in .drumvault/stabs/.
+    # An older track's Serum chord stab part (re-rendered when its file is gone): in .drumvault/stabs/.
     s = Settings(library_path=str(tmp_path / "lib"))
     stab = [[0.5, 0.25, p, 112] for p in (57, 60, 64, 67)]
     with pytest.raises(pipeline.PipelineError, match="preset not found"):  # past the path check
@@ -367,47 +340,3 @@ def test_chord_stab_parts_render_through_a_patch(tmp_path):
     r = pipeline.render_bass(s, str(preset), 0, 0, 124, ".drumvault/stabs/s.wav", notes=stab, bars=2)
     y, sr = sf.read(lib / r["path"], always_2d=True)
     assert y.shape[0] == round(2 * 4 * 60 / 124 * sr) and np.abs(y).max() > 0.05
-
-
-def _tone(midis: list[int], sr: int = 44100, seconds: float = 1.0) -> np.ndarray:
-    t = np.arange(int(sr * seconds)) / sr
-    x = sum(sum(np.sin(2 * np.pi * 440 * 2 ** ((m - 69) / 12) * k * t) / k for k in range(1, 7)) for m in midis)
-    return np.stack([x, x], axis=1).astype(np.float32) * 0.1
-
-
-def test_tells_a_patch_that_plays_a_chord_from_one_key():
-    s = Settings()
-    assert not pipeline.plays_chord(_tone([48]), 44100, 48, s)                  # one note, with its overtones
-    assert pipeline.plays_chord(_tone([48, 55, 58, 62]), 44100, 48, s)           # C G Bb D from one key
-    assert pipeline.plays_chord(_tone([43, 48, 50, 55]), 44100, 48, s)           # a voicing reaching below it
-
-
-@pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
-def test_measures_stab_patches_once(tmp_path):
-    s = Settings(library_path=str(tmp_path / "lib"))
-    preset = str(sorted(FACTORY_BASS.rglob("*.SerumPreset"))[1])
-    r = pipeline.stab_chords(s, [preset, "/nope.SerumPreset"])["chords"]
-    assert list(r) == [preset] and isinstance(r[preset], bool)                 # a missing preset is left out
-    assert (tmp_path / "lib" / ".drumvault" / "stabs" / "chords.json").exists()
-    assert pipeline.stab_chords(s, [preset])["chords"] == r
-
-
-
-def _fake_preset(path: Path, patch: dict) -> Path:
-    import struct
-    import cbor2
-    import zstandard
-    raw = cbor2.dumps(patch)
-    path.write_bytes(serum.write_xfer({"product": "Serum2"}, struct.pack("<II", len(raw), 2) + zstandard.ZstdCompressor().compress(raw)))
-    return path
-
-
-def test_reads_the_chord_a_presets_clip_player_plays(tmp_path):
-    note = lambda t, n: {"timeStamp": t, "length": 0.25, "noteNum": n, "attributes": [0.8], "channel": 0}  # noqa: E731
-    clip = {"ClipPlayer0": {"plainParams": {"kParamEnabled": 1.0}}, "ClipPlayer": {"kUIParamSelectedClip": 0.0},
-            "MidiClip0": {"clip": {"notes": [note(0.0, 48), note(0.0, 63), note(0.0, 70), note(1.0, 65), note(1.0, 72)]}},
-            "MidiClip1": {"clip": {}}}
-    assert serum.clip_chord(_fake_preset(tmp_path / "a.SerumPreset", clip)) == [-12, 3, 10]   # the first chord, from C4
-    off = dict(clip, ClipPlayer0={"plainParams": {}})
-    assert serum.clip_chord(_fake_preset(tmp_path / "b.SerumPreset", off)) is None          # clip player off
-    assert serum.clip_chord(_fake_preset(tmp_path / "c.SerumPreset", {"ClipPlayer0": "x"})) is None

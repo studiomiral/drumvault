@@ -3,7 +3,6 @@ import { api } from '../api'
 import { audition } from '../audio/audition'
 import { IconDrop, IconPlay, IconStop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
-import { SerumFolders } from '../components/SerumFolders'
 import { hitSampleId } from '../generate/disco'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -27,17 +26,40 @@ const TEXT = {
     title: 'Chord Stabs', one: 'chord stab', many: 'chord stabs', empty: 'Drop your chord stabs here: organ, piano, synth and string stabs.',
     drop: 'Drop chord stabs: audio files, folders or zips',
     about: 'One chord per file, trimmed and copied into the library. The key comes from the file name ("Organ Stab Cm7", '
-      + '"Stab_F#_maj"), else from the sound. Most generated tracks play two or three of them instead of the keys, in a '
-      + 'funky rhythm, moved into the track key; if one sounds off, fix the key here or the pitch in Generate.',
+      + '"Stab_F#_maj"), else from the sound. Every generated track plays one of them in a funky rhythm, moved into '
+      + 'the track key; if one sounds off, fix the key here or the pitch in Generate.',
+  },
+  bass: {
+    title: 'Bass Samples', one: 'bass sample', many: 'bass samples', empty: 'Drop your bass one-shots here: one note per file.',
+    drop: 'Drop bass one-shots: audio files, folders or zips',
+    about: 'One bass note per file, trimmed and copied into the library. Its note comes from the file name ("Deep Bass A", '
+      + '"808_F#"), else from its pitch. Generate can play a track\'s bassline with one of them instead of a Serum patch, '
+      + 'like a sampler: every note is the sample played higher or lower. If a bass sounds out of key, fix its note here.',
+  },
+  ambience: {
+    title: 'Ambience', one: 'texture', many: 'textures', empty: 'Drop long textures here: vinyl crackle, tape hiss, room tone, field recordings.',
+    drop: 'Drop textures: audio files, folders or zips',
+    about: 'Long textures without a beat or a tune (up to a minute each), copied into the library. Generate lays one very quietly '
+      + 'under most tracks, from the end of the intro to the start of the outro, made into a seamless loop and ducking under the kick: '
+      + 'the air that makes a track sound less dry. They have no key and are never moved.',
+  },
+  strings: {
+    title: 'Strings', one: 'string sample', many: 'string samples', empty: 'Drop your long string samples here: held chords and lines with a key.',
+    drop: 'Drop strings: audio files, folders or zips',
+    about: 'Long string samples with a key (up to a minute each). The key comes from the file name ("Warm Strings Am"), else '
+      + 'from the sound; a sample needs one to be used. Generate plays one in some tracks as it was recorded, starting again '
+      + 'on every 8-bar line, moved into the track key with its length kept: only samples within 3 semitones of the key, '
+      + 'so fix a key read wrong here.',
   },
 }
 
 /**
  * Samples → Disco Hits (SCOPE.md §6.8): stabs, brass hits and the like. Generate drops one or
  * two of them on the 1 at key moments of some tracks, moved into the track key. Samples → Chord
- * Stabs (§6.9) is the same page for the chord stabs most tracks play instead of the keys.
+ * Stabs (§6.9) is the same page for the chord stabs every track plays, Samples → Strings (§6.10)
+ * for long string samples.
  */
-export function HitsView({ kind }: { kind: HitItem['kind'] }) {
+export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) {
   const { libraryVersion, engine, toast } = useApp()
   const all = useHits((s) => s.hits)
   const loaded = useHits((s) => s.loaded)
@@ -122,8 +144,6 @@ export function HitsView({ kind }: { kind: HitItem['kind'] }) {
           </span>
         </button>
 
-        {kind === 'stab' && <SerumFolders module="stabs" />}
-
         {loaded && !hits.length ? (
           <Empty title={`No ${t.many} yet`}>{t.empty}</Empty>
         ) : (
@@ -143,12 +163,12 @@ export function HitsView({ kind }: { kind: HitItem['kind'] }) {
                       {h.pitch_fix ? ` · pitch fixed ${h.pitch_fix > 0 ? '+' : ''}${h.pitch_fix} st` : ''}
                     </div>
                   </div>
-                  <select className={cx(inputClass, 'w-36 h-7 text-[12px]', h.key_source === 'detected' && 'text-accent')}
+                  {kind !== 'ambience' && <select className={cx(inputClass, 'w-36 h-7 text-[12px]', h.key_source === 'detected' && 'text-accent')}
                           value={h.key_label ?? ''} title={`Key: Generate moves the ${t.one} from this key into the track's`}
                           onChange={(e) => void setKey(h, e.target.value)}>
                     <option value="">No key</option>
                     {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
-                  </select>
+                  </select>}
                   <button title={`Remove from the ${t.many}`} className="text-faint hover:text-bad" onClick={() => void remove(h)}>
                     <IconX className="w-4 h-4" />
                   </button>

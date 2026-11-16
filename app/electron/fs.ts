@@ -25,11 +25,27 @@ export async function loadSettings(file: string): Promise<AppSettings> {
   }
 }
 
+let tmpCount = 0
+
+/**
+ * Replace `file` with `text` atomically: written next to it under a hidden temp name of its own,
+ * then renamed over it. Two writes of one file at once each have their own temp file (with a
+ * shared one, the second rename finds it gone); the last rename wins.
+ */
+export async function writeAtomic(file: string, text: string): Promise<void> {
+  const tmp = join(dirname(file), `.${basename(file)}.${process.pid}-${++tmpCount}.tmp`)
+  try {
+    await writeFile(tmp, text)
+    await rename(tmp, file)
+  } catch (e) {
+    await unlink(tmp).catch(() => {})
+    throw e
+  }
+}
+
 export async function saveSettings(file: string, settings: AppSettings): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
-  const tmp = `${file}.tmp`
-  await writeFile(tmp, JSON.stringify(settings, null, 2))
-  await rename(tmp, file) // atomic replace
+  await writeAtomic(file, JSON.stringify(settings, null, 2))
 }
 
 function isJunk(name: string): boolean {
@@ -136,8 +152,7 @@ export async function readShortlist(library: string): Promise<string | null> {
 export async function writeShortlist(library: string, text: string): Promise<void> {
   const path = shortlistPath(library)
   await mkdir(join(library, '.drumvault'), { recursive: true })
-  await writeFile(`${path}.tmp`, text)
-  await rename(`${path}.tmp`, path)
+  await writeAtomic(path, text)
 }
 
 export function projectsDir(library: string): string {
@@ -191,9 +206,7 @@ export async function writeProjectFile(library: string, previous: string | null,
   if (!previous) {
     for (let i = 2; existsSync(join(dir, file)); i++) file = projectFileName(`${name} ${i}`)
   }
-  const tmp = join(dir, `.${file}.tmp`)
-  await writeFile(tmp, text)
-  await rename(tmp, join(dir, file))
+  await writeAtomic(join(dir, file), text)
   if (previous && previous !== file) await unlink(join(dir, previous)).catch(() => {})
   return file
 }

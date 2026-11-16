@@ -145,8 +145,101 @@ def test_analyze_library_fills_in_older_libraries(fixtures, tmp_path):
         # The same shapes as processing measured, the source bar worked out from the stored offset.
         again = dict(db.conn.execute("SELECT id, shape FROM samples WHERE kind = 'event'").fetchall())
         assert {k: json.loads(v) for k, v in again.items()} == {k: json.loads(v) for k, v in shapes.items()}
-    assert pipeline.analyze_library(settings) == {"grooves": 0, "shapes": 0, "kept": 0, "not_kept": [], "arrangements": 0,
-                                                   "missing": []}
+    assert pipeline.analyze_library(settings) == {"loudness": 0, "grooves": 0, "shapes": 0, "kept": 0, "not_kept": [],
+                                                   "arrangements": 0, "missing": []}
+
+
+def test_k_energy_matches_lufs():
+    """A 997 Hz sine at -20 dBFS (mono) is -23.05 LUFS (ITU-R BS.1770); 4 s of it 6 dB more energy than 1 s."""
+    from drumvault_engine.audioutil import k_energy_db
+    import pyloudnorm
+    for sr in (44100, 48000):
+        t = np.arange(4 * sr) / sr
+        x = (np.sin(2 * np.pi * 997 * t) * 0.1).astype(np.float32)
+        assert k_energy_db(x, sr) - 10 * np.log10(4) == pytest.approx(pyloudnorm.Meter(sr).integrated_loudness(x.astype(np.float64)), abs=0.05)
+        assert k_energy_db(x, sr) - k_energy_db(x[:sr], sr) == pytest.approx(10 * np.log10(4), abs=0.05)
+    assert k_energy_db(np.zeros(1000, dtype=np.float32), 44100) is None
+
+
+def test_arrangement_measures_the_producers_balance():
+    """Each part's loudness in its full bars; the balance is the producer's unless the stems were normalised one by one."""
+    kick = _bars([0.5] * 8 + [0] * 4 + [0.5] * 8)
+    hats = _bars([0.05] * 20)
+    a = arrangement.measure([("Kick", "kick", kick, 8000), ("Hats", "hat_closed", hats, 8000)], BPM, 0.0, Thresholds())
+    lv = a["levels"]["parts"]
+    assert lv["kick"] - lv["hats"] == pytest.approx(20.0, abs=1.5)   # the breakdown doesn't pull the kick down
+    peaky = lambda x: x / np.max(np.abs(x))  # noqa: E731
+    th = Thresholds()
+    assert not a["levels"]["normalized"]
+    norm = arrangement.measure([("Kick", "kick", peaky(kick), 8000), ("Hats", "hat_closed", peaky(hats), 8000),
+                                ("Perc", "perc", peaky(hats), 8000)], BPM, 0.0, th)
+    assert norm["levels"]["normalized"]
+    # A full drum loop plays with the tops but isn't their level (it's mostly a kick).
+    with_drums = arrangement.measure([("Kick", "kick", kick, 8000), ("Top", "top", hats, 8000), ("Drums", "drums", kick, 8000)],
+                                     BPM, 0.0, th)
+    assert with_drums["levels"]["parts"]["top"] == pytest.approx(lv["hats"], abs=0.2)
+    # Each part's tone: its bands against its total; noise is flat per Hz, so it rises with the band
+    # width (up to 4 kHz: the test stems are at 8 kHz).
+    sp = a["levels"]["spectra"]["hats"]
+    edges = np.geomspace(th.arrangement_band_lo_hz, th.arrangement_band_hi_hz, th.arrangement_bands + 1)
+    top = int(np.searchsorted(edges, 3500)) - 1
+    assert len(sp) == th.arrangement_bands and sp[top] > sp[0] + 10
+    assert 10 * np.log10(sum(10 ** (v / 10) for v in sp)) == pytest.approx(0, abs=0.2)
+
+
+def test_tone_of_a_sound():
+    from drumvault_engine.arrangement import tone
+    th = Thresholds()
+    sr = 44100
+    t = np.arange(sr) / sr
+    low = tone(np.sin(2 * np.pi * 100 * t).astype(np.float32), sr, th)
+    high = tone(np.sin(2 * np.pi * 5000 * t).astype(np.float32), sr, th)
+    edges = np.geomspace(th.arrangement_band_lo_hz, th.arrangement_band_hi_hz, th.arrangement_bands + 1)
+    assert int(np.argmax(low)) == int(np.searchsorted(edges, 100)) - 1
+    assert int(np.argmax(high)) == int(np.searchsorted(edges, 5000)) - 1
+    assert tone(np.zeros(1000, dtype=np.float32), sr, th) is None
+
+
+def test_punch_is_the_loudest_window_and_tells_a_snappy_hit_from_a_washy_one():
+    from drumvault_engine.audioutil import k_energy_db, k_punch_db
+
+    sr = 44100
+    rng = np.random.default_rng(1)
+    noise = rng.standard_normal(sr).astype(np.float32) * 0.1
+    # A sound as long as the window: its punch is its loudness.
+    assert k_punch_db(noise[: sr // 5], sr, 0.2) == pytest.approx(k_energy_db(noise[: sr // 5], sr) - 10 * np.log10(0.2), abs=0.05)
+    # Steady noise: any window is as loud as the whole.
+    assert k_punch_db(noise, sr, 0.2) == pytest.approx(k_energy_db(noise, sr), abs=0.5)
+    # The same energy in 50 ms or spread over 800 ms: the snappy one hits 6 dB harder (0.8 s / 0.2 s).
+    snappy = np.zeros(sr, dtype=np.float32)
+    snappy[: sr // 20] = rng.standard_normal(sr // 20) * 0.4
+    washy = np.zeros(sr, dtype=np.float32)
+    washy[: 4 * sr // 5] = rng.standard_normal(4 * sr // 5) * 0.1
+    assert k_energy_db(snappy, sr) == pytest.approx(k_energy_db(washy, sr), abs=0.5)
+    assert k_punch_db(snappy, sr, 0.2) - k_punch_db(washy, sr, 0.2) == pytest.approx(6.0, abs=0.7)
+    # Shorter than the window: counted as the window long. Stereo as its mono mix. Silence: none.
+    assert k_punch_db(snappy[: sr // 20], sr, 0.2) == pytest.approx(k_punch_db(snappy, sr, 0.2), abs=0.05)
+    assert k_punch_db(np.stack([snappy, snappy], axis=1), sr, 0.2) == pytest.approx(k_punch_db(snappy, sr, 0.2), abs=0.01)
+    assert k_punch_db(np.zeros(1000, dtype=np.float32), sr, 0.2) is None
+
+
+def test_samples_and_hits_get_their_loudness(fixtures, tmp_path):
+    settings = Settings(library_path=str(tmp_path / "lib"))
+    pipeline.process_zip(fixtures.zip("deep_groove"), settings)
+    with LibraryDB(settings.library_path) as db:
+        rows = db.conn.execute("SELECT id, energy_db, tone, punch_db FROM samples").fetchall()
+        assert rows and all(r["energy_db"] is not None and -60 < r["energy_db"] < 20 for r in rows)
+        assert all(r["punch_db"] is not None and -60 < r["punch_db"] < 10 for r in rows)
+        punch = {r["id"]: r["punch_db"] for r in rows}
+        assert all(len(json.loads(r["tone"])) == 24 for r in rows)
+        measured = {r["id"]: r["energy_db"] for r in rows}
+        db.conn.execute("UPDATE samples SET energy_db = NULL, tone = NULL, punch_db = NULL")
+        assert db.get_arrangement(1)["levels"]["parts"]["kick"] < 0
+    assert pipeline.analyze_library(settings)["loudness"] == len(measured)
+    with LibraryDB(settings.library_path) as db:
+        again = {r["id"]: r["energy_db"] for r in db.conn.execute("SELECT id, energy_db FROM samples")}
+        assert again == pytest.approx(measured, abs=0.02)
+        assert {r["id"]: r["punch_db"] for r in db.conn.execute("SELECT id, punch_db FROM samples")} == pytest.approx(punch, abs=0.02)
 
 
 def test_old_library_gets_the_new_columns(tmp_path):
@@ -163,3 +256,15 @@ def test_rpc_runs_analyze_library_as_a_job(tmp_path):
     from drumvault_engine.schemas import RpcRequest
     req = RpcRequest.model_validate({"id": "1", "method": "analyze_library", "params": {"settings": {}}})
     assert req.method == "analyze_library"
+
+
+def test_arrangement_measures_stems_loaded_one_at_a_time():
+    """Stems given as loaders measure exactly as stems given as audio (a long track never sits in memory whole)."""
+    kick = _bars([0.5] * 8 + [0] * 4 + [0.5] * 8)
+    hats = _bars([0.05] * 14)          # shorter than the kick: its last bars are silent
+    th = Thresholds()
+    given = arrangement.measure([("Kick", "kick", kick, 8000), ("Hats", "hat_closed", hats, 8000)], BPM, 0.0, th)
+    loaded = []
+    lazy = arrangement.measure([("Kick", "kick", lambda: loaded.append("k") or kick, 8000),
+                                ("Hats", "hat_closed", lambda: loaded.append("h") or hats, 8000)], BPM, 0.0, th)
+    assert lazy == given and loaded == ["k", "h"]

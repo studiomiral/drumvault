@@ -43,8 +43,10 @@ export const BUILD_LABEL: Record<BuildStyle, string> = {
 }
 
 export function pickKickMode(rng: Rng): KickMode {
-  // Low-passed kicks are kept rare; a thin high-passed kick is the more common filtered one.
-  return rng.weighted([['out', 5], ['thin', 2.5], ['filtered', 1], ['sweep', 1], ['downbeats', 1.5], ['kept', 1]])
+  // Low-passed kicks are kept rare; a thin high-passed kick is the more common filtered one. A kick
+  // plays four to the floor or not at all: never only on the 1 of each bar ('downbeats' is no
+  // longer drawn; tracks made with it keep it).
+  return rng.weighted([['out', 6.5], ['thin', 2.5], ['filtered', 1], ['sweep', 1], ['kept', 1]])
 }
 
 export function pickBuildStyle(rng: Rng): BuildStyle {

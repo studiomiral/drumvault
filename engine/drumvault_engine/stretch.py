@@ -118,3 +118,31 @@ def stretch_stem(data: np.ndarray, sr: int, source_bpm: float, settings: Setting
             log.warning("rubberband length %d != expected %d", y.shape[0], expected)
         y = y[:expected] if y.shape[0] > expected else np.pad(y, ((0, expected - y.shape[0]), (0, 0)))
     return np.ascontiguousarray(y), out_sr, warnings
+
+
+def stretch_by(x: np.ndarray, sr: int, factor: float, settings: Settings) -> np.ndarray:
+    """`x` (n, ch) made `factor` times as long with its pitch kept (Rubber Band). Exactly
+    round(n · factor) frames."""
+    return _rubberband(x, sr, ["--time", repr(factor)], int(round(x.shape[0] * factor)), settings)
+
+
+def pitch_by(x: np.ndarray, sr: int, semitones: float, settings: Settings) -> np.ndarray:
+    """`x` (n, ch) moved `semitones` up or down with its length kept (Rubber Band): a string sample
+    in the track key. Exactly n frames."""
+    return _rubberband(x, sr, ["--pitch", repr(float(semitones))], x.shape[0], settings)
+
+
+def _rubberband(x: np.ndarray, sr: int, args: list[str], expected: int, settings: Settings) -> np.ndarray:
+    info = rubberband_info(settings.rubberband_binary, settings.rubberband_r3_flag)
+    if not info.path:
+        raise StretchError(f"Rubber Band binary not found: {settings.rubberband_binary}")
+    opts, _ = effective_options(settings)
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = Path(d) / "in.wav", Path(d) / "out.wav"
+        sf.write(str(src), x, sr, subtype="FLOAT")
+        proc = subprocess.run([info.path, "-q", *opts, *args, str(src), str(dst)], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise StretchError(f"rubberband failed ({proc.returncode}): {proc.stderr.strip()[-500:]}")
+        y, _ = sf.read(str(dst), dtype="float32", always_2d=True)
+    y = y[:expected] if y.shape[0] > expected else np.pad(y, ((0, expected - y.shape[0]), (0, 0)))
+    return np.ascontiguousarray(y)

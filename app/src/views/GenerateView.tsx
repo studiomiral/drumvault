@@ -8,7 +8,7 @@ import { BarSlider, fmtDb } from '../arrange/LaneHeaders'
 import { ChoiceRow, LanePanel } from '../components/LanePanel'
 import { panelOf, type Panel } from '../store/arrange'
 import { CHOICE_GROUPS, choicesFor } from '../generate/choices'
-import { LANES, laneRole, type Generation } from '../generate/generator'
+import { laneRole, type Generation } from '../generate/generator'
 import { markerColor } from '../lib/project'
 import { laneAudible } from '../audio/graph'
 import { useApp } from '../store/app'
@@ -251,6 +251,11 @@ function Options() {
                onChange={(e) => update({ useRatings: e.target.checked })} />
         Prefer favourites
       </label>
+      <label className="flex items-center gap-1.5 ml-2" title="Every track is listened back to: loops that play the same hits with the same tone, or have a kick in them, are swapped for ones that fit">
+        <input type="checkbox" className="accent-[#e2c35f]" checked={settings.listenBack}
+               onChange={(e) => update({ listenBack: e.target.checked })} />
+        Listen back
+      </label>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />
@@ -404,8 +409,8 @@ function Overview({ g, panel, onPanel }: { g: Generation; panel: Panel; onPanel:
                       isOpen(lane.name) ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text hover:bg-raised')}
                     title={`Open ${lane.name} in the lane panel`} onClick={() => onPanel(panelOf(lane.name))}>{lane.name}</button>
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb}
-                       reset={LANES.find((l) => l.role === role)?.volumeDb ?? 0} color={lane.color} dragging={dragging}
-                       title={`Volume ${fmtDb(lane.volumeDb)} (double-click: starting level)`}
+                       reset={0} color={lane.color} dragging={dragging}
+                       title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the balance` : ''}`}
                        onChange={(v) => role && setLaneVolume(role, v)} />
             <span className="w-10 text-right text-[10.5px] tabular-nums text-faint">{fmtDb(lane.volumeDb)}</span>
           </div>
@@ -469,7 +474,7 @@ function Details({ g }: { g: Generation }) {
         <span className="font-display text-[22px]">{Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</span>
         <span className="text-muted">{g.project.lengthBars} bars · {bpm} BPM</span>
         <label className="rounded-md pl-2 h-[22px] inline-flex items-center gap-1 bg-pastel-yellow text-on-pastel text-[12px] font-medium"
-               title="Another key for this track: bass and keys move, disco hits are pitched, FX that don't fit are swapped; the drums stay (← goes back)">
+               title="Another key for this track: the bass moves, disco hits and chord stabs are pitched, FX that don't fit are swapped; the drums stay (← goes back)">
           Key
           <select className="bg-transparent font-medium outline-none cursor-pointer pr-1" value={g.key ?? ''}
                   onChange={(e) => e.target.value && changeTrackKey(e.target.value)}>

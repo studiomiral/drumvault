@@ -2,7 +2,7 @@
 
 /* Dark matte theme (after the NeuroNest dashboard reference): charcoal surfaces with thin
    borders and large rounded cards, pastels for kinds and categories, a subtle yellow accent for
-   primary actions and selection (flat fills and tints, no glows). */
+   primary actions and selection. Fine grain and shallow bevels add a tactile finish, no glows. */
 @theme {
   --color-bg: #1c1d20;
   --color-panel: #26272b;
@@ -65,7 +65,8 @@
 /* Raised controls (secondary buttons, the active nav item, segmented pills). */
 @utility surface-raised {
   background-color: var(--color-raised);
-  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.35);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07), inset 0 -1px 0 rgb(0 0 0 / 0.22),
+    0 0 0 1px rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.32);
 }
 
 @utility font-title {
@@ -154,4 +155,164 @@ input, select, textarea {
 .menu-item-active {
   background: linear-gradient(100deg, rgb(255 255 255 / 0.075), rgb(255 255 255 / 0.035));
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+/* A cached, neutral tile on the surface itself, beneath content. Soft-light preserves
+   the existing palette; no overlay, text filtering, canvas noise or extra paint loop. */
+body,
+.bg-bg,
+.bg-panel,
+.bg-panel-2,
+.surface-card,
+.surface-pop {
+  background-image: url('./assets/surface-grain.png');
+  background-repeat: repeat;
+  background-size: 128px 128px;
+  background-blend-mode: soft-light;
+}
+
+/* Include existing inline controls as well as the shared Button. Their background
+   colors, padding and height still come from their original utility classes. */
+:where(button.bg-raised, button.surface-raised, button.tactile-button) {
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 48%, rgb(0 0 0 / 0.08));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.075), inset 0 -1px 0 rgb(0 0 0 / 0.28),
+    0 0 0 1px rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.32);
+}
+
+button.tactile-primary {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), inset 0 -1px 0 rgb(0 0 0 / 0.2),
+    0 0 0 1px rgb(226 195 95 / 0.35), 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+:where(button.bg-raised, button.surface-raised, button.tactile-button):enabled:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.35), inset 0 -1px 0 rgb(255 255 255 / 0.035);
+}
+
+/* Module on/off: a 28 × 16 px inset channel and a small, physically lit thumb.
+   The invisible margin makes it easier to click without enlarging the control. */
+.tactile-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  padding: 2px;
+  border: 1px solid rgb(0 0 0 / 0.65);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(0 0 0 / 0.5), rgb(0 0 0 / 0.15)), var(--color-raised);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.75), 0 1px 0 rgb(255 255 255 / 0.09);
+  cursor: pointer;
+}
+
+.tactile-switch::before {
+  content: '';
+  position: absolute;
+  inset: -5px -2px;
+}
+
+.tactile-switch-thumb {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--color-faint);
+  background-image: linear-gradient(150deg, rgb(255 255 255 / 0.2), transparent 55%, rgb(0 0 0 / 0.12));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.3), inset 0 -1px 1px rgb(0 0 0 / 0.22),
+    0 1px 2px rgb(0 0 0 / 0.7);
+  transform: translateX(0);
+  transition: transform 120ms ease, background-color 120ms ease;
+  pointer-events: none;
+}
+
+.tactile-switch[aria-checked='true'] .tactile-switch-thumb {
+  background-color: var(--color-accent);
+  transform: translateX(12px);
+}
+
+.tactile-switch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Recessed meter channels; the existing lane colors and fill positions stay intact. */
+.tactile-meter {
+  background-image: linear-gradient(180deg, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.08));
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.55), 0 1px 0 rgb(255 255 255 / 0.035);
+}
+
+.tactile-meter-fill {
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.08), transparent 50%, rgb(0 0 0 / 0.1));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), inset 0 -1px 0 rgb(0 0 0 / 0.18);
+}
+
+/* Ordinary preference/keep checkboxes get the same compact, lightly bevelled finish. */
+input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #55565c;
+  border-radius: 4px;
+  background-color: var(--color-raised);
+  background-image: linear-gradient(160deg, rgb(255 255 255 / 0.06), rgb(0 0 0 / 0.1));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 1px 2px rgb(0 0 0 / 0.3);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+input[type='checkbox']:checked {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid var(--color-on-accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tactile-switch-thumb {
+    transition: none;
+  }
+
+  :where(button.bg-raised, button.surface-raised, button.tactile-button):enabled:active {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .tactile-switch {
+    border-color: ButtonText;
+  }
+
+  .tactile-switch-thumb {
+    background: ButtonText;
+  }
+
+  .tactile-switch[aria-checked='true'] .tactile-switch-thumb {
+    background: Highlight;
+  }
+
+  input[type='checkbox'] {
+    appearance: auto;
+  }
+
+  input[type='checkbox']::after {
+    display: none;
+  }
 }

@@ -15,6 +15,7 @@ import { GenerateView } from './views/GenerateView'
 import { GridView } from './views/GridView'
 import { MidiView } from './views/MidiView'
 import { HitsView } from './views/HitsView'
+import { SpliceView } from './views/SpliceView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
@@ -31,6 +32,10 @@ const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = 
     { view: 'midi', label: 'MIDI' },
     { view: 'stabs', label: 'Chord Stabs' },
     { view: 'hits', label: 'Disco Hits' },
+    { view: 'strings', label: 'Strings' },
+    { view: 'basses', label: 'Bass Samples' },
+    { view: 'ambience', label: 'Ambience' },
+    { view: 'splice', label: 'Splice' },
   ] },
   { label: 'Create', items: [
     { view: 'generate', label: 'Generate' },
@@ -127,6 +132,10 @@ export function App() {
         {view === 'midi' && <MidiView />}
         {view === 'hits' && <HitsView kind="disco" />}
         {view === 'stabs' && <HitsView key="stabs" kind="stab" />}
+        {view === 'strings' && <HitsView key="strings" kind="strings" />}
+        {view === 'basses' && <HitsView key="basses" kind="bass" />}
+        {view === 'ambience' && <HitsView key="ambience" kind="ambience" />}
+        {view === 'splice' && <SpliceView />}
         {view === 'generate' && <GenerateView />}
         {view === 'arrange' && <ArrangeView />}
         {view === 'settings' && <SettingsView />}

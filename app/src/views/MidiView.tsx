@@ -5,38 +5,15 @@ import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
 import { SerumFolders } from '../components/SerumFolders'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
-import { loadKeys } from '../store/keys'
-import { learnKeys, type KeysModel } from '../generate/keys'
-import { harmonyOf, progressionName } from '../generate/harmony'
 import { loadBass } from '../store/bass'
 import { learnBass, type BassModel } from '../generate/bassline'
 import type { MidiItem } from '../types/api'
 
-type Section = 'bass' | 'keys'
-const SECTION_KEY = 'drumvault.midi.section'
-const SECTIONS: { id: Section; label: string; color: string; drop: string; what: string }[] = [
-  {
-    id: 'bass', label: 'Bass', color: '#fda4af', drop: 'Drop bass MIDI: .mid files, folders or zips',
-    what: 'Generate learns from these to write its own basslines (rhythms, intervals, lengths, what later bars change).',
-  },
-  {
-    id: 'keys', label: 'Keys & chords', color: '#c4b5fd', drop: 'Drop keys and chord MIDI: .mid files, folders or zips',
-    what: 'Generate learns from these to write its own chord parts (voicings, chord rhythms, progressions); the bass follows their chords.',
-  },
-]
-
-function savedSection(): Section {
-  try {
-    return localStorage.getItem(SECTION_KEY) === 'keys' ? 'keys' : 'bass'
-  } catch {
-    return 'bass'
-  }
-}
+const COLOR = '#fda4af'
 
 /**
- * Samples → MIDI (SCOPE.md §6.7): learning material, one section per part. Generate never plays
- * these files; it writes new basslines and keys parts from what each section's files have in
- * common. Every file dropped on a section is that part.
+ * Samples → MIDI (SCOPE.md §6.7): basslines to learn from. Generate never plays these files; it
+ * writes new basslines from what they have in common. Every file dropped here is a bassline.
  */
 export function MidiView() {
   const { libraryVersion, engine, toast } = useApp()
@@ -44,16 +21,6 @@ export function MidiView() {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [search, setSearch] = useState('')
-  const [section, setSectionState] = useState<Section>(savedSection)
-  const setSection = (s: Section) => {
-    setSectionState(s)
-    try {
-      localStorage.setItem(SECTION_KEY, s)
-    } catch {
-      // not remembered
-    }
-  }
-  const info = SECTIONS.find((s) => s.id === section)!
 
   useEffect(() => {
     void api.listMidi().then((m) => setItems(m.reverse()))
@@ -62,19 +29,18 @@ export function MidiView() {
   const add = useCallback(async (paths: string[]) => {
     if (!paths.length) return
     setBusy(true)
-    const r = await attempt(() => api.importMidi(paths, section))
+    const r = await attempt(() => api.importMidi(paths))
     setBusy(false)
     if (!r) return
     void loadBass()
-    void loadKeys()
-    const what = section === 'keys' ? 'keys part' : 'bassline'
+    const what = 'bassline'
     const parts: string[] = []
     parts.push(r.imported.length ? `Added ${r.imported.length} ${what}${r.imported.length === 1 ? '' : 's'}` : `No new ${what}s`)
     if (r.skipped) parts.push(`${r.skipped} already in`)
     if (r.ignored) parts.push(`${r.ignored} other part${r.ignored === 1 ? '' : 's'} of a zip left out`)
     if (r.failed.length) parts.push(`${r.failed.length} unreadable: ${r.failed.slice(0, 2).join('; ')}`)
     toast(r.failed.length && !r.imported.length ? 'error' : 'info', `${parts.join(', ')}.`)
-  }, [toast, section])
+  }, [toast])
 
   const onDrop = async (e: DragEvent) => {
     e.preventDefault()
@@ -84,7 +50,6 @@ export function MidiView() {
 
   const reload = () => {
     void loadBass()
-    void loadKeys()
   }
   const remove = async (m: MidiItem) => {
     if (!window.confirm(`Remove "${m.name}" from what Generate learns from? Tracks made with it keep their parts.`)) return
@@ -95,19 +60,12 @@ export function MidiView() {
     await attempt(() => api.setMidiKey(m.id, key || null))
     reload()
   }
-  const move = async (m: MidiItem, to: Section) => {
-    await attempt(() => api.setMidiRole(m.id, to))
-    reload()
-  }
 
-  const ofSection = useMemo(() => (items ?? []).filter((m) => m.role === section), [items, section])
-  const bassModel = useMemo(() => (section === 'bass' ? learnBass(ofSection) : null), [ofSection, section])
-  const keysModel = useMemo(() => (section === 'keys' ? learnKeys(ofSection) : null), [ofSection, section])
-  const count = (s: Section) => (items ?? []).filter((m) => m.role === s).length
+  const basslines = useMemo(() => (items ?? []).filter((m) => m.role === 'bass'), [items])
+  const bassModel = useMemo(() => learnBass(basslines), [basslines])
   const q = search.trim().toLowerCase()
-  const shown = ofSection.filter((m) => !q || m.name.toLowerCase().includes(q) || (m.source_code ?? '').toLowerCase().includes(q))
+  const shown = basslines.filter((m) => !q || m.name.toLowerCase().includes(q) || (m.source_code ?? '').toLowerCase().includes(q))
   const ready = engine.state === 'ready'
-  const other = SECTIONS.find((s) => s.id !== section)!
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative"
@@ -119,21 +77,15 @@ export function MidiView() {
          onDrop={(e) => void onDrop(e)}>
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
         <PageTitle className="mr-3">MIDI</PageTitle>
-        <div className="flex rounded-lg bg-[rgb(0_0_0/0.25)] p-0.5 shadow-[0_0_0_1px_rgb(255_255_255/0.08)]">
-          {SECTIONS.map((s) => (
-            <button key={s.id} onClick={() => setSection(s.id)}
-                    className={cx('h-7 px-3 rounded-md text-[12px] flex items-center gap-2 transition-colors',
-                      section === s.id ? 'bg-raised text-text' : 'text-muted hover:text-text')}>
-              <span className="w-2 h-2 rounded-full" style={{ background: s.color }} />
-              {s.label}
-              <span className="text-faint tabular-nums">{items ? count(s.id) : ''}</span>
-            </button>
-          ))}
-        </div>
-        <input className={cx(inputClass, 'w-56')} placeholder={`Search ${info.label.toLowerCase()}`} value={search}
+        <span className="text-[12px] text-muted flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full" style={{ background: COLOR }} />
+          Bass
+          <span className="text-faint tabular-nums">{items ? basslines.length : ''}</span>
+        </span>
+        <input className={cx(inputClass, 'w-56')} placeholder="Search basslines" value={search}
                onChange={(e) => setSearch(e.target.value)} />
         <div className="flex-1" />
-        <Button variant="primary" disabled={!ready || busy} onClick={() => void api.chooseMidi().then(add)}>Add to {info.label}…</Button>
+        <Button variant="primary" disabled={!ready || busy} onClick={() => void api.chooseMidi().then(add)}>Add basslines…</Button>
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-5">
@@ -144,26 +96,27 @@ export function MidiView() {
             <IconDrop className="w-6 h-6" />
           </span>
           <span>
-            <span className="block text-text font-medium">{busy ? 'Importing…' : info.drop}</span>
+            <span className="block text-text font-medium">{busy ? 'Importing…' : 'Drop bass MIDI: .mid files, folders or zips'}</span>
             <span className="block mt-1 text-[12px] text-muted">
-              {info.what} Learning material only: Generate never plays these files as they are. Every file dropped here
-              counts as {section === 'keys' ? 'keys' : 'bass'}; from a zip with several parts, only the parts named for this section.
+              Generate learns from these to write its own basslines (rhythms, intervals, lengths, what later bars change).
+              Learning material only: Generate never plays these files as they are. Every file dropped here counts as
+              bass; from a zip with several parts, only the parts named for the bass.
             </span>
           </span>
         </button>
 
-        <SerumFolders key={section} module={section} />
+        <SerumFolders module="bass" />
+        <SerumFolders module="pads" />
 
         {bassModel && <Learned model={bassModel} />}
-        {keysModel && <KeysLearned model={keysModel} items={ofSection} />}
 
-        {items && !ofSection.length ? (
-          <Empty title={`No ${info.label.toLowerCase()} MIDI yet`}>Drop your own {section === 'keys' ? 'chord and keys parts' : 'basslines'} here.</Empty>
+        {items && !basslines.length ? (
+          <Empty title="No bass MIDI yet">Drop your own basslines here.</Empty>
         ) : (
           <div className="rounded-xl border border-line bg-panel-2 divide-y divide-line">
             {shown.map((m) => (
               <div key={m.id} className="h-12 px-4 flex items-center gap-4 text-[12.5px]">
-                <NotesThumb notes={m.notes} bars={m.bars} color={info.color} />
+                <NotesThumb notes={m.notes} bars={m.bars} color={COLOR} />
                 <div className="flex-1 min-w-0">
                   <div className="truncate font-medium">{m.name}</div>
                   <div className="text-[11px] text-faint truncate">
@@ -176,8 +129,6 @@ export function MidiView() {
                   <option value="">No key</option>
                   {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
                 </select>
-                <button className="text-[11.5px] text-faint hover:text-text whitespace-nowrap" title={`In the wrong section: move it to ${other.label}`}
-                        onClick={() => void move(m, other.id)}>To {other.label}</button>
                 <button title="Remove from what Generate learns from" className="text-faint hover:text-bad" onClick={() => void remove(m)}>
                   <IconX className="w-4 h-4" />
                 </button>
@@ -201,41 +152,6 @@ function Starts({ onsets, title }: { onsets: number[]; title: string }) {
               style={{ background: `rgb(226 195 95 / ${0.08 + 0.92 * (n / most)})` }} />
       ))}
     </span>
-  )
-}
-
-const NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
-
-/** What the keys generator took from these parts. */
-function KeysLearned({ model, items }: { model: KeysModel; items: MidiItem[] }) {
-  const progressions = new Map<string, number>()
-  for (const m of items) {
-    if (!m.key_label || !m.notes.length) continue
-    const name = progressionName(harmonyOf(m.notes, Math.min(m.bars, 4), m.key_label))
-    progressions.set(name, (progressions.get(name) ?? 0) + 1)
-  }
-  const top = [...progressions.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
-  return (
-    <section className="rounded-xl border border-line bg-panel-2 px-4 py-3 text-[12px] space-y-2">
-      <div className="flex items-center gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">What Generate learned</span>
-        <span className="text-muted">from {model.parts} part{model.parts === 1 ? '' : 's'} ({model.phrases.length} phrases)</span>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="w-24 text-muted">Chords start</span>
-        <Starts onsets={model.onsets} title="How often a chord starts on each 16th of the bar" />
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="w-24 text-muted">Voicings</span>
-        <span className="text-text">typically {model.polyphony} notes, around {NOTE_NAMES[model.register % 12]}{Math.floor(model.register / 12) - 1}</span>
-      </div>
-      {top.length > 0 && (
-        <div className="flex items-center gap-3">
-          <span className="w-24 text-muted">Progressions</span>
-          <span className="text-text">{top.map(([n, c]) => `${n}${c > 1 ? ` (${c}×)` : ''}`).join(' · ')}</span>
-        </div>
-      )}
-    </section>
   )
 }
 
