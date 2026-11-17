@@ -1255,20 +1255,36 @@ describe('generator: rides from real tracks', () => {
   const lane = (g: Generation, name: string) => g.project.lanes.find((l) => l.name === name)?.id
   const at = (g: Generation, name: string, bar: number) => g.project.clips.filter((c) => c.laneId === lane(g, name) && c.start <= bar * 4 && c.start + c.length > bar * 4)
 
-  it('rides the tops open over the drops the way the reference track does', () => {
+  it('rides the tops up over the drops the way the reference track does, with the fader only: no low-pass while a drop plays', () => {
     const built = gs.filter((g) => g.template === 'S0042')
     expect(built.length).toBeGreaterThan(10)
+    let ridden = 0
     for (const g of built) {
       const d = g.sections.find((s) => s.kind === 'drop')!
       const early = at(g, 'Tops', d.start + 1)[0]
       if (!early) continue
-      expect(early.filter?.type).toBe('lowpass')
-      const later = at(g, 'Tops', d.start + Math.min(14, d.bars - 2))[0]
-      const cut = (c: Clip) => (c.filter ? (c.filter.to ?? c.filter.from) : 20000)
-      expect(cut(later)).toBeGreaterThan(early.filter!.from)          // opening up
-      expect(early.gainDb).toBeLessThan(0)
+      expect(early.filter?.type).not.toBe('lowpass')
+      if (early.gainDb < 0) {
+        ridden++
+        expect(early.gainTo ?? 0).toBeGreaterThan(early.gainDb)      // coming up
+      }
       expect(g.choices.some((c) => c.startsWith('filter and volume rides on') && c.includes('S0042'))).toBe(true)
     }
+    expect(ridden).toBeGreaterThan(5)
+  })
+
+  it('never low-passes the top loops or the groove while a drop plays (builds and breakdowns may)', () => {
+    let filteredElsewhere = 0
+    for (const g of gs) {
+      for (const c of g.project.clips) {
+        const name = g.project.lanes.find((l) => l.id === c.laneId)?.name ?? ''
+        if (!/^(Tops|Groove)/.test(name) || c.filter?.type !== 'lowpass') continue
+        const inDrop = g.sections.some((s) => s.kind === 'drop' && c.start >= s.start * 4 && c.start < (s.start + s.bars) * 4)
+        expect(inDrop, `${name} low-passed at beat ${c.start}`).toBe(false)
+        filteredElsewhere++
+      }
+    }
+    expect(filteredElsewhere).toBeGreaterThan(0)
   })
 
   it('high-passes the mix into drops when the reference does, the risers and fills left alone', () => {
@@ -1287,7 +1303,7 @@ describe('generator: rides from real tracks', () => {
   it('gives tracks without a reference rides from a like section of one', () => {
     const own = gs.filter((g) => !g.template)
     expect(own.length).toBeGreaterThan(0)
-    const ridden = (g: Generation) => g.sections.some((d) => d.kind === 'drop' && at(g, 'Tops', d.start + 1)[0]?.filter?.type === 'lowpass')
+    const ridden = (g: Generation) => g.sections.some((d) => d.kind === 'drop' && (at(g, 'Tops', d.start + 1)[0]?.gainDb ?? 0) < 0)
     expect(own.some(ridden)).toBe(true)
     expect(own.some((g) => g.choices.some((c) => c.includes('after S0042')))).toBe(true)
   })

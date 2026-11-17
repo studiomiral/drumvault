@@ -427,6 +427,12 @@ const RIDE_ROLES: [RidePart, Role[], string][] = [
 /** The mix high-pass into drops leaves the moments alone: risers, fills, impacts, crashes, hits. */
 const MIX_HP_ROLES = (r: Role) => !['fills', 'fx', 'fx2', 'hits', 'crash', 'disco', 'disco2', 'bed'].includes(r)
 
+/**
+ * Lanes never low-passed while a drop plays (a sudden low-pass on the top loops takes the drop's
+ * energy away): the top loops and the groove. Builds and breakdowns filter them as they like.
+ */
+const NO_DROP_LOWPASS = new Set<Role>([...TOP_ROLES, 'groove'])
+
 /** A seed from a structure's shape (FNV-1a): the same sections, the same rides. */
 function structureSeed(sections: Section[]): number {
   let h = 0x811c9dc5
@@ -2276,7 +2282,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         const bars = Math.min(n, Math.max(2, rules.glueOut - 2 * k - 2 * d))
         run(role, { seg: seg! }, 'lowpass', [[a, GLUE_LEAVE_HZ, 0], [a + bars, dark, -GLUE_FADE_DB]])
         leaving.set(role, a + bars)
-        if (seg!.length >= 4 * BEATS_PER_BAR) {
+        // (Closing before the line: not the top loops and groove, which play full to the end of a drop.)
+        if (seg!.length >= 4 * BEATS_PER_BAR && !(NO_DROP_LOWPASS.has(role) && sections.some((s) => s.kind === 'drop' && s.start + s.bars === a))) {
           lanes.ride(role, (a - GLUE_BEFORE_BARS) * 4, a * 4, { filter: { type: 'lowpass', from: GLUE_LP_OPEN_HZ, to: GLUE_LEAVE_HZ, q: 0.7 }, gainDb: 0 })
         }
       })
@@ -2617,7 +2624,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const src = sources[i]
     if (!src) return
     for (const [part, roles, name] of RIDE_ROLES) {
-      for (const p of ridePieces(sectionBars(src.arrangement, part, src.from, src.to, sec.bars))) {
+      for (const piece of ridePieces(sectionBars(src.arrangement, part, src.from, src.to, sec.bars))) {
+        // (No low-pass on the top loops while a drop plays: only the fader part of such a ride.)
+        const p = sec.kind === 'drop' && piece.filter?.type === 'lowpass' && roles.every((r) => NO_DROP_LOWPASS.has(r))
+          ? { ...piece, filter: undefined } : piece
+        if (!p.filter && !p.gainDb && !p.gainTo) continue
         const hit = roles.map((r) => lanes.ride(r, (sec.start + p.from) * BEATS_PER_BAR, (sec.start + p.to) * BEATS_PER_BAR, p)).some(Boolean)
         if (hit) {
           ridden.parts.add(name)
