@@ -20,6 +20,7 @@ import { SAVED_EXACT, stabParts, stabRhythm } from '../src/generate/stabs'
 import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
 import { bassy } from '../src/generate/eq'
+import { halfwayBars } from '../src/generate/structure'
 import type { SampleListItem } from '../src/types/api'
 import type { Category, SampleKind } from '../src/types/engine'
 import type { AudioClip, Clip, PatternClip, Velocity } from '../src/types/project'
@@ -154,7 +155,7 @@ describe('generator: rules every generation keeps', () => {
         // Hats none, the half next to the drops, or all through; with the lift, none until the
         // bars it fills up over (hats come in first).
         const how = s === intro ? g.rules.introHats : g.rules.outroHats
-        const half = s.start + Math.floor(s.bars / 2 / 8) * 8
+        const half = s.start + halfwayBars(s.bars)
         const lift = s === intro ? s.start + s.bars - liftBars(s.bars) : s.start + liftBars(s.bars)
         // (A kick roll building into the first drop takes the Kick lane's place over the intro's last bars.)
         const roll = s === intro && intoDrop && g.rules.buildup === 'kickRoll'
@@ -164,7 +165,12 @@ describe('generator: rules every generation keeps', () => {
           else expect(hitAt(g, 'Build-up', beat * 4)).toBe(3)
           const inHalf = s === intro ? beat >= half * 4 : beat < half * 4
           const inLift = !!g.rules.ioLift && (s === intro ? beat >= lift * 4 : beat < lift * 4)
-          if (beat < hatsEnd) expect(covers(g, 'Hats', beat)).toBe(how === 'all' || (how === 'half' && inHalf) || (how === 'none' && inLift))
+          // (Where nothing else would play with the kick, the hats do: the kick is never alone.)
+          const want = how === 'all' || (how === 'half' && inHalf) || (how === 'none' && inLift)
+          const bar = Math.floor(beat / 4) * 4
+          const alone = !g.project.lanes.some((l) => !['kick', 'hats', 'crash', 'fx', 'fx2', 'fx3', 'hits', 'atmos', 'bed'].includes(laneRole(l.name) ?? '')
+            && [0, 1, 2, 3].some((k) => covers(g, l.name, bar + k)))
+          if (beat < hatsEnd) expect(covers(g, 'Hats', beat)).toBe(want || alone)
         }
       }
     }
@@ -347,7 +353,7 @@ describe('generator: rules every generation keeps', () => {
     let n = 0
     for (const g of gens.filter((x) => x.sections[1].kind === 'drop' && x.rules.firstDrop === 'lean' && x.sections[1].bars >= 16)) {
       const d = g.sections[1]
-      const half = d.start + Math.floor(d.bars / 2 / 8) * 8
+      const half = d.start + halfwayBars(d.bars)
       // Its first phrase without the clap layers and the second hats; groove and second perc halfway.
       for (const name of ['Clap 2', 'Clap 3', 'Hats 2']) expect(plays(g, name, d.start, d.start + 8)).toBe(false)
       for (const name of ['Groove', 'Perc 2']) expect(plays(g, name, d.start, half)).toBe(false)
@@ -2210,7 +2216,7 @@ describe('generator: vocals', () => {
       // In the second halves only: each drop's phrase starts halfway.
       if (g.rules.vocalAt === 'halves') {
         for (const d of g.sections.filter((x) => x.kind === 'drop' && x.bars >= 16)) {
-          expect(on(g, 'Vocal').some((c) => c.start === (d.start + Math.floor(d.bars / 2 / 8) * 8) * 4)).toBe(true)
+          expect(on(g, 'Vocal').some((c) => c.start === (d.start + halfwayBars(d.bars)) * 4)).toBe(true)
         }
       }
       expect(g.rules.vocalUse).toBeUndefined()
@@ -2649,3 +2655,45 @@ describe('generator: the big build into the drops after the long breakdown', () 
   })
 })
 
+
+describe('generator: phrasing and the kick never alone', () => {
+  it('changes halfway on a 16-bar line: a 48-bar drop after 16 bars, never 24 and 24', () => {
+    expect(halfwayBars(48)).toBe(16)
+    expect(halfwayBars(40)).toBe(16)
+    expect(halfwayBars(32)).toBe(16)
+    expect(halfwayBars(64)).toBe(32)
+    expect(halfwayBars(56)).toBe(32)
+    expect(halfwayBars(24)).toBe(16)
+    expect(halfwayBars(16)).toBe(8)   // one round: its phrase line
+    expect(halfwayBars(8)).toBe(4)
+    // A disco hit halfway through a drop lands on one of its 16-bar lines.
+    for (const g of gens) {
+      const id = laneOf(g, 'Disco Hit')
+      if (!id) continue
+      for (const s of g.sections.filter((x) => x.kind === 'drop' && x.bars > 16)) {
+        for (const c of g.project.clips.filter((x) => x.laneId === id && x.start > s.start * 4 && x.start < (s.start + s.bars) * 4)) {
+          expect((c.start / 4 - s.start) % 16).toBe(0)
+        }
+      }
+    }
+  })
+
+  it('never leaves the kick alone in an intro or an outro', () => {
+    const alongside = (role: string) => !['kick', 'crash', 'fx', 'fx2', 'fx3', 'hits', 'atmos', 'bed'].includes(role)
+    const sounds = (c: Clip, b: number) => {
+      if (c.start > b * 4 || c.start + c.length <= b * 4) return false
+      if (c.type !== 'pattern') return true
+      const k = Math.floor((b * 4 - c.start) / 4) % c.patternBars
+      return c.steps.slice(k * 16, (k + 1) * 16).some((v) => v > 0)
+    }
+    for (const g of gens) {
+      const role = new Map(g.project.lanes.map((l) => [l.id, laneRole(l.name) ?? '']))
+      for (const s of g.sections.filter((x) => x.kind === 'intro' || x.kind === 'outro')) {
+        for (let b = s.start; b < s.start + s.bars; b++) {
+          const on = g.project.clips.filter((c) => sounds(c, b)).map((c) => role.get(c.laneId)!)
+          if (on.includes('kick')) expect(on.some(alongside), `${s.kind} bar ${b + 1}: ${on.join(', ')}`).toBe(true)
+        }
+      }
+    }
+  })
+})

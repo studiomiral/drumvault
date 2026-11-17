@@ -23,7 +23,7 @@ import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perB
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
-import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
+import { barsFor, BUILD_LABEL, halfwayBars, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
 import { mainBuildOf, mainBuilds, readReference, templateFrom, templateFromReference, vocalAtWeights, type Arc, type Template } from './template'
 import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
 import {
@@ -586,6 +586,8 @@ function steps(hits: number[], v: Velocity = 3): Steps {
 const FOUR = [0, 4, 8, 12]
 const TWO_FOUR = [4, 12]
 const OFFBEAT = [2, 6, 10, 14]
+/** What doesn't keep the kick company in an intro or outro: the kick with only these is the kick alone. */
+const NOT_ALONGSIDE = new Set<Role>(['kick', 'crash', 'fx', 'fx2', 'fx3', 'hits', 'atmos', 'bed'])
 const EIGHTHS = [0, 2, 4, 6, 8, 10, 12, 14]
 const SIXTEENTHS = Array.from({ length: STEPS_PER_BAR }, (_, i) => i)
 
@@ -1858,7 +1860,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const ann = announceBars(sec, next)
     const end = z - ann
     if (sec.kind === 'drop') {
-      const half = a + Math.floor(n / 2 / PHRASE) * PHRASE || a + n / 2
+      const half = a + halfwayBars(n)
       // A slow opening over the drop's first bars: the first drop's, or every drop's.
       const opening = rules.stabsOpen === 'each' || (rules.stabsOpen === 'first' && drop === 0)
         ? Math.min(32, Math.max(PHRASE, Math.floor(n / 2 / PHRASE) * PHRASE)) : 0
@@ -2077,7 +2079,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const next = sections[i + 1]
     const intoDrop = next?.kind === 'drop'
     const intoBreak = next?.kind === 'break'
-    const half = a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE || a + sec.bars / 2
+    const half = a + halfwayBars(sec.bars)
     // A first drop straight after the intro starts leaner (rule `firstDrop`): the clap layers and
     // the second hat loop join after its first phrase, its last top loop, the groove and the second
     // perc halfway (bars `leanEarly`, `leanLate`; the drop's start otherwise).
@@ -2171,7 +2173,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (sec.kind === 'drop' && ride) {
       const late = dropIndex === 0 && rules.ride !== 'second'
       const full = dropIndex >= 1 && rules.ride !== 'late'
-      const from = late ? a + Math.max(PHRASE, Math.floor(sec.bars / 2 / PHRASE) * PHRASE) : full ? a : z
+      const from = late ? a + Math.max(PHRASE, halfwayBars(sec.bars)) : full ? a : z
       if (from < z) layer('ride', ride, from, z, rideSteps)
       if (late && from < z && rules.phraseCrash) crashAt.add(from)  // only if the track crashes on new parts
     }
@@ -2203,7 +2205,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (sec.kind === 'drop') {
       // The same top loops in every drop; the last drop adds one more.
       const count = Math.min(tops.length, tracks.tops + (sec.peak ? 1 : 0))
-      const mid = rules.switchHalfway && sec.bars >= 2 * PHRASE ? a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE : z
+      const mid = rules.switchHalfway && sec.bars >= 2 * PHRASE ? a + halfwayBars(sec.bars) : z
       for (let j = 0; j < count; j++) topLayer(j, j > 0 && j === count - 1 ? leanLate : a, z, undefined, gap)
       const g1 = dropIndex >= 1 && rules.grooveSwap ? groove2 : groove
       if (dropIndex >= rules.grooveFrom || sec.peak) {
@@ -2221,7 +2223,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         loop('groove', groove, Math.max(a, z - PHRASE), z)
       } else {
         // Layered and double-time builds: one more top loop per phrase towards the drop.
-        const startAt = sec.build === 'doubletime' ? a + Math.floor(sec.bars / 2 / PHRASE) * PHRASE : a
+        const startAt = sec.build === 'doubletime' && sec.bars >= 2 * PHRASE ? a + halfwayBars(sec.bars) : a
         const phrases = Math.max(1, (z - startAt) / PHRASE)
         for (let j = 0; j < tracks.tops; j++) {
           const from = startAt + Math.floor((j * phrases) / tracks.tops) * PHRASE
@@ -2627,7 +2629,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const n = rules.ioShort
     for (const sec of sections) {
       if (sec.kind !== 'intro' && sec.kind !== 'outro') continue
-      const half = Math.max(PHRASE, Math.floor(sec.bars / 2 / PHRASE) * PHRASE)
+      const half = Math.max(PHRASE, halfwayBars(sec.bars))
       const [a, z] = sec.kind === 'intro' ? [sec.start, sec.start + half] : [sec.start + sec.bars - half, sec.start + sec.bars]
       for (const role of [...TOP_ROLES, 'perc'] as Role[]) {
         lanes.vary(role, a * 4, z * 4, { loopBars: n, trim: 0 }, (x) => (x.sample.bars ?? 1) > n)
@@ -2681,7 +2683,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         if (rules.discoAt === '16' || rules.discoAt === '8') for (let b = sec.start; b < z; b += Number(rules.discoAt)) at.push(b)
         else {
           at.push(sec.start)
-          const half = sec.start + Math.floor(sec.bars / 2 / PHRASE) * PHRASE
+          const half = sec.start + halfwayBars(sec.bars)
           if (half > sec.start && half < z) at.push(half)
         }
       } else if (sec.kind === 'break' && rules.discoAt === 'all') at.push(sec.start)
@@ -2717,7 +2719,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const drops = sections.filter((x) => x.kind === 'drop')
     const breaks = sections.filter((x) => x.kind === 'break')
     const whole = (x: Section): [number, number] => [x.start, x.start + x.bars]
-    const secondHalf = (x: Section): [number, number] => [x.start + (Math.floor(x.bars / 2 / PHRASE) * PHRASE || x.bars / 2), x.start + x.bars]
+    const secondHalf = (x: Section): [number, number] => [x.start + halfwayBars(x.bars), x.start + x.bars]
     const at = rules.stringsAt === 'breaks' && !breaks.length ? 'halves' : rules.stringsAt
     stringsWhere = at
     const spans: [number, number][] = at === 'later' ? (drops.length > 1 ? drops.slice(1).map(whole) : drops.map(secondHalf))
@@ -2785,7 +2787,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const drops = sections.filter((x) => x.kind === 'drop')
     const breaks = sections.filter((x) => x.kind === 'break')
     const at = rules.vocalAt === 'breaks' && !breaks.length ? 'drops' : rules.vocalAt as string
-    const halfOf = (x: Section) => x.start + (x.bars >= 2 * PHRASE ? Math.floor(x.bars / 2 / PHRASE) * PHRASE : 0)
+    const halfOf = (x: Section) => x.start + (x.bars >= 2 * PHRASE ? halfwayBars(x.bars) : 0)
     const phrase = rules.vocalLoop === 'long' ? phrases[phrases.length - 1] : phrases[0]
     const render = phraseRender(take, phrase, key)
     const sample = phraseSample(take, render, bpm)
@@ -2817,6 +2819,26 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // ---- the big builds into the drops after the long breakdown (over what the groove through
   // the breakdown laid there) ----
   for (const s of bigBuilds) bigBuildUp(s)
+
+  // ---- intros and outros never the kick alone: where it plays with nothing but FX or a crash (no
+  // hats yet, the tops coming in halfway; or the outro's tops gone), the hats play with it (else
+  // the first top loop, else the perc). Before the breath and the silence before drops, which stay. ----
+  const alongside: [Role, SampleListItem | null] = hats ? ['hats', hats] : tops[0] ? ['top', tops[0]] : ['perc', perc]
+  if (alongside[1]) {
+    const lone = (b: number) => lanes.state('kick', b) !== '' && !lanes.roles().some((r) => !NOT_ALONGSIDE.has(r) && lanes.state(r, b) !== '')
+    for (const s of sections) {
+      if (s.kind !== 'intro' && s.kind !== 'outro') continue
+      let from = -1
+      for (let b = s.start; b <= s.start + s.bars; b++) {
+        const alone = b < s.start + s.bars && lone(b)
+        if (alone && from < 0) from = b
+        if (!alone && from >= 0) {
+          layer(alongside[0], alongside[1], from, b, steps(OFFBEAT, 3))
+          from = -1
+        }
+      }
+    }
+  }
 
   // ---- the silence before every drop: the track's gap (rule `dropIn`: none, the drum fill alone
   // ringing through it, or the FX), the same before every drop. Tracks from before: where its FX

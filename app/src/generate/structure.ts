@@ -27,6 +27,23 @@ export interface Section {
 }
 
 export const PHRASE = 8
+/** A round: what a section is counted in (16 bars, two phrases). */
+export const ROUND = 16
+
+/**
+ * Where a section of `bars` changes halfway (bars from its start): on a round's line where one falls
+ * inside it (the nearest its middle; of two as near, the earlier: a 48-bar drop changes after 16 and
+ * goes on for 32, never 24 and 24), else on a phrase's line (the nearest its middle), else its
+ * middle.
+ */
+export function halfwayBars(bars: number): number {
+  for (const step of [ROUND, PHRASE]) {
+    let best = 0
+    for (let at = step; at < bars; at += step) if (!best || Math.abs(at - bars / 2) < Math.abs(best - bars / 2)) best = at
+    if (best) return best
+  }
+  return bars / 2
+}
 const MIN_DJ = 16
 
 export const LIMITS: Record<SectionKind, [number, number]> = {
