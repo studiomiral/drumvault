@@ -222,6 +222,57 @@ function shape(read: Read[] | null): Part[] | null {
   return merged
 }
 
+/** Where a vocal sings in a track (the generator's `vocalAt`, `chopsAt`). */
+export interface VocalRule { vocalAt: 'drops' | 'halves' | 'drops_breaks' | 'breaks'; chopsAt: 'drops' | 'drops_builds' }
+
+/**
+ * Where the track's vocal sings, read from its vocal stems over its sections: in the breakdowns
+ * (and the drops), in the drops' second halves only, or in the drops; into the drops too when it
+ * sings over the builds' last bars. Null when it doesn't sing (in a quarter of its drops and
+ * breakdowns at least), or wasn't measured.
+ */
+function vocalRuleIn(a: TrackArrangement, s: Part[]): VocalRule | null {
+  const v = a.levels?.vocal?.bars
+  if (!v) return null
+  const on = (from: number, to: number) => {
+    let n = 0
+    for (let b = from; b < to; b++) if (Number(v[b] ?? 0) >= 1) n++
+    return to > from ? n / (to - from) : 0
+  }
+  const across = (xs: { from: number; to: number }[]) => {
+    const bars = xs.reduce((n, x) => n + x.to - x.from, 0)
+    return bars ? xs.reduce((n, x) => n + on(x.from, x.to) * (x.to - x.from), 0) / bars : 0
+  }
+  const drops = s.filter((x) => x.kind === 'drop')
+  const brks = s.filter((x) => x.kind === 'break')
+  const inDrops = across(drops)
+  const inBreaks = across(brks)
+  if (inDrops < 0.25 && inBreaks < 0.25) return null
+  const mid = (d: Part) => d.from + Math.floor((d.to - d.from) / 2 / PHRASE) * PHRASE
+  const first = across(drops.map((d) => ({ from: d.from, to: mid(d) })))
+  const second = across(drops.map((d) => ({ from: mid(d), to: d.to })))
+  const vocalAt = inBreaks >= PLAYS ? (inDrops >= PLAYS ? 'drops_breaks' : 'breaks') : second >= PLAYS && first < 0.3 ? 'halves' : 'drops'
+  const builds = s.filter((x) => x.kind === 'build').map((b) => ({ from: Math.max(b.from, b.to - 8), to: b.to }))
+  return { vocalAt, chopsAt: builds.length && across(builds) >= PLAYS ? 'drops_builds' : 'drops' }
+}
+
+/** Where a track sings (vocalRuleIn), from its arrangement as measured; null: no vocal there. */
+export function vocalRuleOf(a: TrackArrangement): VocalRule | null {
+  const s = shape(readSections(a))
+  return s ? vocalRuleIn(a, s) : null
+}
+
+/** How often the user's tracks sing where: weights for the generator's `vocalAt` (null: none sing). */
+export function vocalAtWeights(arrangements: TrackArrangement[]): [VocalRule['vocalAt'], number][] | null {
+  const n: Record<VocalRule['vocalAt'], number> = { drops: 0, halves: 0, drops_breaks: 0, breaks: 0 }
+  let any = 0
+  for (const a of arrangements) {
+    const r = vocalRuleOf(a)
+    if (r) { n[r.vocalAt]++; any++ }
+  }
+  return any ? (Object.entries(n) as [VocalRule['vocalAt'], number][]).filter(([, w]) => w > 0) : null
+}
+
 /** The longest breakdown is the long one (when there are several, or it is 16 bars or more). */
 function markLong(s: Part[]): void {
   const breaks = s.filter((x) => x.kind === 'break')
@@ -344,6 +395,10 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
   }
 
   const { sections, changes } = makeNew(s, rules, rng, minBars, maxBars, a.source_code)
+  // Where it sings (its vocal stems): there, when the track gets a vocal. (After the redraws: the
+  // rest of the template is drawn as before.)
+  const sings = vocalRuleIn(a, s)
+  if (sings) Object.assign(rules, sings)
   return { source: a.source_code, label: a.source_code, sections, rules, changes }
 }
 

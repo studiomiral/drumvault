@@ -487,6 +487,30 @@ function registerIpc(): void {
       await writeFile(file, JSON.stringify(m, null, 2))
     }
   })
+  // Splice vocal loops and phrases (SCOPE.md §6.11a): made into takes by the engine (vocalloop.py).
+  ipcMain.handle('vocals:import-loops', async (_e, paths: string[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request('import_vocal_loops', { paths, settings: engineSettings() }, 900_000)
+    send('library-changed')
+    return r
+  })
+  // A Splice loop's pack link, set by hand (when splice.com didn't answer to its label's name).
+  ipcMain.handle('vocals:set-url', async (_e, id: string, url: string | null) => {
+    if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
+    if (url && !/^https:\/\/(www\.)?splice\.com\//.test(url)) throw new Error('Not a splice.com link')
+    const file = join(lib(), 'Vocals', id, 'meta.json')
+    const m = JSON.parse(await readFile(file, 'utf8'))
+    if (m.splice) m.splice.url = url || null
+    await writeFile(file, JSON.stringify(m, null, 2))
+  })
+  // Not used after all (an export thrown away): offered to new tracks again.
+  ipcMain.handle('vocals:unuse', async (_e, id: string) => {
+    if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
+    const file = join(lib(), 'Vocals', id, 'meta.json')
+    const m = JSON.parse(await readFile(file, 'utf8'))
+    m.usedIn = []
+    await writeFile(file, JSON.stringify(m, null, 2))
+  })
   ipcMain.handle('vocals:delete', async (_e, id: string) => {
     if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
     await rm(join(lib(), 'Vocals', id), { recursive: true, force: true })
@@ -534,6 +558,11 @@ function registerIpc(): void {
   })
   ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
   ipcMain.handle('shell:openFolder', (_e, path: string) => shell.openPath(path))
+  // A Splice pack's page in the browser (only splice.com: nothing else leaves the app this way).
+  ipcMain.handle('shell:openSplice', (_e, url: string) => {
+    if (!/^https:\/\/(www\.)?splice\.com\//.test(url)) throw new Error('Not a splice.com link')
+    return shell.openExternal(url)
+  })
 
   ipcMain.handle('lib:read', async (_e, relPath: string) => {
     const buf = await readFile(libraryFile(lib(), relPath))
@@ -644,6 +673,7 @@ function buildMenu(): void {
         { label: 'Strings', click: () => send('menu', 'view:strings') },
         { label: 'Bass Samples', click: () => send('menu', 'view:basses') },
         { label: 'Ambience', click: () => send('menu', 'view:ambience') },
+        { label: 'Vocal Loops', click: () => send('menu', 'view:vocalloops') },
         { label: 'MIDI', click: () => send('menu', 'view:midi') },
         { label: 'Splice', click: () => send('menu', 'view:splice') },
         { type: 'separator' },

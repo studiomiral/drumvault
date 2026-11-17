@@ -99,8 +99,12 @@ const api: DrumvaultAPI = {
   deleteVocal: (id) => ipcRenderer.invoke('vocals:delete', id),
   analyzeVocal: (id) => ipcRenderer.invoke('vocals:analyze', id),
   markVocalsUsed: (ids, track) => ipcRenderer.invoke('vocals:used', ids, track),
+  importVocalLoops: (paths) => ipcRenderer.invoke('vocals:import-loops', paths),
+  setVocalUrl: (id, url) => ipcRenderer.invoke('vocals:set-url', id, url),
+  unuseVocal: (id) => ipcRenderer.invoke('vocals:unuse', id),
   revealPath: (path) => ipcRenderer.invoke('shell:revealPath', path),
   openFolder: (path) => ipcRenderer.invoke('shell:openFolder', path),
+  openSplice: (url) => ipcRenderer.invoke('shell:openSplice', url),
   similarSamples: (id, limit) => ipcRenderer.invoke('lib:similar', id, limit),
 
   onMenu: (cb) => subscribe('menu', cb),

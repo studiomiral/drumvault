@@ -142,8 +142,20 @@ def analyze(settings: Settings, folder: str) -> dict:
         write_wav(lib / rel, y, sr, "pcm24")
         out["phrases"].append({"path": rel, "bars": bars, "period_s": round(period, 3), "stretch": round(target / len(seg), 3)})
 
-    # ---- chops: syllables with a clear note ----
+    out["chops"] = chops(settings, folder, x, sr, notes)
+    (d / "analysis.json").write_text(json.dumps(out, indent=2))
+    return out
+
+
+def chops(settings: Settings, folder: str, x: np.ndarray, sr: int, notes: np.ndarray) -> list[dict]:
+    """A take's chops (`x` (n, 2) at `sr`, `notes` from sung_pitch): syllables with a
+    clear note, the clearest and loudest `vocal_chops`, written to <folder>/chops/."""
     import librosa
+    lib = Path(settings.library_path)
+    th = settings.thresholds
+    mono = x.mean(axis=1)
+    frame_s = th.vocal_hop / 22050
+    out: list[dict] = []
     onsets = librosa.onset.onset_detect(y=mono, sr=sr, units="samples", backtrack=True, delta=th.vocal_onset_delta)
     cands = []
     for i, s in enumerate(onsets):
@@ -168,8 +180,7 @@ def analyze(settings: Settings, folder: str) -> dict:
         y, _, _ = normalize.peak_normalize(y, th.hit_peak_dbfs)
         rel = f"{folder}/chops/chop-{k + 1:02d}.wav"
         write_wav(lib / rel, y, sr, "pcm24")
-        out["chops"].append({"path": rel, "note": round(note, 2), "seconds": round((e - s) / sr, 3), "energy_db": k_energy_db(y, sr)})
-    (d / "analysis.json").write_text(json.dumps(out, indent=2))
+        out.append({"path": rel, "note": round(note, 2), "seconds": round((e - s) / sr, 3), "energy_db": k_energy_db(y, sr)})
     return out
 
 

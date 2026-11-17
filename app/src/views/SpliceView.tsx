@@ -6,11 +6,14 @@ import { Button, cx, Empty, inputClass, Segmented } from '../components/ui'
 import { PageTabs } from '../components/PageTabs'
 import { attempt, useApp } from '../store/app'
 import { loadHits } from '../store/hits'
+import { loadVocals } from '../store/vocals'
 import type { SpliceCandidate, SpliceScan } from '../types/api'
 
 type Kind = SpliceCandidate['kind']
-const PAGE: Record<Kind, string> = { stab: 'Chord Stabs', disco: 'Disco Hits', strings: 'Strings', bass: 'Bass Samples', ambience: 'Ambience' }
-const KINDS: Kind[] = ['stab', 'disco', 'strings', 'bass', 'ambience']
+const PAGE: Record<Kind, string> = { stab: 'Chord Stabs', disco: 'Disco Hits', strings: 'Strings', bass: 'Bass Samples', ambience: 'Ambience', vocal: 'Vocal Loops' }
+const KINDS: Kind[] = ['stab', 'disco', 'strings', 'bass', 'ambience', 'vocal']
+/** The other pages a sound can go on instead (a vocal is a take, not a hit: only its own page). */
+const OTHERS = (k: Kind) => (k === 'vocal' ? [] : KINDS.filter((x) => x !== k && x !== 'vocal'))
 type Filter = 'all' | Kind
 
 /** One voice for listening to a file in the Splice folder (it isn't in the library, so not the library's audition). */
@@ -92,6 +95,22 @@ export function SpliceView() {
   }
 
   const add = async (c: SpliceCandidate, kind: Kind) => {
+    if (kind === 'vocal') {
+      setAdding(c.path)
+      const v = await attempt(() => api.importVocalLoops([c.path]))
+      setAdding(null)
+      if (!v) return
+      void loadVocals()
+      if (v.failed.length) {
+        toast('error', `Couldn't add "${c.name}": ${v.failed[0]}.`)
+        return
+      }
+      setScan((s) => s && { ...s, candidates: s.candidates.map((x) => (x.path === c.path ? { ...x, imported: x.imported ?? 'vocal' } : x)) })
+      const got = v.imported[0]
+      toast('info', v.skipped ? `"${c.name}" is on the Vocal Loops page already.`
+        : `Added "${c.name}" to Vocal Loops${got?.key ? ` in ${got.key}` : ''}${got?.bars ? `, a ${got.bars}-bar phrase` : ''}${got && !got.url ? ' (no Splice link found: set it on the page)' : ''}.`)
+      return
+    }
     setAdding(c.path)
     const r = await attempt(() => api.importHits([c.path], kind))
     setAdding(null)
@@ -178,12 +197,12 @@ export function SpliceView() {
                               title={`Suggested: ${c.why}`}>
                         {adding === c.path ? 'Adding…' : `Add to ${PAGE[c.kind]}`}
                       </Button>
-                      <select className={cx(inputClass, 'w-[104px] h-8 text-[12px]')} value="" disabled={!ready || adding != null}
+                      {OTHERS(c.kind).length > 0 && <select className={cx(inputClass, 'w-[104px] h-8 text-[12px]')} value="" disabled={!ready || adding != null}
                               title="Add it to another page instead"
                               onChange={(e) => e.target.value && void add(c, e.target.value as Kind)}>
                         <option value="">Other page…</option>
-                        {KINDS.filter((k) => k !== c.kind).map((k) => <option key={k} value={k}>{PAGE[k]}</option>)}
-                      </select>
+                        {OTHERS(c.kind).map((k) => <option key={k} value={k}>{PAGE[k]}</option>)}
+                      </select>}
                     </div>
                   )}
                 </div>

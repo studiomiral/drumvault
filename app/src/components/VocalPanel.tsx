@@ -8,7 +8,7 @@ import { makeVocal } from '../store/generate'
 import { useVocals } from '../store/vocals'
 import type { ElevenStatus } from '../types/api'
 import { LYRICS, PHRASES, pickLines } from '../vocals/lyrics'
-import { randomVocal, takeSeconds, vocalCredits, VOCAL_MOODS, type VocalMood, type VocalVoice } from '../vocals/plan'
+import { randomVocal, takeAbout, takeSeconds, vocalCredits, VOCAL_MOODS, type VocalMood, type VocalVoice } from '../vocals/plan'
 import { IconChevron } from './icons'
 import { Module } from './Module'
 import { Button, cx, inputClass } from './ui'
@@ -72,7 +72,7 @@ export function VocalPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
             </Button>
             {pick ? (
               <span className="text-muted">
-                <span className="text-text">{pick.name}</span>{take ? ` · ${take.voice}, ${take.mood}, sung in ${take.analysis?.key ?? take.key}` : ''} · {how}
+                <span className="text-text">{pick.name}</span>{take ? ` · ${takeAbout(take)}, sung in ${take.analysis?.key ?? take.key}` : ''} · {how}
                 {rendering && <span className="text-faint"> · rendering…</span>}
               </span>
             ) : <span className="text-muted">No vocal in this track yet.</span>}

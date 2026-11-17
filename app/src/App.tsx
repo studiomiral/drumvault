@@ -15,6 +15,7 @@ import { keepTrack } from './store/generate'
 import { GridView } from './views/GridView'
 import { MidiView } from './views/MidiView'
 import { HitsView } from './views/HitsView'
+import { VocalLoopsView } from './views/VocalLoopsView'
 import { SpliceView } from './views/SpliceView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
@@ -112,6 +113,7 @@ export function App() {
         {view === 'strings' && <HitsView key="strings" kind="strings" />}
         {view === 'basses' && <HitsView key="basses" kind="bass" />}
         {view === 'ambience' && <HitsView key="ambience" kind="ambience" />}
+        {view === 'vocalloops' && <VocalLoopsView />}
         {view === 'splice' && <SpliceView />}
         {view === 'create' && <CreateView />}
         {view === 'settings' && <SettingsView />}

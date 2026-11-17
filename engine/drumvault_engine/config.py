@@ -312,6 +312,12 @@ class Thresholds:
     vocal_rest_s: float = 0.15              # a line starts after a rest this long
     vocal_preroll_s: float = 0.02           # the phrase starts this much before its line (the consonant)
     vocal_fade_ms: float = 8.0
+    # Splice vocal loops and phrases (vocalloop.py): their length, and how long splice.com may take
+    # to answer whether a pack's link is right.
+    vocal_loop_min_s: float = 1.5
+    vocal_loop_max_s: float = 240.0          # (a pack's whole hook: its best 8 bars are the phrase)
+    splice_link_timeout_s: float = 6.0
+    vocal_loop_suggest_bpm: float = 8.0     # the Splice page suggests vocal loops this close to the library tempo
     vocal_onset_delta: float = 0.12         # onset detection threshold for chops
     vocal_chop_min_s: float = 0.08
     vocal_chop_max_s: float = 0.6
@@ -379,6 +385,7 @@ class Thresholds:
 @dataclass
 class Settings:
     library_path: str = ""
+    splice_db: str = ""                     # Splice's sounds.db; "" = the desktop app's own (vocalloop.splice_dbs)
     library_bpm: float = 124.0
     bpm_min: float = 115.0
     bpm_max: float = 135.0

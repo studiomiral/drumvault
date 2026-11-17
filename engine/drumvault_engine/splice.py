@@ -1,5 +1,5 @@
 """The Splice folder (SCOPE.md §6.12): sounds in it that could go on the Chord Stabs, Disco Hits,
-Strings, Bass Samples or Ambience page.
+Strings, Bass Samples, Ambience or Vocal Loops page.
 
 A scan reads nothing but file names and audio headers, and changes nothing: each audio file's name
 says what it is ("MALAY_strings_stab_fall_C#min", "RARE_piano_textured_Bmin_chord2"), its header
@@ -53,6 +53,16 @@ NOT_AMBIENCE = {"pad", "pads", "chord", "chords", "piano", "synth", "string", "s
 TONAL_BED = {"drone", "drones", "pad", "pads", "soundscape", "soundscapes", "ambient", "bed", "evolving"}
 # …but not music that moves (chords, a melody, a loop at a tempo), an instrument of another page, drums or FX.
 NOT_TONAL = (NOT_AMBIENCE - {"pad", "pads", "synth", "fx"}) | {"sidechained", "sidechain", "pumping", "arp", "arps", "arpeggio", "progression", "vinyl", "tape", "resampled"}
+# A vocal loop or phrase: sung words…
+VOCAL = {"vocal", "vocals", "vox", "voice", "acapella", "acappella", "acapellas"}
+PHRASE = {"phrase", "phrases", "hook", "hooks", "chant", "chants", "line", "lyric", "lyrics"}
+# …not a vocal FX, a noise, an instrument loop with a voice in it, a full mix or a texture.
+NOT_VOCAL = {"fx", "sfx", "riser", "rise", "sweep", "impact", "drone", "ambience", "ambient", "atmos", "texture", "pad",
+             "piano", "keys", "synth", "guitar", "bass", "drum", "drums", "perc", "percussion", "kick", "snare", "hat",
+             "clap", "kit", "songstarter", "stems", "stem", "mix", "instrumental", "cough", "coughs", "grunt", "grunts", "groan",
+             "groans", "scream", "screams",
+             "laugh", "laughs", "breath", "breaths", "death", "pain", "effort", "reverse", "reversed", "fall", "uplifter",
+             "downlifter", "transition", "build", "crowd"}
 # A bass one-shot (one note a sampler can play a line with): never a loop, a drum or a kick's "sub".
 BASS = {"bass", "basses", "sub", "808", "reese"}
 NAMED = {"stab", "stabs", "chord", "chords"}
@@ -87,6 +97,20 @@ def suggest(name: str, duration_s: float, settings: Settings) -> tuple[str, str]
     tonal = w & (AMBIENCE | TONAL_BED) and not w & NOT_TONAL and not ambience.named_noise(name)
     if tonal and (name_key_label(name)[0] or w & TONAL_BED - {"ambient", "evolving"}):
         return ("ambience", "a tonal bed: pitched into each track's key") if bed_len else None
+    # A vocal loop or phrase (the Vocal Loops page): sung words, not a vocal FX, a chop one-shot or a mix.
+    if w & VOCAL and not w & NOT_VOCAL:
+        oneshot_ = "oneshot" in w or {"one", "shot"} <= w
+        # (Of the numbers a tempo could be, the one nearest the library's: "91V_HV_124_…" is at 124.)
+        tempi = [int(t) for t in _TOKEN.findall(Path(name).stem) if t.isdigit() and th.splice_bpm_min <= int(t) <= th.splice_bpm_max]
+        tempo = min(tempi, key=lambda t: abs(t - settings.library_bpm)) if tempi else None
+        if oneshot_ and not w & PHRASE or not th.vocal_loop_min_s <= duration_s <= th.vocal_loop_max_s:
+            return None
+        if tempo and not oneshot_:
+            # A loop far off the library tempo never fits a track (Generate takes it within a few BPM).
+            if abs(tempo - settings.library_bpm) > th.vocal_loop_suggest_bpm:
+                return None
+            return "vocal", f"a vocal loop at {tempo} BPM"
+        return "vocal", "a vocal phrase"
     if w & OTHER or ("fx" in w and not w & NAMED):
         return None
     oneshot = "oneshot" in w or {"one", "shot"} <= w
@@ -142,6 +166,8 @@ def scan(settings: Settings, folder: str) -> dict:
     lib = Path(settings.library_path) if settings.library_path else None
     out = []
     files = 0
+    from . import vocalloop
+    voiced = vocalloop.taken_sha1s(settings) if lib else set()
     with (LibraryDB(lib) if lib and (lib / ".drumvault").exists() else _NoDb()) as db:
         for f in sorted(q for q in root.rglob("*") if q.is_file() and q.suffix.lower() in zipio.AUDIO_EXTS):
             rel = f.relative_to(root)
@@ -160,12 +186,13 @@ def scan(settings: Settings, folder: str) -> dict:
             parts = rel.parts
             at = parts.index("packs") + 1 if "packs" in parts else 0
             pack = parts[at] if at < len(parts) - 1 else ""
-            row = db.hit_by_sha1(hashlib.sha1(f.read_bytes()).hexdigest()) if db else None
+            sha = hashlib.sha1(f.read_bytes()).hexdigest()
+            row = db.hit_by_sha1(sha) if db else None
             out.append({
                 "path": str(f), "name": f.stem, "pack": pack, "duration_s": round(dur, 2), "channels": info.channels,
                 "key_label": key, "key_source": source,
                 "bpm": name_bpm(f.name, settings.thresholds.splice_bpm_min, settings.thresholds.splice_bpm_max),
-                "kind": s[0], "why": s[1], "imported": row["kind"] if row else None,
+                "kind": s[0], "why": s[1], "imported": "vocal" if sha in voiced else row["kind"] if row else None,
             })
     return {"folder": str(root), "found": True, "files": files, "candidates": out}
 

@@ -129,6 +129,15 @@ def match_rules_in_context(names: list[str]) -> dict[str, str | None]:
     return {n: match_tokens(t[pre:len(t) - suf]) for n, t in zip(names, tokens)}
 
 
+VOCAL_KEYWORDS = ["vox", "vocal", "vocals", "voice", "acapella", "acappella"]
+
+
+def is_vocal(name: str) -> bool:
+    """A vocal stem by its name (filed as "ignore": not a sample source, but where it sings counts)."""
+    tokens = tokenize(name)
+    return any(_phrase_in(tokens, kw) for kw in VOCAL_KEYWORDS)
+
+
 def is_bass(name: str) -> bool:
     tokens = tokenize(name)
     return any(_phrase_in(tokens, kw) for kw in BASS_KEYWORDS)

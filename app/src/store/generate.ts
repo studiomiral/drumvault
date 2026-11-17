@@ -21,8 +21,8 @@ import { bassPatches, bassSettings, loadBass, saveBassSettings, useBass, type Ba
 import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
-import type { VocalTake } from '../generate/vocals'
-import type { VocalRequest } from '../vocals/plan'
+import { LOOP_CHANCE, loopFits, type VocalTake } from '../generate/vocals'
+import { takeName, type VocalRequest } from '../vocals/plan'
 import { hitSampleId, hitTranspose } from '../generate/disco'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type LoopBeats } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
@@ -63,6 +63,8 @@ export interface GenerateSettings {
   pads: { enabled: boolean }
   /** The ambience bed on/off: when on, most tracks get a very quiet texture under them (SCOPE.md §6.10a). */
   ambience: { enabled: boolean }
+  /** Splice vocal loops on/off: when on, some new tracks sing one that fits their key and tempo (SCOPE.md §6.11a). */
+  vocalLoops: { enabled: boolean }
   /** Choices locked for every next track (choices.ts), by rule. */
   locks: Rules
 }
@@ -100,6 +102,15 @@ const STRINGS_KEY = 'drumvault.generate.strings'
 
 const PADS_KEY = 'drumvault.generate.pads'
 const AMBIENCE_KEY = 'drumvault.generate.ambience'
+const VOCAL_LOOPS_KEY = 'drumvault.generate.vocalLoops'
+
+function savedVocalLoops(): GenerateSettings['vocalLoops'] {
+  try {
+    return { enabled: true, ...JSON.parse(localStorage.getItem(VOCAL_LOOPS_KEY) ?? '{}') }
+  } catch {
+    return { enabled: true }
+  }
+}
 
 function savedAmbience(): GenerateSettings['ambience'] {
   try {
@@ -211,7 +222,7 @@ export const useGenerate = create<GenerateState>((set) => ({
   references: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), locks: savedLocks() },
+  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() },
   keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
@@ -346,9 +357,11 @@ function options(fresh = false): GenerateOptions {
   const stabs = settings.stabs.enabled && stabHits.length ? { hits: stabHits, rhythms: stabsSettings().rhythms ?? [] } : null
   const stringHits = hits.filter((h) => h.kind === 'strings')
   const strings = settings.strings.enabled && stringHits.length ? { hits: stringHits, sidechain: settings.strings.sidechain } : null
-  // Vocals are made for one track (SCOPE.md §6.11): a new track sings none.
+  // Vocals: the take the open track sings (made for it, or its Splice loop); a new track sings a
+  // Splice loop now and then (the Vocal Loops module), never an ElevenLabs take (made for one track).
   const take = fresh ? null : projectTake(useProject.getState().project)
-  const vocals = take ? { takes: [take] } : null
+  const loops = fresh && settings.vocalLoops.enabled ? spliceTakes() : []
+  const vocals = take ? { takes: [take] } : loops.length ? { takes: loops, pool: { chance: LOOP_CHANCE } } : null
   const padPresets = useBass.getState().padPresets
   const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
   const bedHits = hits.filter((h) => h.kind === 'ambience')
@@ -803,6 +816,43 @@ export function newStrings(): boolean {
   return true
 }
 
+/** The Splice loops a track could sing (analysed, never exported). */
+function spliceTakes(): VocalTake[] {
+  return (playableVocals(useVocals.getState().vocals) as VocalTake[]).filter((t) => t.source === 'splice' && !t.usedIn.length)
+}
+
+/** Splice vocal loops on or off for new generations (remembered). */
+export function setVocalLoopOptions(patch: Partial<GenerateSettings['vocalLoops']>): void {
+  const { settings, set } = useGenerate.getState()
+  const vocalLoops = { ...settings.vocalLoops, ...patch }
+  set({ settings: { ...settings, vocalLoops } })
+  try {
+    localStorage.setItem(VOCAL_LOOPS_KEY, JSON.stringify(vocalLoops))
+  } catch {
+    // not remembered
+  }
+  if (patch.enabled !== undefined) invalidate()
+}
+
+/**
+ * Another Splice vocal loop for the track on screen (the Vocal Loops module): one that fits its key
+ * and tempo and isn't the one it sings, placed as Generate would. It replaces whatever the track
+ * sings (a Splice loop or an ElevenLabs take: one vocal per track). False when none fits.
+ */
+export function newVocalLoop(): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  if (!g || !samples) return false
+  const now = g.picks.vocal?.rel_path
+  const fits = spliceTakes().filter((t) => loopFits(t, g.key, g.project.bpm) && `Vocals/${t.id}/vocal.wav` !== now)
+  if (!fits.length) return false
+  const take = fits[Math.floor(Math.random() * fits.length)]
+  const next = rerollVocal(samples, { ...options(), vocals: { takes: [take] } }, g, randomSeed())
+  if (!next) return false
+  apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.sample.relPath.startsWith('Vocals/') || c.sample.relPath.startsWith('.drumvault/vocals/')).map((c) => c.id), 'New vocal loop')
+  return true
+}
+
 /** The take the open track sings (its generation's pick), once it's analysed. */
 function projectTake(project: Project): VocalTake | null {
   const rel = project.generation?.picks.vocal?.rel_path
@@ -823,7 +873,7 @@ export async function makeVocal(req: VocalRequest): Promise<void> {
   try {
     const take = await api.makeVocal(req)
     useVocals.setState((s) => ({ vocals: [...s.vocals.filter((v) => v.id !== take.id), take] }))
-    const sung = `“${take.lines.join(' / ')}”`
+    const sung = takeName(take)
     if (useProject.getState().project.createdAt !== was) {
       toast('info', `The vocal ${sung} was made, but the track it was for isn't on screen any more.`)
       return

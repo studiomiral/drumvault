@@ -5,7 +5,7 @@ import { laneRole } from '../generate/generator'
 import type { ProjectFileInfo } from '../types/project'
 
 /** What Create's side panel shows: the track (its key, structure, choices), a module, or a lane (by name). */
-export type Panel = { module: 'track' | 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb' } | { lane: string }
+export type Panel = { module: 'track' | 'bass' | 'chords' | 'vocals' | 'vocalloops' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb' } | { lane: string }
 
 /** The panel a lane opens: its module (Bass, Chords, Strings, Disco Hits), else the lane itself. */
 export function panelOf(laneName: string): Panel {

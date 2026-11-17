@@ -14,6 +14,11 @@ mix, ungated), which the app takes as reference levels, unless the stems were no
 one (most of them peaking at full scale), when the balance is not the producer's. With it each
 part's tone: its power in the 24 bands over its full bars, in dB against its total (the app's EQ
 matches lanes to it; samples get the same measure, `tone`).
+
+And where the track sings: its vocal stems (filed as "ignore", never a sample source) measured the
+same way but kept apart from the parts (they don't make a section silent or not, nor the balance):
+`levels.vocal`, its bars "0"/"1"/"2" and its loudness in its full bars, for the app's vocal
+placement and level. `levels.vocals_measured` says the vocals were looked for (none: no `vocal`).
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ from collections.abc import Callable
 import numpy as np
 
 from .audioutil import amp_to_db, k_weight
-from .classify import is_bass
+from .classify import is_bass, is_vocal
 from .config import Thresholds
 
 PART_OF = {
@@ -43,6 +48,15 @@ def part_of(name: str, category: str) -> str | None:
     if category == "melodic":
         return "bass" if is_bass(name) else "music"
     return PART_OF.get(category)
+
+
+def is_vocal_stem(name: str, category: str) -> bool:
+    return category == "ignore" and is_vocal(name)
+
+
+def measured(name: str, category: str) -> bool:
+    """A stem the arrangement measures: one of the parts, or a vocal."""
+    return part_of(name, category) is not None or is_vocal_stem(name, category)
 
 
 def bar_power(mono: np.ndarray, sr: int, bpm: float, bar_one_s: float, bars: int) -> np.ndarray:
@@ -109,6 +123,7 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
     is in memory when they come as functions (a track can have 40 stems of 6 minutes).
     {"bpm", "bars", "parts": {part: "0012…"}, "detail": {part: {"db": [...], "bright": [...]}},
     "levels": {"parts": {part: LUFS}, "normalized": bool, "spectra": {part: [24 dB]}}}."""
+    vocals = [(n, c, m, sr) for n, c, m, sr in stems if is_vocal_stem(n, c)]
     stems = [(n, c, m, sr) for n, c, m, sr in stems if part_of(n, c)]
     if not stems:
         return None
@@ -175,5 +190,33 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
         }
     hot = sum(1 for d in peaks if d >= th.arrangement_normalized_peak_db)
     normalized = len(peaks) >= th.arrangement_normalized_min_stems and hot >= th.arrangement_normalized_share * len(peaks)
-    return {"bpm": float(bpm), "bars": bars, "parts": parts, "detail": detail,
-            "levels": {"parts": levels, "normalized": bool(normalized), "spectra": spectra}} if parts else None
+    if not parts:
+        return None
+    out_levels: dict = {"parts": levels, "normalized": bool(normalized), "spectra": spectra, "vocals_measured": True}
+    vocal = _vocal(vocals, bpm, bar_one_s, bars, th) if vocals else None
+    if vocal:
+        out_levels["vocal"] = vocal
+    return {"bpm": float(bpm), "bars": bars, "parts": parts, "detail": detail, "levels": out_levels}
+
+
+def _vocal(vocals: list, bpm: float, bar_one_s: float, bars: int, th: Thresholds) -> dict | None:
+    """Where the vocal stems sing together, bar by bar ("0"/"1"/"2" as a part), and their loudness in
+    the full bars (LUFS of the mono mix, ungated). None when they're silent."""
+    power, kpower = np.zeros(bars), np.zeros(bars)
+    fit = lambda a: np.pad(a[:bars], (0, max(0, bars - len(a))))  # noqa: E731
+    for _, _, m, sr in vocals:
+        mono = m() if callable(m) else m
+        own = max(0, int(np.ceil((len(mono) / sr - bar_one_s) / (240.0 / bpm))))
+        power += fit(bar_power(mono, sr, bpm, bar_one_s, own))
+        kpower += fit(bar_power(k_weight(mono, sr), sr, bpm, bar_one_s, own))
+        del mono
+    db = 10 * np.log10(np.maximum(power, 1e-12))
+    loud = db[db > th.arrangement_silence_db]
+    if not loud.size:
+        return None
+    full = float(np.percentile(loud, th.arrangement_reference_pct))
+    state = np.where(db < max(th.arrangement_silence_db, full + th.arrangement_quiet_rel_db), 0,
+                     np.where(db < full + th.arrangement_full_rel_db, 1, 2))
+    k = kpower[state == 2]
+    return {"bars": "".join(str(int(v)) for v in state),
+            "lufs": round(-0.691 + 10 * float(np.log10(k.mean())), 1) if k.size and k.mean() > 0 else None}

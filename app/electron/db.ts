@@ -296,7 +296,7 @@ export class LibraryReader {
       this.hasColumn('zips', 'kind') ? " AND z.kind = 'stems'" : ''}`
     // Arrangements measured before the rides (schema v11), the balance (v13) or the tone (v14) were are measured again.
     const measured = this.hasColumn('arrangements', 'levels')
-      ? " WHERE detail IS NOT NULL AND levels IS NOT NULL AND json_extract(levels, '$.spectra') IS NOT NULL" : ' WHERE 0'
+      ? " WHERE detail IS NOT NULL AND levels IS NOT NULL AND json_extract(levels, '$.spectra') IS NOT NULL AND json_extract(levels, '$.vocals_measured') IS NOT NULL" : ' WHERE 0'
     return (this.all<{ n: number }>(this.hasTable('arrangements')
       ? `${zips} AND z.id NOT IN (SELECT zip_id FROM arrangements${measured})` : zips)[0]?.n ?? 0) > 0
   }

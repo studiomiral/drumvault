@@ -141,7 +141,7 @@ def analyze(ex: Extracted, settings: Settings, overrides: Overrides, ctx: JobCon
     # ---- arrangement: where each part plays (before the melodic stems are let go) ----
     arrangement = arrmod.measure(
         [(n, s.category, ex.audio(n).mono(), ex.audio(n).sr) for n, s in stems.items()
-         if arrmod.part_of(n, s.category)],
+         if arrmod.measured(n, s.category)],
         tres.bpm, tres.phase_samples / tres.sample_rate, th)
 
     warnings = list(ex.warnings)
@@ -1517,6 +1517,9 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
                          f"Arrangement of {z['file_name']} ({j + 1}/{len(zips)})")
             if not has_source(lib, z):
                 missing.append(z["file_name"])
+                # (Its arrangement as it was, its vocals never to be found: not looked for at every start.)
+                db.conn.execute("UPDATE arrangements SET levels = json_set(levels, '$.vocals_measured', json('true')) "
+                                "WHERE zip_id = ? AND levels IS NOT NULL AND json_extract(levels, '$.spectra') IS NOT NULL", (z["id"],))
                 continue
             stems = db.stems_for_zip(z["id"])
             category = {r["file_name"]: r["category_override"] or r["category"] for r in stems}
@@ -1524,7 +1527,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             bpm = float(z["bpm_override"] or z["detected_bpm"] or settings.library_bpm)
             with tempfile.TemporaryDirectory(prefix="drumvault-") as d:
                 ex = _source(lib, z, Path(d))
-                names = [n for n, c in category.items() if n in ex.files and arrmod.part_of(n, c)]
+                names = [n for n, c in category.items() if n in ex.files and arrmod.measured(n, c)]
                 arr = arrmod.measure([(n, category[n], _loader(ex, n), ex.sr_of(n)) for n in names], bpm, bar_one_s, th)
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "

@@ -6,7 +6,7 @@ import { bassPath } from '../audio/schedule'
 import { BEATS_PER_BAR } from '../lib/project'
 import type { SampleListItem } from '../types/api'
 import type { BassRender } from '../types/project'
-import type { VocalAnalysis, VocalMeta } from '../vocals/plan'
+import { takeName, type VocalAnalysis, type VocalMeta } from '../vocals/plan'
 import { parseKey } from './bassline'
 import { hitTranspose } from './disco'
 
@@ -22,10 +22,26 @@ function hash(s: string): number {
 
 const sungKey = (t: VocalTake) => t.analysis.key ?? t.key
 
+/** A Splice loop is sung in a track this close to its key (semitones, the nearest way)… */
+export const LOOP_MAX_SHIFT = 2
+/** …and this close to its tempo (BPM: a voice stretched further sounds processed). */
+export const LOOP_MAX_BPM = 4
+/** Share of new tracks that sing a Splice loop, when the Vocal Loops module is on and one fits. */
+export const LOOP_CHANCE = 0.6
+
+/** A Splice loop a track in `key` at `bpm` can sing: never exported, in or near the key, near its tempo. */
+export function loopFits(t: VocalTake, key: string | null, bpm: number): boolean {
+  if (t.source !== 'splice' || t.usedIn.length) return false
+  const k = sungKey(t)
+  if (!k || !key || Math.abs(hitTranspose({ key_label: k }, key)) > LOOP_MAX_SHIFT) return false
+  const tempo = t.splice?.bpm
+  return tempo == null || Math.abs(tempo - bpm) <= LOOP_MAX_BPM
+}
+
 /** A take as the generator's pick (kept by Keep, avoided by a re-roll). */
 export function vocalItem(t: VocalTake): SampleListItem {
   return {
-    id: -1_500_000_000 - hash(t.id), rel_path: `Vocals/${t.id}/vocal.wav`, name: `“${t.lines.join(' / ')}”`, kind: 'loop',
+    id: -1_500_000_000 - hash(t.id), rel_path: `Vocals/${t.id}/vocal.wav`, name: takeName(t), kind: 'loop',
     category: 'melodic', bpm: t.bpm, bars: null, body_bars: null, key_label: sungKey(t), key_camelot: null,
     duration_s: t.durationS ?? 0, channels: 2, favorite: 0, rating: null, tags: null, zip_id: -1, source_code: 'Vocals',
   }
@@ -34,7 +50,7 @@ export function vocalItem(t: VocalTake): SampleListItem {
 /** What a phrase clip renders: the loop moved from the key it's sung in into `key`. */
 export function phraseRender(t: VocalTake, phrase: VocalAnalysis['phrases'][number], key: string | null): BassRender {
   return {
-    role: 'vocal', keyLabel: key, preset: phrase.path, presetName: `“${t.lines.join(' / ')}”`, midiId: 0, midiName: 'Vocal',
+    role: 'vocal', keyLabel: key, preset: phrase.path, presetName: takeName(t), midiId: 0, midiName: 'Vocal',
     transpose: Math.max(-12, Math.min(12, hitTranspose({ key_label: sungKey(t) }, key))), bars: phrase.bars,
     vocal: { key: sungKey(t), take: t.id },
   }
@@ -49,7 +65,7 @@ export function phraseSample(t: VocalTake, render: BassRender, bpm: number): Sam
 /** A chop as a one-shot sample. */
 export function chopSample(t: VocalTake, chop: VocalAnalysis['chops'][number]): SampleListItem {
   return {
-    ...vocalItem(t), id: -1_600_000_000 - hash(chop.path), rel_path: chop.path, name: `${t.lines[0]} chop`, kind: 'oneshot', bars: null,
+    ...vocalItem(t), id: -1_600_000_000 - hash(chop.path), rel_path: chop.path, name: `${t.source === 'splice' ? takeName(t) : t.lines[0]} chop`, kind: 'oneshot', bars: null,
     duration_s: chop.seconds, energy_db: chop.energy_db,
   }
 }

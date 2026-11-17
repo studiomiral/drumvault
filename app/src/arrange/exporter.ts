@@ -14,6 +14,7 @@ import { bassNotes, notesMidi } from '../lib/midi'
 import { BEATS_PER_BAR } from '../lib/project'
 import type { MasterResult, PreflightResult, PreflightSection } from '../types/engine'
 import type { Project } from '../types/project'
+import type { VocalMeta } from '../vocals/plan'
 
 export interface ExportOptions {
   /** The folder the project folder goes in. */
@@ -83,6 +84,36 @@ export function hasVocals(project: Project): boolean {
 
 export function safeName(s: string): string {
   return s.replace(/[/\\:*?"<>|\x00-\x1f]/g, '-').trim() || 'Untitled'
+}
+
+/** The text file at the top of the export folder: the track's tempo, key and length, and where its vocals come from. */
+export const INFO_FILE = 'info.txt'
+
+/**
+ * info.txt (SCOPE.md §6.5): the track (title, BPM, key, length) and, for each vocal it sings, where
+ * it is from: a Splice loop's file, pack, label and the pack's page; a made vocal's ElevenLabs credit.
+ */
+export function infoText(project: Project, o: Pick<ExportOptions, 'folder' | 'range'>, takes: VocalMeta[]): string {
+  const bars = Math.round((o.range.endBeat - o.range.startBeat) / BEATS_PER_BAR)
+  const seconds = Math.round(((o.range.endBeat - o.range.startBeat) * 60) / project.bpm)
+  const key = project.generation?.key
+  const lines = [
+    `Title: ${o.folder}`,
+    `BPM: ${formatBpm(project.bpm)}`,
+    `Key: ${key ? keyName(key) : 'none'}`,
+    `Length: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} (${bars} bars)`,
+  ]
+  const sung = vocalTakes(project).map((id) => takes.find((t) => t.id === id)).filter((t): t is VocalMeta => !!t)
+  lines.push('', sung.length ? 'Vocals' : 'Vocals: none')
+  for (const t of sung) {
+    if (t.source === 'splice') {
+      const sp = t.splice
+      lines.push(`- ${sp?.file ?? t.id}`, `  Splice pack: ${sp?.pack ?? 'unknown'}${sp?.label ? ` (${sp.label})` : ''}`, `  ${sp?.url ?? 'Link: unknown'}`)
+    } else {
+      lines.push(`- “${t.lines.join(' / ')}”`, `  AI-generated with ElevenLabs (${t.voice ?? 'voice'}, ${t.mood ?? 'mood'}); lyrics written for this app`)
+    }
+  }
+  return `${lines.join('\n')}\n`
 }
 
 /** "E minor" for "Em", "F# major" for "F#". */
@@ -196,6 +227,13 @@ export async function exportStems(project: Project, o: ExportOptions,
       await api.writeExportFile(exportDir(o, 'midi'), file, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
       result.written.push(`midi/${file}`)
     }
+  }
+  // info.txt: the track and where its vocals come from (written with the rest, never on its own).
+  if (!isCancelled() && result.written.length) {
+    const text = infoText(project, o, await api.listVocals())
+    const data = new TextEncoder().encode(text)
+    await api.writeExportFile(`${o.dir}/${safeName(o.folder)}`, INFO_FILE, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
+    result.written.push(INFO_FILE)
   }
   // House of Tracks takes each vocal once: the takes this track sings are used now.
   const sung = vocalTakes(project)

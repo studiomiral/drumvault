@@ -17,13 +17,14 @@ import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn,
 import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bedShift } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
-import { chopPitch, chopSample, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
+import { takeAbout } from '../vocals/plan'
+import { chopPitch, chopSample, loopFits, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
 import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perBarFor, rollBar, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabJob, type StabLayout, type StabRoll, type StabTurn, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
-import { mainBuildOf, mainBuilds, readReference, templateFrom, templateFromReference, type Arc, type Template } from './template'
+import { mainBuildOf, mainBuilds, readReference, templateFrom, templateFromReference, vocalAtWeights, type Arc, type Template } from './template'
 import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
 import {
   breakShape, CHARACTER_LABEL, characterRules, CHARACTERS, isReese, LEAD_DB, LEAD_LABEL, leadRules, PAD_BARS, PAD_CHANCE, padNotes, pickLead,
@@ -366,7 +367,11 @@ export interface GenerateOptions {
    * Vocals (SCOPE.md §6.11): the Vocals page's analysed takes, one sung in every track (one not
    * used in an export yet while there are some); null or empty = none.
    */
-  vocals?: { takes: VocalTake[] } | null
+  /**
+   * Vocals: the take made for this track (it sings it), or the Vocal Loops module's Splice loops
+   * (`pool`: a track sings one that fits its key and tempo, `chance` of the time).
+   */
+  vocals?: { takes: VocalTake[]; pool?: { chance: number } } | null
   /**
    * Choices locked in Generate (choices.ts): these rules, whatever the track would draw or the
    * real track it's built on does. Applied last, also when a lane is made again.
@@ -1270,7 +1275,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // wouldn't move isn't used: it is never heard as recorded).
   const arng = new Rng(seed ^ 0x414d4249)
   const bedHits = (opts.ambience?.hits ?? []).filter((h) => bedShift(h, key) != null)
-  const takes = opts.vocals?.takes ?? []
+  // Splice vocal loops (the Vocal Loops module): some tracks sing one that fits the key and tempo
+  // and has never gone out in an export. A take made for this track (ElevenLabs) always sings.
+  const loopPool = opts.vocals?.pool
+  const takes = (opts.vocals?.takes ?? []).filter((t) => !loopPool || loopFits(t, key, bpm))
+  const vocalWeights = vocalAtWeights(opts.templates ?? [])
   const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
 
   const fills = pool(of('event', 'fill'))
@@ -1445,10 +1454,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // A vocal in every track: its phrase loop, its chops, or both; the long or the short loop; the
     // phrase in the drops, in their second halves, in drops and breakdowns, or in breakdowns (a
     // reverb build on it there); the chops in the drops (where the phrase isn't), also into them.
-    vocalIn: takes.length > 0,
+    vocalIn: takes.length > 0 && (!loopPool || new Rng(seed ^ 0x564c4f50).chance(loopPool.chance)),
     vocalUse: vrng.weighted([['phrase', 3], ['chops', 2], ['both', 4]] as const) as 'phrase' | 'chops' | 'both',
     vocalLoop: vrng.weighted([['long', 1], ['short', 1]] as const) as 'long' | 'short',
-    vocalAt: vrng.weighted([['drops', 3], ['halves', 2], ['drops_breaks', 3], ['breaks', 1]] as const) as 'drops' | 'halves' | 'drops_breaks' | 'breaks',
+    // (Where the user's tracks sing, when their vocal stems were measured; else the house weights.)
+    vocalAt: vrng.weighted(vocalWeights ?? [['drops', 3], ['halves', 2], ['drops_breaks', 3], ['breaks', 1]]) as 'drops' | 'halves' | 'drops_breaks' | 'breaks',
     chopsAt: vrng.weighted([['drops', 3], ['drops_builds', 1]] as const) as 'drops' | 'drops_builds',
     chopRhythm: stabRhythm(vrng),
     // The groove carries through breakdowns (SCOPE.md §6.6, "One groove"): the drop's own drums
@@ -2819,7 +2829,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         }
       }
     }
-    vocalNote = `vocal ${vocalItem(take).name} (${take.voice}, ${take.mood}): ${use === 'both' ? 'phrase and chops' : use === 'phrase' ? 'phrase' : 'chops'}`
+    vocalNote = `vocal ${vocalItem(take).name} (${takeAbout(take)}): ${use === 'both' ? 'phrase and chops' : use === 'phrase' ? 'phrase' : 'chops'}`
   }
 
   // ---- the big builds into the drops after the long breakdown (over what the groove through

@@ -109,6 +109,13 @@ export interface HitItem {
   tonal?: number | null
 }
 
+/** What an import of Splice vocal loops did (vocalloop.import_loops). */
+export interface VocalLoopImport {
+  imported: { id: string; name: string; key: string | null; bpm: number | null; bars: number | null; chops: number; url: string | null }[]
+  skipped: number
+  failed: string[]
+}
+
 /** A sound in the Splice folder that could go on one of the music pages (SCOPE.md §6.12). */
 export interface SpliceCandidate {
   /** Absolute path of the file in the Splice folder. */
@@ -124,10 +131,10 @@ export interface SpliceCandidate {
   /** A tempo in its name. */
   bpm: number | null
   /** The page it is suggested for, and why. */
-  kind: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience'
+  kind: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | 'vocal'
   why: string
   /** The page it is on already. */
-  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | null
+  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | 'vocal' | null
 }
 
 export interface SpliceScan {
@@ -321,7 +328,13 @@ export interface TrackArrangement {
    * (LUFS of its mono mix) in its full bars. `normalized`: the stems were normalised one by one,
    * so the balance isn't the producer's.
    */
-  levels?: { parts: Record<string, number>; normalized: boolean; spectra?: Record<string, number[]> } | null
+  levels?: {
+    parts: Record<string, number>; normalized: boolean; spectra?: Record<string, number[]>
+    /** Where the track sings (its vocal stems, apart from the parts): bars "0"/"1"/"2" and the loudness of its full bars (LUFS). */
+    vocal?: { bars: string; lufs: number | null }
+    /** The vocals were looked for (absent: measured before; no `vocal`: it doesn't sing). */
+    vocals_measured?: boolean
+  } | null
 }
 
 export interface LibraryFacets {
@@ -524,7 +537,15 @@ export interface DrumvaultAPI {
   analyzeVocal(id: string): Promise<VocalMeta>
   /** These takes were exported in `track` (House of Tracks takes each vocal once). */
   markVocalsUsed(ids: string[], track: string): Promise<void>
+  /** Splice vocal loops and phrases made into takes (SCOPE.md §6.11a); files already there are skipped. */
+  importVocalLoops(paths: string[]): Promise<VocalLoopImport>
+  /** A Splice loop's pack link set by hand (null: none). */
+  setVocalUrl(id: string, url: string | null): Promise<void>
+  /** A take offered to new tracks again (its export thrown away). */
+  unuseVocal(id: string): Promise<void>
   revealPath(path: string): Promise<void>
+  /** A splice.com page (a pack's) in the browser. */
+  openSplice(url: string): Promise<void>
   /** Open a folder in Finder; resolves to an error message, or '' when it opened. */
   openFolder(path: string): Promise<string>
   /** Nearest neighbours by fingerprint (same kind, category and loop length). */

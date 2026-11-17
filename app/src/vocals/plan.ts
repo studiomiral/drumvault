@@ -18,12 +18,34 @@ export interface VocalRequest {
   seconds: number
 }
 
-/** A made vocal, as its folder's meta.json keeps it (<Library>/Vocals/<id>/). */
-export interface VocalMeta extends VocalRequest {
+/** Where a Splice vocal loop or phrase came from (SCOPE.md §6.11a): what the export's info.txt credits. */
+export interface SpliceVocal {
+  /** Its file name, and where it is in the Splice folder. */
+  file: string
+  original: string
+  sha1: string
+  /** The pack and its label (Splice's own record), and the pack's page on splice.com when found. */
+  pack: string | null
+  label: string | null
+  url: string | null
+  /** Its tempo (null: a phrase without one) and whether it is a loop. */
+  bpm: number | null
+  loop: boolean
+  key_source: 'name' | 'splice' | 'sung' | 'none'
+  tags: string[]
+}
+
+/** A vocal, as its folder's meta.json keeps it (<Library>/Vocals/<id>/): made with ElevenLabs, or a Splice loop. */
+export interface VocalMeta extends Omit<VocalRequest, 'voice' | 'mood'> {
   id: string
   createdAt: string
-  /** House of Tracks wants it said: AI-generated, lyrics written for this app. */
-  source: 'elevenlabs'
+  /** House of Tracks wants it said: AI-generated (lyrics written for this app), or a Splice sample. */
+  source: 'elevenlabs' | 'splice'
+  /** An ElevenLabs take's voice and mood (a Splice loop has none). */
+  voice?: VocalVoice
+  mood?: VocalMood
+  /** A Splice loop's origin. */
+  splice?: SpliceVocal
   model: string
   format: string
   /** ElevenLabs' response headers for the take (its song id among them). */
@@ -50,6 +72,16 @@ export interface VocalAnalysis {
   /** Syllables with the note they're sung on (MIDI) and how loud they play. */
   chops: { path: string; note: number; seconds: number; energy_db: number | null }[]
   bpm: number
+}
+
+/** A take's name as the app shows it: the lines an ElevenLabs take sings, a Splice loop's file. */
+export function takeName(t: Pick<VocalMeta, 'source' | 'lines' | 'splice'>): string {
+  return t.source === 'splice' ? (t.splice?.file ?? 'Splice vocal').replace(/\.(wav|aiff?|flac)$/i, '') : `“${t.lines.join(' / ')}”`
+}
+
+/** What a take is, in a few words: its voice and mood, or its Splice pack. */
+export function takeAbout(t: Pick<VocalMeta, 'source' | 'voice' | 'mood' | 'splice'>): string {
+  return t.source === 'splice' ? `Splice: ${t.splice?.pack ?? 'unknown pack'}` : `${t.voice}, ${t.mood}`
 }
 
 /** Seconds a take of `bars` lasts at `bpm`, with a second to start in (an 8-bar phrase needs at least 8 bars). */

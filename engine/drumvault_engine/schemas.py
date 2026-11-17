@@ -108,7 +108,7 @@ class Overrides(BaseModel):
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
                  "render_bass", "serum_presets", "save_midi", "set_midi_meta",
-                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "preflight", "scan_references", "clean_renders", "import_vocal", "analyze_vocal", "shutdown"]
+                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "preflight", "scan_references", "clean_renders", "import_vocal", "analyze_vocal", "import_vocal_loops", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -217,6 +217,12 @@ class AnalyzeVocalParams(BaseModel):
 class ImportVocalParams(BaseModel):
     """Unpack a vocal take's stems and write its vocal (pipeline.import_vocal)."""
     folder: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportVocalLoopsParams(BaseModel):
+    """Splice vocal loops and phrases made into takes (vocalloop.import_loops)."""
+    paths: list[str]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
