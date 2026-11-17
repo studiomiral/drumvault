@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { hitIdOf } from '../generate/disco'
 import { STAB_ROLES, type Generation } from '../generate/generator'
-import { stabParts, type StabTurns } from '../generate/stabs'
+import { loopJobs, loopParts, stabParts, type StabLayout, type StabTurns } from '../generate/stabs'
 import { useApp } from '../store/app'
 import { deleteStabRhythm, newChordStabs, saveStabRhythm, setTrackStabRhythm, useGenerate } from '../store/generate'
 import { useHits } from '../store/hits'
@@ -18,7 +18,7 @@ export function stabsWhere(g: Generation): string {
 
 /**
  * Chord stabs (SCOPE.md §6.9) in the Chords module: which of the Chord Stabs page's samples this
- * track plays (one to three, taking turns in the rhythm), their pitch, the rhythm.
+ * track plays (one to three: one loop, layered or on its pickups, or taking turns in tracks from before), their pitch, the rhythm.
  */
 export function StabsPart({ g }: { g: Generation }) {
   useGenerate((s) => s.history)  // re-render after a pitch change
@@ -29,9 +29,15 @@ export function StabsPart({ g }: { g: Generation }) {
   const toast = useApp((s) => s.toast)
   // The track's stabs, in lane order.
   const used = STAB_ROLES.flatMap((role) => samples.filter((h) => h.id === hitIdOf(g.picks[role]?.id)))
-  const parts = stabParts(stabRhythmOf(g), used.length, (g.rules.stabTurns ?? 'hits') as StabTurns)
+  const rhythm = stabRhythmOf(g)
+  // One loop (rule `stabLoop`): the stabs' jobs in it; else their turns.
+  const jobs = g.rules.stabFit && g.rules.stabLoop && rhythm.length
+    ? loopJobs([rhythm[0], rhythm[1 % rhythm.length]], used.length, (g.rules.stabLayout ?? 'stack') as StabLayout) : null
+  const parts = jobs ? loopParts(rhythm, jobs) : stabParts(rhythm, used.length, (g.rules.stabTurns ?? 'hits') as StabTurns)
   const byBar = parts.length === 2 && !parts[0][1].some(Boolean) && !parts[1][0].some(Boolean)
-  const where = stabsWhere(g) + (used.length > 1 ? `, ${used.length} stabs taking turns ${byBar ? 'bar by bar' : 'hit by hit'}` : '')
+  const where = stabsWhere(g) + (used.length < 2 ? ''
+    : jobs ? `, ${[jobs.includes('layer') ? '1 and 2 layered as one stab' : null, jobs.includes('pickups') ? `${jobs.length} on the pickups` : null].filter(Boolean).join(', ')}`
+      : `, ${used.length} stabs taking turns ${byBar ? 'bar by bar' : 'hit by hit'}`)
   const reroll = () => {
     if (!newChordStabs()) toast('info', 'No other chord stab came out: add more on the Chord Stabs page.')
   }
@@ -94,8 +100,17 @@ function StabSequencer({ g, owners }: { g: Generation; owners: Velocity[][][] | 
   const saved = useApp((s) => s.settings?.stabs?.rhythms) ?? []
   const toast = useApp((s) => s.toast)
   const on = stabRhythmOf(g).map((b) => b.map((v) => (v ? 1 : 0)))
-  /** Which stab plays a step (1, 2, 3), when several take turns. */
-  const owner = (b: number, i: number) => (owners ? owners.findIndex((p) => p[b]?.[i]) + 1 || null : null)
+  /** Which stabs play a step (1, 2, 3; "12" when layered), when there are several. */
+  const owner = (b: number, i: number) => (owners ? owners.map((p, k) => (p[b]?.[i] ? k + 1 : '')).join('') || null : null)
+  /** A loop's moved hit (rule `stabMove`): the last of the loop or of every bar, in a bar of two hits or more. */
+  const move = g.rules.stabLoop ? Number(g.rules.stabMove ?? 0) : 0
+  const moved = (b: number, i: number) => {
+    const loop = g.rules.stabMoveAt === 'loop' && on.length > 1
+    if (!move || (loop && b === 0)) return false
+    const hits = on[b].flatMap((v, j) => (v ? [j] : []))
+    const all = hits.length + (loop ? on[0].filter(Boolean).length : 0)
+    return all > 1 && hits[hits.length - 1] === i
+  }
   const [name, setName] = useState('')
   if (!on.length) return null
   const play = (steps: number[][]) => setTrackStabRhythm(steps.map((b) => b.map((v) => (v ? 3 : 0)) as Velocity[]))
@@ -128,8 +143,9 @@ function StabSequencer({ g, owners }: { g: Generation; owners: Velocity[][][] | 
         {on.map((bar, b) => (
           <div key={b} className="flex gap-[3px]">
             {bar.map((v, i) => (
-              <button key={i} title={`Bar ${b + 1}, beat ${Math.floor(i / 4) + 1}${i % 4 ? `, 16th ${(i % 4) + 1}` : ''}`}
+              <button key={i} title={`Bar ${b + 1}, beat ${Math.floor(i / 4) + 1}${i % 4 ? `, 16th ${(i % 4) + 1}` : ''}${moved(b, i) ? `: moved ${move > 0 ? '+' : ''}${move} st` : ''}`}
                       className={cx('w-[18px] h-7 rounded-[4px] transition-colors text-[10px] font-semibold text-[#3a2f0b]', i % 4 === 0 && i > 0 && 'ml-1.5',
+                        moved(b, i) && 'ring-2 ring-[#a78bfa] ring-inset',
                         v ? 'bg-[#fcd34d] hover:bg-[#fde68a]' : i % 4 === 0 ? 'bg-[#3a3b40] hover:bg-[#46474d]' : 'bg-raised hover:bg-[#3a3b3f]')}
                       onClick={() => toggle(b, i)}>
                 {v ? owner(b, i) : null}

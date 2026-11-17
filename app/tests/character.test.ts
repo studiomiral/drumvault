@@ -48,7 +48,8 @@ describe('a track\'s character and its lead', () => {
 
   it('makes tracks of a character alike in the rules that make it', () => {
     for (const g of gens.filter((x) => x.rules.character === 'dub')) {
-      expect([g.rules.fx, g.rules.stabEcho, g.rules.stabsOpen]).toEqual(['sparse', '8', 'each'])
+      // (A stab loop's drops hit open: its filter opens before them, so dub's opening over every drop is left out.)
+      expect([g.rules.fx, g.rules.stabEcho, g.rules.stabsOpen]).toEqual(['sparse', '8', g.rules.stabLoop ? 'none' : 'each'])
       expect(g.rules.glueHz).toBeLessThanOrEqual(800)
     }
     for (const g of gens.filter((x) => x.rules.character === 'disco')) expect([g.rules.fx, g.rules.crash8]).toEqual(['busy', true])
@@ -77,7 +78,11 @@ describe('a track\'s character and its lead', () => {
     for (const g of gens) {
       for (const s of g.sections.filter((x) => x.kind === 'break')) {
         const from = breakShape(s.start, s.bars).lead
-        const at = (name: string) => g.project.clips.filter((c) => laneOf(g, name)?.id === c.laneId && c.start >= from * 4 && c.start < (s.start + s.bars - 1) * 4)
+        // (A stab loop announces the drop over the breakdown's last bars: low-passed and opening.)
+        const ann = g.rules.lead === 'stab' && g.rules.stabLoop ? Math.min(Number(g.rules.stabAnnounce), Math.max(2, Math.floor(s.bars / 2))) : 0
+        const to = s.start + s.bars - Math.max(1, ann)
+        if (to <= from) continue
+        const at = (name: string) => g.project.clips.filter((c) => laneOf(g, name)?.id === c.laneId && c.start >= from * 4 && c.start < to * 4)
         if (g.rules.lead === 'bass') {
           expect(at('Bass').some((c) => !c.filter)).toBe(true)
           checked++

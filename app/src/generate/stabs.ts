@@ -40,9 +40,9 @@ const bar = (hits: number[]): Velocity[] => {
 }
 const hitsOf = (steps: number[]) => steps.flatMap((v, i) => (v ? [i] : []))
 
-function drawBar(rng: Rng, counts: [number, number][], weight: number[], gap: number): number[] {
-  const n = rng.weighted(counts)
-  const hits: number[] = []
+function drawBar(rng: Rng, counts: [number, number][], weight: number[], gap: number, from: number[] = []): number[] {
+  const n = Math.max(from.length, rng.weighted(counts))
+  const hits: number[] = [...from]
   for (let tries = 0; hits.length < n && tries < 40; tries++) {
     const free = weight.map((w, i) => (hits.some((h) => Math.abs(h - i) < gap) ? 0 : w))
     if (!free.some((w) => w > 0)) break
@@ -86,6 +86,8 @@ export interface RhythmFit {
   perBar?: [number, number][]
   bass?: BassSteps | null
   mode?: StabBass
+  /** Written as one stab loop (rule `stabLoop`): more of the classics and the saved rhythms, one anchor hit in every bar, the bassline a soft preference. */
+  loop?: boolean
 }
 
 /** A stab answering the bass: this much of a step's weight where a bass note starts, where one sounds, in its rests. */
@@ -96,14 +98,27 @@ const ANSWER_REST = 1.7
 const LOCK_ONSET = 3
 const LOCK_ELSE = 0.5
 
+/** The same for a stab loop: the bassline leans the rhythm, it doesn't decide it (a groove first). */
+const LOOP_ANSWER: [number, number, number] = [0.5, 0.85, 1.25]
+const LOOP_LOCK: [number, number] = [1.8, 0.8]
+
 /** A step's weight against the bassline (bar `b` of the two, step `i` of 16). */
 function bassWeight(fit: RhythmFit | undefined, b: number, i: number): number {
   const bass = fit?.bass
   if (!bass) return 1
   const k = (b % 2) * 16 + i
-  if (fit!.mode === 'lock') return bass.onset[k] && i % 4 !== 0 ? LOCK_ONSET : LOCK_ELSE
-  return bass.onset[k] ? ANSWER_ONSET : bass.sounding[k] ? ANSWER_SOUNDING : ANSWER_REST
+  const [onset, else_] = fit!.loop ? LOOP_LOCK : [LOCK_ONSET, LOCK_ELSE]
+  if (fit!.mode === 'lock') return bass.onset[k] && i % 4 !== 0 ? onset : else_
+  const [on, sounding, rest] = fit!.loop ? LOOP_ANSWER : [ANSWER_ONSET, ANSWER_SOUNDING, ANSWER_REST]
+  return bass.onset[k] ? on : bass.sounding[k] ? sounding : rest
 }
+
+/** A stab loop's anchor: the off-beat 8th it comes back to in every bar (weights). */
+const ANCHORS: [number, number][] = [[2, 3], [10, 3], [6, 2], [14, 2]]
+/** A stab loop: a classic this often (without saved rhythms), a saved rhythm as it is this often (with), bar 2 repeating bar 1 this often. */
+export const LOOP_CLASSIC = 0.55
+export const LOOP_SAVED_EXACT = 0.6
+const LOOP_REPEAT = 0.5
 
 /**
  * A stab rhythm (1 or 2 arrays of 16 velocities). Without saved rhythms: a classic house one, or
@@ -117,6 +132,7 @@ function bassWeight(fit: RhythmFit | undefined, b: number, i: number): number {
 export function stabRhythm(rng: Rng, saved: SavedStabRhythm[] = [], fit?: RhythmFit): Velocity[][] {
   const mine = saved.filter((r) => r.steps.length && r.steps.some((b) => b.some(Boolean)))
   const against = (weight: number[], b: number) => weight.map((w, i) => w * bassWeight(fit, b, i))
+  if (fit?.loop && !mine.length) return loopRhythm(rng, fit, against)
   if (!mine.length) {
     // (A classic doesn't know the bassline or what the track's stabs want: only without either.)
     if (rng.chance(0.5) && !fit?.bass && (!fit?.perBar || fit.perBar === PER_BAR)) {
@@ -129,7 +145,7 @@ export function stabRhythm(rng: Rng, saved: SavedStabRhythm[] = [], fit?: Rhythm
     const same = !fit?.bass || fit.bass.onset.slice(0, 16).join() === fit.bass.onset.slice(16).join()
     return [bar(a), bar(rng.chance(REPEAT) && same ? a : drawBar(rng, per, against(STEP_WEIGHT, 1), MIN_GAP))]
   }
-  if (rng.chance(SAVED_EXACT)) return rng.pick(mine).steps.map((b) => bar(hitsOf(b)))
+  if (rng.chance(fit?.loop ? LOOP_SAVED_EXACT : SAVED_EXACT)) return rng.pick(mine).steps.map((b) => bar(hitsOf(b)))
   const bars = rng.pick(mine).steps.length > 1 ? 2 : 1
   const bars2 = mine.filter((r) => r.steps.length > 1)
   const counts = new Map<number, number>()
@@ -146,6 +162,23 @@ export function stabRhythm(rng: Rng, saved: SavedStabRhythm[] = [], fit?: Rhythm
   if (bars === 1 && !fit?.bass) return [bar(a)]
   const repeat = bars2.length ? bars2.filter((r) => hitsOf(r.steps[0]).join() === hitsOf(r.steps[1]).join()).length / bars2.length : REPEAT
   return [bar(a), bar(rng.chance(repeat) ? a : drawBar(rng, per, against(weightFor(1), 1), gap))]
+}
+
+/**
+ * A built-in stab loop: a classic house rhythm (the one that sits best against the bassline), or
+ * one drawn around an anchor, an off-beat 8th both bars hit, with the funky 16ths around it.
+ */
+function loopRhythm(rng: Rng, fit: RhythmFit, against: (w: number[], b: number) => number[]): Velocity[][] {
+  if (rng.chance(LOOP_CLASSIC)) {
+    const [a, b] = rng.pickBy(CLASSICS, ([x, y]) => [...x.map((i) => bassWeight(fit, 0, i)), ...y.map((i) => bassWeight(fit, 1, i))]
+      .reduce((n, w) => n * Math.min(1, w), 1))
+    return [bar(a), bar(b)]
+  }
+  const per = fit.perBar ?? PER_BAR
+  const anchor = rng.weighted(ANCHORS.map(([i, w]) => [i, w * Math.min(bassWeight(fit, 0, i), bassWeight(fit, 1, i))] as [number, number]))
+  const a = drawBar(rng, per, against(STEP_WEIGHT, 0), MIN_GAP, [anchor])
+  const same = !fit.bass || fit.bass.onset.slice(0, 16).join() === fit.bass.onset.slice(16).join()
+  return [bar(a), bar(rng.chance(LOOP_REPEAT) && same ? a : drawBar(rng, per, against(STEP_WEIGHT, 1), MIN_GAP, [anchor]))]
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +198,11 @@ export function accented(rhythm: Velocity[][]): Velocity[][] {
   })
 }
 
-/** The rhythm's lean version (a track's first drop, a tease): the first stab of each bar alone. */
-export function sparse(rhythm: Velocity[][]): Velocity[][] {
+/** The rhythm's lean version (a track's first drop, a tease): the first stab of each bar alone (`anchor`: its first on an 8th). */
+export function sparse(rhythm: Velocity[][], anchor = false): Velocity[][] {
   return rhythm.map((b) => {
-    const at = b.findIndex(Boolean)
+    const eighth = anchor ? b.findIndex((v, i) => v && i % 2 === 0) : -1
+    const at = eighth >= 0 ? eighth : b.findIndex(Boolean)
     return b.map((v, i) => (i === at ? v : 0)) as Velocity[]
   })
 }
@@ -304,4 +338,71 @@ export function stabParts(rhythm: Velocity[][], n: number, turns: StabTurns): Ve
     if (v) parts[byBar ? b : i++ % k][b][s] = v
   }))
   return parts
+}
+
+// ---------------------------------------------------------------------------
+// One stab loop (rule `stabLoop`): the track's stabs as one riff
+// ---------------------------------------------------------------------------
+
+/** The window a hit's punch is measured over (the engine's `punch_window_ms`). */
+const PUNCH_WINDOW_S = 0.2
+/** A stab with this share of its energy in its loudest 200 ms or more counts fully; the least any counts. */
+const FOCUS_FULL = 0.5
+const FOCUS_MIN = 0.15
+
+/**
+ * How much of a stab's energy lands in its loudest 200 ms (0…1): near 1 a tight hit, low a
+ * sustained or swelling sound (a pad-like stab sounds soft at any level). Null when not measured.
+ */
+export function hitFocus(h: Pick<HitItem, 'punch_db' | 'energy_db'>): number | null {
+  if (h.punch_db == null || h.energy_db == null || h.punch_db <= -200 || h.energy_db <= -200) return null
+  return Math.min(1, 10 ** ((h.punch_db + 10 * Math.log10(PUNCH_WINDOW_S) - h.energy_db) / 10))
+}
+
+/** A stab's weight for a loop by how tight a hit it is (1 when not measured). */
+export function focusWeight(h: Pick<HitItem, 'punch_db' | 'energy_db'>): number {
+  const f = hitFocus(h)
+  return f == null ? 1 : Math.max(FOCUS_MIN, Math.min(1, f / FOCUS_FULL))
+}
+
+/** How a second stab joins the loop: layered on its hits, or playing its 16th pickups (the main one the 8ths). */
+export type StabLayout = 'stack' | 'split'
+
+/** What a stab does in the loop: the main sound, a layer on it, or the pickups. */
+export type StabJob = 'main' | 'layer' | 'pickups'
+
+/** A pickup: a hit on a 16th between the 8ths, in a bar that has a hit on an 8th (else the bar is the main stab's). */
+const isPickup = (b: Velocity[], i: number) => i % 2 === 1 && b.some((v, k) => v && k % 2 === 0)
+
+/**
+ * The jobs of a loop's `n` stabs: one is the main sound; a second is a layer on it (`stack`) or
+ * plays the pickups (`split`); a third plays the pickups under a stacked pair. Without pickups in
+ * the rhythm a second stab stacks and there is no third.
+ */
+export function loopJobs(rhythm: Velocity[][], n: number, layout: StabLayout): StabJob[] {
+  const pickups = rhythm.some((b) => b.some((v, i) => v && isPickup(b, i)))
+  if (n <= 1) return ['main']
+  if (n === 2) return layout === 'split' && pickups ? ['main', 'pickups'] : ['main', 'layer']
+  return pickups ? ['main', 'layer', 'pickups'] : ['main', 'layer']
+}
+
+/**
+ * Each stab's part of the loop (bars of 16 velocities): the main sound and its layer hit together
+ * (one bigger stab), on every hit but the pickups when a stab plays those.
+ */
+export function loopParts(rhythm: Velocity[][], jobs: StabJob[]): Velocity[][][] {
+  const split = jobs.includes('pickups')
+  return jobs.map((job) => rhythm.map((b) => b.map((v, i) => (!v ? 0 : !split || (job === 'pickups') === isPickup(b, i) ? v : 0)) as Velocity[]))
+}
+
+/** A roll into a drop on the stabs' last bar before it (16ths; the last beat stays dry): 8ths, or 8ths then 16ths. */
+export type StabRoll = 'none' | 'eighths' | 'sixteenths'
+
+/** The roll's bar: where it hits (16ths) and how hard, building up. */
+export function rollBar(how: StabRoll): Velocity[] | null {
+  if (how === 'none') return null
+  const at = how === 'eighths' ? [0, 2, 4, 6, 8, 10] : [0, 2, 4, 6, 8, 9, 10, 11]
+  const out: Velocity[] = new Array(16).fill(0)
+  at.forEach((i, k) => (out[i] = k < at.length / 3 ? 2 : 3))
+  return out
 }

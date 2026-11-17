@@ -1355,6 +1355,8 @@ describe('generator: chord stabs', () => {
   const STABS = [stab(1, 'Cm'), stab(2, 'F'), stab(3, 'Am', -12), stab(4, 'G'), stab(5, null)]
   const opts: GenerateOptions = { ...OPTS, stabs: { hits: STABS } }
   const gs = Array.from({ length: 60 }, (_, i) => generate(LIB, opts, 6100 + i))
+  // Tracks of stabs taking turns, as before one loop of them (rule `stabLoop`; its own tests in stabs.test.ts).
+  const turns = Array.from({ length: 60 }, (_, i) => generate(LIB, { ...opts, locks: { stabLoop: false } }, 6100 + i))
   const stabLanes = (g: Generation) => g.project.lanes.filter((l) => /^Stab/.test(l.name))
   const stabClips = (g: Generation) => {
     const ids = new Set(stabLanes(g).map((l) => l.id))
@@ -1438,7 +1440,7 @@ describe('generator: chord stabs', () => {
 
   it('never plays two stabs on the same step: they take turns in the rhythm', () => {
     let turnsByBar = 0
-    for (const g of gs.filter((x) => stabLanes(x).length > 1)) {
+    for (const g of turns.filter((x) => stabLanes(x).length > 1)) {
       const rhythm = g.rules.stabRhythm as number[][]
       const drops = g.sections.filter((s) => s.kind === 'drop')
       const d = drops[drops.length - 1]
@@ -1476,7 +1478,7 @@ describe('generator: chord stabs', () => {
 
   it('plays in the drops; through breakdowns low-passed, or fading out past the line; teased at the end of a long intro', () => {
     const seen = new Set<string>()
-    for (const g of gs.filter((x) => x.rules.stabs)) {
+    for (const g of turns.filter((x) => x.rules.stabs)) {
       g.sections.forEach((s, i) => {
         if (s.kind === 'drop') return
         const next = g.sections[i + 1]
