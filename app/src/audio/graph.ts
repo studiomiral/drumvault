@@ -1,11 +1,14 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → [lane EQ] → lane duck (sidechain) → lane pan → [mono low end] → master
+// source → [clip filter] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → master
 //                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
 
+/// <reference types="vite/client" />
 import { dbToGain } from '../lib/project'
 import type { EqBand, Lane } from '../types/project'
+import { COMP_NODE, type CompParams } from './compressor'
+import compWorkletUrl from './compressor.worklet.ts?worker&url'
 import { createEcho, createReverb, type Echo, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
@@ -23,6 +26,8 @@ export interface LaneNodes {
   room?: boolean
   /** The lane's delay, made when a clip first throws to it. */
   echo?: Echo
+  /** The lane's compressor, after its EQ (made when the lane gets one; left in place, set to do nothing, when it goes). */
+  comp?: AudioWorkletNode
   /** Where the lane plays into (the master). */
   out: AudioNode
   /** The lane's mono low end: the crossover's filters (lows, then highs) and the Hz they were made for. */
@@ -118,21 +123,28 @@ export function setLaneMono(ctx: BaseAudioContext, nodes: LaneNodes, hz: number 
   }
 }
 
+/** The lane's gain → its EQ bands → its compressor (if it has one) → its duck, wired again. */
+function wireChain(nodes: LaneNodes): void {
+  nodes.gain.disconnect()
+  for (const f of nodes.eq) f.disconnect()
+  nodes.comp?.disconnect()
+  let at: AudioNode = nodes.gain
+  for (const f of nodes.eq) at = at.connect(f)
+  if (nodes.comp) at = at.connect(nodes.comp)
+  at.connect(nodes.duck)
+}
+
 /** The lane's EQ as `bands` (none: bypassed): new nodes only when the bands' shape changes. */
 export function setLaneEq(ctx: BaseAudioContext, nodes: LaneNodes, bands: EqBand[]): void {
   const shape = bands.map((b) => b.type).join(',')
   if (shape !== nodes.eqShape) {
-    nodes.gain.disconnect()
-    for (const f of nodes.eq) f.disconnect()
     nodes.eq = bands.map((b) => {
       const f = ctx.createBiquadFilter()
       f.type = b.type
       return f
     })
-    let at: AudioNode = nodes.gain
-    for (const f of nodes.eq) at = at.connect(f)
-    at.connect(nodes.duck)
     nodes.eqShape = shape
+    wireChain(nodes)
   }
   bands.forEach((b, i) => {
     const f = nodes.eq[i]
@@ -140,6 +152,67 @@ export function setLaneEq(ctx: BaseAudioContext, nodes: LaneNodes, bands: EqBand
     f.gain.value = b.gainDb
     f.Q.value = b.q
   })
+}
+
+const compLoads = new WeakMap<BaseAudioContext, Promise<boolean>>()
+const compLoaded = new WeakSet<BaseAudioContext>()
+
+/**
+ * Load the lane compressor's worklet into `ctx` (once per context): before the lanes are made, so
+ * a compressed lane has its compressor from its first sound. False when it couldn't be loaded
+ * (the lanes then play without one).
+ */
+export function loadComp(ctx: BaseAudioContext): Promise<boolean> {
+  let p = compLoads.get(ctx)
+  if (!p) {
+    p = Promise.resolve()
+      .then(() => ctx.audioWorklet.addModule(compWorkletUrl))
+      .then(() => { compLoaded.add(ctx); return true })
+      .catch((e) => { console.error('the lane compressor could not be loaded', e); return false })
+    compLoads.set(ctx, p)
+  }
+  return p
+}
+
+/**
+ * The lane's compressor as `p` (null: none). Its node is made the first time the lane gets one
+ * (once `loadComp` has loaded it into the context) and stays; without one it is set to do nothing.
+ */
+export function setLaneComp(ctx: BaseAudioContext, nodes: LaneNodes, p: CompParams | null): void {
+  if (!nodes.comp) {
+    if (!p || !compLoaded.has(ctx)) return
+    nodes.comp = new AudioWorkletNode(ctx, COMP_NODE, {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+      channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
+    })
+    wireChain(nodes)
+  }
+  const set = (name: string, v: number) => {
+    // (AudioParamMap is a read-only Map; TypeScript's DOM library leaves its methods out.)
+    const a = (nodes.comp!.parameters as unknown as ReadonlyMap<string, AudioParam>).get(name)
+    if (a && a.value !== v) a.value = v
+  }
+  const q = p ?? { thresholdDb: 0, ratio: 1, kneeDb: 0, attackMs: 10, releaseMs: 100, makeupDb: 0 }
+  set('threshold', q.thresholdDb)
+  set('ratio', q.ratio)
+  set('knee', q.kneeDb)
+  set('attack', q.attackMs)
+  set('release', q.releaseMs)
+  set('makeup', q.makeupDb)
+}
+
+/**
+ * What a lane's compressor works with (null: none, or off) at `bpm`: its threshold where the
+ * lane's sound is at that point (after its volume and its level in the mix), its release in ms.
+ */
+export function laneCompParams(lane: Lane, bpm: number): CompParams | null {
+  const c = lane.comp
+  if (!c || c.off || !(c.ratio > 1)) return null
+  return {
+    thresholdDb: c.thresholdDb + lane.volumeDb + (lane.levelDb ?? 0),
+    ratio: c.ratio, kneeDb: c.kneeDb, attackMs: c.attackMs,
+    releaseMs: (c.releaseBeats * 60_000) / bpm, makeupDb: c.makeupDb,
+  }
 }
 
 /** The bands a lane plays through (its EQ unless it's off). */
@@ -165,10 +238,11 @@ export function resetDuck(nodes: LaneNodes, at: number): void {
   nodes.duck.gain.setValueAtTime(1, at)
 }
 
-/** Lane volume/pan/mute and EQ (solo is applied by the caller via `audible`). */
-export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, at = 0): void {
+/** Lane volume/pan/mute, EQ and compressor (solo is applied by the caller via `audible`). */
+export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, bpm: number, at = 0): void {
   nodes.gain.gain.setTargetAtTime(audible ? dbToGain(laneGainDb(lane)) : 0, at, 0.01)
   setLaneEq(nodes.gain.context, nodes, laneEqBands(lane))
+  setLaneComp(nodes.gain.context, nodes, laneCompParams(lane, bpm))
   setLaneMono(nodes.gain.context, nodes, lane.monoBelow)
   setLaneRoom(nodes, !!lane.room)
   nodes.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, lane.pan)), at, 0.01)

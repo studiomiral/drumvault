@@ -1,11 +1,11 @@
 // Offline rendering for stem export (SCOPE.md §6.5): one OfflineAudioContext per stem, using
 // the same scheduler (schedule.ts) and node graph (graph.ts) as live playback. Reverb builds
-// are baked into their lane's stem, tails and all.
+// are baked into their lane's stem, tails and all; so are the lane's EQ and compressor.
 
 import { beatToSec, dbToGain } from '../lib/project'
 import type { Project } from '../types/project'
 import { buffers } from './context'
-import { createLaneNodes, duckAt, laneEqBands, laneGainDb, playEvent, setLaneEq, setLaneMono, setLaneRoom } from './graph'
+import { createLaneNodes, duckAt, laneCompParams, laneEqBands, laneGainDb, loadComp, playEvent, setLaneComp, setLaneEq, setLaneMono, setLaneRoom } from './graph'
 import { duckRelease, eventsInRange, kickHits } from './schedule'
 import { ensureTempo } from './tempo'
 
@@ -28,6 +28,10 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
   const frames = rangeFrames(project, range, sampleRate)
   const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: Math.max(1, frames), sampleRate })
   const wanted = new Set(laneIds)
+  // A stem without its lane's compressor would not be the lane as it plays: fail the export instead.
+  if (project.lanes.some((l) => wanted.has(l.id) && laneCompParams(l, project.bpm)) && !(await loadComp(ctx))) {
+    throw new Error('the lane compressor could not be loaded')
+  }
   const nodes = new Map<string, ReturnType<typeof createLaneNodes>>()
   for (const lane of project.lanes) {
     if (!wanted.has(lane.id)) continue
@@ -35,6 +39,7 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
     // Fixed values, not the live ramps, so the level is exact from the first sample.
     n.gain.gain.value = lane.mute ? 0 : dbToGain(laneGainDb(lane))
     setLaneEq(ctx, n, laneEqBands(lane))
+    setLaneComp(ctx, n, laneCompParams(lane, project.bpm))
     setLaneMono(ctx, n, lane.monoBelow)
     setLaneRoom(n, !!lane.room)
     n.pan.pan.value = Math.max(-1, Math.min(1, lane.pan))

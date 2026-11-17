@@ -1969,6 +1969,16 @@ describe('generator: the mix balance', () => {
     expect(generate(LIB, opts, 8100).project.lanes.every((l) => l.levelDb === LANES.find((x) => x.name === l.name)!.startDb)).toBe(true)
   })
 
+  it('compresses almost every lane, never the kick or the FX', () => {
+    const g = generate(loud, opts, 8100)
+    const comp = (name: string) => g.project.lanes.find((l) => l.name === name)?.comp
+    expect(comp('Kick')).toBeUndefined()
+    for (const l of g.project.lanes) if (/^(FX|Fills|Crash|Hits)/.test(l.name)) expect(l.comp).toBeUndefined()
+    expect(comp('Clap')?.ratio).toBe(4)
+    expect(comp('Hats')).toBeDefined()
+    expect(g.project.lanes.filter((l) => l.comp).length).toBeGreaterThanOrEqual(4)
+  })
+
   it('levels a lane again when it gets another sound or is made again', () => {
     const g = generate(loud, opts, 8200)
     const hats = laneOf(g, 'Hats')!

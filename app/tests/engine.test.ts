@@ -23,6 +23,7 @@ const fakeCtx = {
   state: 'running',
   destination: node(),
   resume: async () => {},
+  audioWorklet: { addModule: async () => {} },
   createGain: () => node({ gain: param() }),
   createStereoPanner: () => node({ pan: param() }),
   createOscillator: () => node({ frequency: param(), start(when: number) { starts.push({ when, offset: 0, duration: undefined, tag: 'click' }) }, stop() {} }),

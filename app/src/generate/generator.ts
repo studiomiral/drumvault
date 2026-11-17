@@ -32,6 +32,7 @@ import {
 } from './character'
 import { balanceFrom, dropRanges, evenClips, levelLanes, punchRefs, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
+import { compLanes } from './comp'
 import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
 import type { Score } from './score'
 
@@ -173,10 +174,11 @@ function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOpt
   const drops = dropRanges(sections)
   // How hard each kind of one-shot usually hits in the library: a snappier one counts louder.
   const punch = punchRefs(all)
-  // A lane's samples evened out first, then the lane brought to its place, then its EQ.
+  // A lane's samples evened out first, then the lane brought to its place, then its EQ and compressor.
   const evened = evenClips(project, byPath, drops, laneRole, only, punch)
   const measured = levelLanes(project, byPath, balance, drops, laneRole, startingDb, only, punch)
   eqLanes(project, byPath, opts.templates ?? [], drops, laneRole, only)
+  compLanes(project, byPath, drops, laneRole, only)
   // The whole mix against the user's tracks (a whole track only: one lane made again keeps the rest's levels).
   const mix = only ? null : checkMix(project, byPath, opts.templates ?? [], drops, laneRole, punch)
   // The mix check may have moved the clap: the stabs and the moments (fills, …) go by its hits, so they follow.
@@ -3329,6 +3331,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     const kept = project.lanes.find((l) => l.id === laneId)!
     kept.levelDb = rl!.levelDb
     kept.eq = rl!.eq && structuredClone(rl!.eq)
+    kept.comp = rl!.comp && { ...rl!.comp }
     // (A new bassline sits differently under the kick: its sidechain with it.)
     if (role === 'bass' && rl!.duckBeats != null) { kept.duck = rl!.duck; kept.duckBeats = rl!.duckBeats }
     const nextPicks = { ...g.picks }
@@ -3561,7 +3564,7 @@ function swapGroup(g: Generation, r: Generation, roles: Set<Role>, own: Set<stri
     const own = project.lanes.find((x) => x.name === l.name)
     // (A stab lane's room and sidechain follow how its stabs are placed.)
     const stab = STAB_ROLES.includes(laneRole(l.name)!) ? { room: l.room, duck: l.duck, duckBeats: l.duckBeats } : {}
-    return own ? { ...own, levelDb: l.levelDb, eq: l.eq && structuredClone(l.eq), ...stab } : structuredClone(l)
+    return own ? { ...own, levelDb: l.levelDb, eq: l.eq && structuredClone(l.eq), comp: l.comp && { ...l.comp }, ...stab } : structuredClone(l)
   })
   const clips = groupClips(r.project, roles).map((c) => ({ ...c, laneId: lanes.find((l) => l.name === r.project.lanes.find((x) => x.id === c.laneId)!.name)!.id }))
   project.lanes = project.lanes.filter((l) => !inGroup(l.name))

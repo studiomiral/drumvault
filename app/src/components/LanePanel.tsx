@@ -6,8 +6,9 @@ import { useApp } from '../store/app'
 import type { Panel } from '../store/arrange'
 import { useProject } from '../store/project'
 import { TrackPanel } from '../create/TrackPanel'
+import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
@@ -154,6 +155,12 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
         <button className={cx(btn, !lane.eq.off && 'text-accent')} onClick={() => toggleLaneEq(lane.id)}
                 title={`EQ ${lane.eq.off ? 'off' : 'on'}: ${eqSummary(lane.eq.bands)}${lane.eq.gainDb ? `, makeup ${lane.eq.gainDb > 0 ? '+' : ''}${lane.eq.gainDb} dB` : ''} (in the stems; click: ${lane.eq.off ? 'on' : 'off'})`}>
           EQ
+        </button>
+      )}
+      {lane.comp && (
+        <button className={cx(btn, !lane.comp.off && 'text-accent')} onClick={() => toggleLaneComp(lane.id)}
+                title={`Compressor ${lane.comp.off ? 'off' : 'on'}: ${compSummary(lane.comp, role)}, makeup +${lane.comp.makeupDb} dB (in the stems; click: ${lane.comp.off ? 'on' : 'off'})`}>
+          Comp
         </button>
       )}
       {role && LOCKABLE.includes(role) && (

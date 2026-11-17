@@ -7,7 +7,7 @@ import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
-import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, playEvent, resetDuck, setLaneMono, type LaneNodes } from './graph'
+import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, loadComp, playEvent, resetDuck, setLaneMono, type LaneNodes } from './graph'
 import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
 import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
@@ -66,13 +66,14 @@ class PlaybackEngine {
   /** Create/update lane nodes (volume, pan, mute, solo); call after lane edits. */
   syncLanes(lanes: Lane[]): void {
     const ctx = audioContext()
+    const bpm = this.getProject().bpm
     for (const lane of lanes) {
       let n = this.lanes.get(lane.id)
       if (!n) {
         n = createLaneNodes(ctx, this.out())
         this.lanes.set(lane.id, n)
       }
-      applyLane(n, lane, laneAudible(lane, lanes), ctx.currentTime)
+      applyLane(n, lane, laneAudible(lane, lanes), bpm, ctx.currentTime)
     }
     for (const [id, n] of this.lanes) {
       if (!lanes.some((l) => l.id === id)) {
@@ -116,6 +117,8 @@ class PlaybackEngine {
     const token = ++this.playToken
     const ctx = audioContext()
     if (ctx.state === 'suspended') await ctx.resume()
+    // The lane compressors' worklet, before the lanes get theirs (once; at once after that).
+    await loadComp(ctx)
     const project = this.getProject()
     this.syncLanes(project.lanes)
     // Lanes with reverb builds get their reverb now, not mid-playback when the first build starts.

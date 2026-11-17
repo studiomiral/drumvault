@@ -425,6 +425,17 @@ export function toggleLaneEq(laneId: string): void {
   apply(next, [], eq.off ? 'EQ off' : 'EQ on', 'same')
 }
 
+/** A lane's compressor on or off (bypassed, its makeup with it): an edit of the track (in Arrange, ⌘Z). */
+export function toggleLaneComp(laneId: string): void {
+  const g = current()
+  const lane = g?.project.lanes.find((l) => l.id === laneId)
+  if (!g || !lane?.comp) return
+  const next = structuredClone(g)
+  const comp = next.project.lanes.find((l) => l.id === laneId)!.comp!
+  comp.off = !comp.off
+  apply(next, [], comp.off ? 'Compressor off' : 'Compressor on', 'same')
+}
+
 /**
  * Mute or solo a generated lane (M / S in its header): the track on screen (⌘Z), and the lane of
  * that name stays so in the next tracks while cycling.

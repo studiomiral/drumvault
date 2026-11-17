@@ -44,6 +44,25 @@ export interface Lane {
   levelDb?: number
   /** The lane's EQ in the generated mix (SCOPE.md §6.6), in playback and baked into its stem. */
   eq?: LaneEq
+  /** The lane's compressor in the generated mix (SCOPE.md §6.6), after its EQ, in playback and baked into its stem. */
+  comp?: LaneComp
+}
+
+/**
+ * A lane compressor (feed-forward, both sides linked, a soft knee, no look-ahead). Its threshold is
+ * against the lane's sound before its volume and its level in the mix (the samples at their own
+ * level, with their clip gain), so moving the lane's slider doesn't change how hard it works; its
+ * release is in beats, so it breathes with the tempo.
+ */
+export interface LaneComp {
+  thresholdDb: number
+  ratio: number
+  kneeDb: number
+  attackMs: number
+  releaseBeats: number
+  /** Gain after it (dB): what it takes off, given back, so the balance stands. */
+  makeupDb: number
+  off?: boolean
 }
 
 /** One band of a lane EQ (Web Audio biquads: a high-pass's Q in dB, a bell's as is; shelves have none). */
