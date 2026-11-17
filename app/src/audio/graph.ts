@@ -1,13 +1,14 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → master
+// source → [clip filter] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → tail → [bus gain] → master
 //                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
+// A drum bus lane's tail also feeds the bus's detector (live), whose gain drives every bus lane's bus gain.
 
 /// <reference types="vite/client" />
 import { dbToGain } from '../lib/project'
-import type { EqBand, Lane } from '../types/project'
-import { COMP_NODE, type CompParams } from './compressor'
+import type { EqBand, Lane, Project } from '../types/project'
+import { BUS_NODE, COMP_NODE, DETECT_MS, type CompParams } from './compressor'
 import compWorkletUrl from './compressor.worklet.ts?worker&url'
 import { createEcho, createReverb, type Echo, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
@@ -28,8 +29,12 @@ export interface LaneNodes {
   echo?: Echo
   /** The lane's compressor, after its EQ (made when the lane gets one; left in place, set to do nothing, when it goes). */
   comp?: AudioWorkletNode
+  /** The end of the lane's own chain (its pan and mono low end play into it). */
+  out: GainNode
   /** Where the lane plays into (the master). */
-  out: AudioNode
+  dest: AudioNode
+  /** On the drum bus: the gain the bus drives (its value 0, the bus's gain signal added to it), what drives it, and the bus's detector it feeds. */
+  bus?: { gain: GainNode; drive: AudioNode; tap?: AudioNode }
   /** The lane's mono low end: the crossover's filters (lows, then highs) and the Hz they were made for. */
   mono?: { hz: number; low: BiquadFilterNode[]; high: BiquadFilterNode[]; sum: GainNode }
 }
@@ -68,8 +73,9 @@ export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNod
   gain.channelInterpretation = 'speakers'
   const duck = ctx.createGain()
   const pan = ctx.createStereoPanner()
-  gain.connect(duck).connect(pan).connect(dest)
-  return { gain, duck, pan, eq: [], eqShape: '', out: dest }
+  const out = ctx.createGain()
+  gain.connect(duck).connect(pan).connect(out).connect(dest)
+  return { gain, duck, pan, eq: [], eqShape: '', out, dest }
 }
 
 /** Which reverb the lane sends to: a reverb made as the other kind is dropped (the next send makes the right one). */
@@ -187,18 +193,81 @@ export function setLaneComp(ctx: BaseAudioContext, nodes: LaneNodes, p: CompPara
     })
     wireChain(nodes)
   }
+  setCompParams(nodes.comp, p)
+}
+
+/** A compressor worklet's (or the bus detector's) settings; null: doing nothing. */
+function setCompParams(node: AudioWorkletNode, p: CompParams | null): void {
   const set = (name: string, v: number) => {
     // (AudioParamMap is a read-only Map; TypeScript's DOM library leaves its methods out.)
-    const a = (nodes.comp!.parameters as unknown as ReadonlyMap<string, AudioParam>).get(name)
+    const a = (node.parameters as unknown as ReadonlyMap<string, AudioParam>).get(name)
     if (a && a.value !== v) a.value = v
   }
-  const q = p ?? { thresholdDb: 0, ratio: 1, kneeDb: 0, attackMs: 10, releaseMs: 100, makeupDb: 0 }
+  const q = p ?? { thresholdDb: 0, ratio: 1, kneeDb: 0, attackMs: 10, releaseMs: 100, makeupDb: 0, detectMs: DETECT_MS }
   set('threshold', q.thresholdDb)
   set('ratio', q.ratio)
   set('knee', q.kneeDb)
   set('attack', q.attackMs)
   set('release', q.releaseMs)
   set('makeup', q.makeupDb)
+  set('detect', q.detectMs ?? DETECT_MS)
+}
+
+/**
+ * The drum bus's detector (null until `loadComp` has loaded the worklet): the bus lanes' sum in,
+ * the gain out (one channel), which drives every bus lane's bus gain.
+ */
+export function createBusDetector(ctx: BaseAudioContext): AudioWorkletNode | null {
+  if (!compLoaded.has(ctx)) return null
+  return new AudioWorkletNode(ctx, BUS_NODE, {
+    numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+    channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
+  })
+}
+
+/** The bus detector set as the project's drum bus (off or none: a gain of 1). */
+export function setBusDetector(node: AudioWorkletNode, project: Project): void {
+  setCompParams(node, busParams(project))
+}
+
+/** What the drum bus works with at the project's tempo (null: none, or off). */
+export function busParams(project: Project): CompParams | null {
+  const b = project.drumBus
+  if (!b || b.off || !(b.ratio > 1)) return null
+  return {
+    thresholdDb: b.thresholdDb, ratio: b.ratio, kneeDb: b.kneeDb, attackMs: b.attackMs,
+    releaseMs: (b.releaseBeats * 60_000) / project.bpm, makeupDb: b.makeupDb, detectMs: b.detectMs,
+  }
+}
+
+/** Whether the project's drum bus works on this lane (a bus lane, the bus on). */
+export const onBus = (lane: Lane, project: Project): boolean => !!lane.bus && !!busParams(project)
+
+/**
+ * The lane on the drum bus or off it: on it, its tail plays through a gain that `drive` (the bus's
+ * gain signal) sets, and feeds `tap` (the detector, live; none in an export, whose gain comes
+ * rendered). New connections only when that changes.
+ */
+export function setLaneBus(nodes: LaneNodes, bus: { drive: AudioNode; tap?: AudioNode } | null): void {
+  const was = nodes.bus
+  if (was && bus && was.drive === bus.drive && was.tap === bus.tap) return
+  if (!was && !bus) return
+  nodes.out.disconnect()
+  if (was) {
+    was.drive.disconnect(was.gain.gain)
+    was.gain.disconnect()
+  }
+  nodes.bus = undefined
+  if (!bus) {
+    nodes.out.connect(nodes.dest)
+    return
+  }
+  const gain = nodes.out.context.createGain()
+  gain.gain.value = 0
+  bus.drive.connect(gain.gain)
+  nodes.out.connect(gain).connect(nodes.dest)
+  if (bus.tap) nodes.out.connect(bus.tap)
+  nodes.bus = { gain, drive: bus.drive, tap: bus.tap }
 }
 
 /**
@@ -211,7 +280,7 @@ export function laneCompParams(lane: Lane, bpm: number): CompParams | null {
   return {
     thresholdDb: c.thresholdDb + lane.volumeDb + (lane.levelDb ?? 0),
     ratio: c.ratio, kneeDb: c.kneeDb, attackMs: c.attackMs,
-    releaseMs: (c.releaseBeats * 60_000) / bpm, makeupDb: c.makeupDb,
+    releaseMs: (c.releaseBeats * 60_000) / bpm, makeupDb: c.makeupDb, detectMs: c.detectMs,
   }
 }
 

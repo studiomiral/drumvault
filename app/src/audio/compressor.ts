@@ -20,16 +20,20 @@ export interface CompParams {
   releaseMs: number
   /** Gain after it (dB). */
   makeupDb: number
+  /** The level detector's time (ms): an RMS over about this long; `DETECT_MS` when unset. */
+  detectMs?: number
 }
 
 /** The worklet's name, and its parameters (AudioParams, k-rate) with their defaults: a ratio of 1 does nothing. */
 export const COMP_NODE = 'lane-comp'
-export const COMP_DEFAULTS = { threshold: 0, ratio: 1, knee: 6, attack: 10, release: 100, makeup: 0 }
+/** The drum bus's detector (same parameters): the drums' sum in, the gain (linear) out, for each drum lane to apply. */
+export const BUS_NODE = 'bus-detect'
+export const COMP_DEFAULTS = { threshold: 0, ratio: 1, knee: 6, attack: 10, release: 100, makeup: 0, detect: 5 }
 
 /** Under this a sample counts as silence (dBFS). */
 const FLOOR_DB = -120
-/** The level detector's time constant (ms): an RMS over about this long. */
-const DETECT_MS = 5
+/** The level detector's time constant unless set (ms): an RMS over about this long. */
+export const DETECT_MS = 5
 
 /** The gain (dB, ≤ 0) the compressor wants for a sample at `xDb`. */
 export function gainComputer(xDb: number, thresholdDb: number, ratio: number, kneeDb: number): number {
@@ -53,27 +57,21 @@ export class Compressor {
   private rel = 0
   private det = 0
 
+  private buf = new Float32Array(128)
+
   /**
-   * Compress `inputs` (one array per channel: one or two) into `outputs` (as many arrays, of the
-   * same length; they may be the inputs). A mono input fills every output with the same sound.
+   * The gain (linear, its makeup in) for each of `n` samples of `inputs` (one array per channel:
+   * one or two; none: silence) into `gain`: what the bus's detector puts out, and what `process`
+   * applies.
    */
-  process(inputs: Float32Array[], outputs: Float32Array[], p: CompParams, sampleRate: number): void {
-    const key = `${p.attackMs},${p.releaseMs},${sampleRate}`
+  gains(inputs: Float32Array[], gain: Float32Array, n: number, p: CompParams, sampleRate: number): void {
+    const detect = p.detectMs ?? DETECT_MS
+    const key = `${p.attackMs},${p.releaseMs},${detect},${sampleRate}`
     if (key !== this.key) {
       this.att = coeff(p.attackMs, sampleRate)
       this.rel = coeff(p.releaseMs, sampleRate)
-      this.det = coeff(DETECT_MS, sampleRate)
+      this.det = coeff(detect, sampleRate)
       this.key = key
-    }
-    const n = outputs[0]?.length ?? 0
-    if (!inputs.length) {
-      // No sound in: it recovers as in silence.
-      for (let i = 0; i < n; i++) {
-        this.gr = this.rel * this.gr
-        this.power = this.det * this.power
-      }
-      for (const o of outputs) o.fill(0)
-      return
     }
     const l = inputs[0]
     const r = inputs[1] ?? inputs[0]
@@ -82,15 +80,32 @@ export class Compressor {
     let power = this.power
     const det = this.det
     for (let i = 0; i < n; i++) {
-      power = det * power + (1 - det) * 0.5 * (l[i] * l[i] + r[i] * r[i])
+      // (No sound in: it recovers as in silence.)
+      power = det * power + (l ? (1 - det) * 0.5 * (l[i] * l[i] + r[i] * r[i]) : 0)
       const xDb = power > 1e-12 ? 10 * Math.log10(power) : FLOOR_DB
       const want = gainComputer(xDb, p.thresholdDb, p.ratio, p.kneeDb)
       const a = want < gr ? this.att : this.rel
       gr = a * gr + (1 - a) * want
-      const g = 10 ** ((gr + makeup) / 20)
-      for (let c = 0; c < outputs.length; c++) outputs[c][i] = (inputs[c] ?? inputs[0])[i] * g
+      gain[i] = 10 ** ((gr + makeup) / 20)
     }
     this.gr = gr
     this.power = power
+  }
+
+  /**
+   * Compress `inputs` (one array per channel: one or two) into `outputs` (as many arrays, of the
+   * same length; they may be the inputs). A mono input fills every output with the same sound.
+   */
+  process(inputs: Float32Array[], outputs: Float32Array[], p: CompParams, sampleRate: number): void {
+    const n = outputs[0]?.length ?? 0
+    if (this.buf.length < n) this.buf = new Float32Array(n)
+    const g = this.buf
+    this.gains(inputs, g, n, p, sampleRate)
+    for (let c = 0; c < outputs.length; c++) {
+      const x = inputs[c] ?? inputs[0]
+      const o = outputs[c]
+      if (!x) o.fill(0)
+      else for (let i = 0; i < n; i++) o[i] = x[i] * g[i]
+    }
   }
 }

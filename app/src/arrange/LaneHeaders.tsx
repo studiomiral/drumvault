@@ -64,6 +64,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
 }) {
   const edit = useProject((s) => s.edit)
   const clipCount = useProject((s) => s.project.clips.filter((c) => c.laneId === lane.id).length)
+  const drumBus = useProject((s) => s.project.drumBus)
   // A generated track's lanes keep their module: kept for the next G, made again, its panel. Their
   // volume, mute and solo carry over to the next tracks, like Generate's mix.
   const role = laneRole(lane.name)
@@ -189,7 +190,8 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb} reset={0}
                        color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the generated mix's balance` : ''}${
                          lane.eq ? `; EQ ${lane.eq.off ? 'off' : eqSummary(lane.eq.bands)}` : ''}${
-                         lane.comp ? `; compressor ${lane.comp.off ? 'off' : compSummary(lane.comp)}` : ''}`} dragging={controlDrag}
+                         lane.comp ? `; compressor ${lane.comp.off ? 'off' : compSummary(lane.comp)}` : ''}${
+                         lane.bus && drumBus ? `; drum bus ${drumBus.off ? 'off' : 'on'}` : ''}`} dragging={controlDrag}
                        onChange={(v) => (generated && role ? setLaneVolume(role, v) : set('Lane volume', { volumeDb: v }, `vol-${lane.id}`, true))} />
             <span className="w-11 text-right text-[10.5px] tabular-nums text-muted">{fmtDb(lane.volumeDb)}</span>
             <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}

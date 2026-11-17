@@ -8,7 +8,7 @@ import { useProject } from '../store/project'
 import { TrackPanel } from '../create/TrackPanel'
 import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
@@ -138,6 +138,7 @@ export function LanePanel({ g, panel, onPanel }: {
 /** A lane's name and its buttons: keep for the next track, a new sound where it plays, made again. */
 function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
   const lane = g.project.lanes.find((l) => l.name === laneName)!
+  const drumBus = g.project.drumBus
   const role = laneRole(laneName)
   const keep = useGenerate((s) => s.keep)
   const toast = useApp((s) => s.toast)
@@ -161,6 +162,12 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
         <button className={cx(btn, !lane.comp.off && 'text-accent')} onClick={() => toggleLaneComp(lane.id)}
                 title={`Compressor ${lane.comp.off ? 'off' : 'on'}: ${compSummary(lane.comp, role)}, makeup +${lane.comp.makeupDb} dB (in the stems; click: ${lane.comp.off ? 'on' : 'off'})`}>
           Comp
+        </button>
+      )}
+      {lane.bus && drumBus && (
+        <button className={cx(btn, !drumBus.off && 'text-accent')} onClick={() => toggleDrumBus()}
+                title={`Drum bus ${drumBus.off ? 'off' : 'on'}: the drum lanes glued together, ${compSummary(drumBus)}, makeup +${drumBus.makeupDb} dB; each drum stem carries its share (click: ${drumBus.off ? 'on' : 'off'}, for every drum lane)`}>
+          Bus
         </button>
       )}
       {role && LOCKABLE.includes(role) && (

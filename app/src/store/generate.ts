@@ -436,6 +436,16 @@ export function toggleLaneComp(laneId: string): void {
   apply(next, [], comp.off ? 'Compressor off' : 'Compressor on', 'same')
 }
 
+/** The track's drum bus on or off (for all its drum lanes, its makeup with it): an edit of the track (in Arrange, ⌘Z). */
+export function toggleDrumBus(): void {
+  const g = current()
+  if (!g?.project.drumBus) return
+  const next = structuredClone(g)
+  const bus = next.project.drumBus!
+  bus.off = !bus.off
+  apply(next, [], bus.off ? 'Drum bus off' : 'Drum bus on', 'same')
+}
+
 /**
  * Mute or solo a generated lane (M / S in its header): the track on screen (⌘Z), and the lane of
  * that name stays so in the next tracks while cycling.

@@ -1979,6 +1979,17 @@ describe('generator: the mix balance', () => {
     expect(g.project.lanes.filter((l) => l.comp).length).toBeGreaterThanOrEqual(4)
   })
 
+  it('glues the drums on one bus, the kick with them, nothing else', () => {
+    const g = generate(loud, opts, 8100)
+    const on = g.project.lanes.filter((l) => l.bus).map((l) => l.name)
+    expect(on).toContain('Kick')
+    expect(on).toContain('Clap')
+    expect(on).toContain('Hats')
+    expect(on.some((n) => /^(FX|Bass|Stab|Strings|Fills|Crash)/.test(n))).toBe(false)
+    expect(g.project.drumBus?.ratio).toBe(2)
+    expect(g.project.drumBus?.thresholdDb).toBeLessThan(0)
+  })
+
   it('levels a lane again when it gets another sound or is made again', () => {
     const g = generate(loud, opts, 8200)
     const hats = laneOf(g, 'Hats')!

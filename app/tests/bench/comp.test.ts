@@ -2,92 +2,26 @@
 // each role's material run through its compressor, for how much it takes off at the loudest hits,
 // on average while it plays, and in loudness (what the makeup gives back). Not part of `npm test`:
 //   DRUMVAULT_REAL_LIBRARY=/path npx vitest run --config tests/bench/vitest.config.ts comp
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'vitest'
 import { LibraryReader } from '../../electron/db'
-import { Compressor } from '../../src/audio/compressor'
 import { COMP_ROLES, RENDER_PUNCH_DB } from '../../src/generate/comp'
 import type { Role } from '../../src/generate/generator'
 import type { SampleListItem } from '../../src/types/api'
+import { col, compress, lay, loudest, out, readWav } from './audio'
 
 const LIB = process.env.DRUMVAULT_REAL_LIBRARY
-const out = (s: string) => process.stderr.write(`${s}\n`)
 const BPM = 124
-const SR = 44100
-
-/** A PCM 16/24-bit or float WAV, as channels. */
-function readWav(path: string): Float32Array[] {
-  const b = readFileSync(path)
-  let at = 12
-  let fmt = { ch: 2, bits: 24, float: false }
-  while (at + 8 <= b.length) {
-    const id = b.toString('ascii', at, at + 4)
-    const size = b.readUInt32LE(at + 4)
-    if (id === 'fmt ') fmt = { float: b.readUInt16LE(at + 8) === 3, ch: b.readUInt16LE(at + 10), bits: b.readUInt16LE(at + 22) }
-    if (id === 'data') {
-      const bps = fmt.bits / 8
-      const n = Math.floor(size / (bps * fmt.ch))
-      const chans = Array.from({ length: fmt.ch }, () => new Float32Array(n))
-      for (let i = 0; i < n; i++) for (let c = 0; c < fmt.ch; c++) {
-        const o = at + 8 + (i * fmt.ch + c) * bps
-        chans[c][i] = fmt.float ? b.readFloatLE(o) : fmt.bits === 16 ? b.readInt16LE(o) / 32768 : b.readIntLE(o, 3) / 8388608
-      }
-      return chans.length === 1 ? [chans[0], chans[0]] : chans.slice(0, 2)
-    }
-    at += 8 + size + (size & 1)
-  }
-  return []
-}
-
-/** `bars` bars of a one-shot on `steps` (16ths of a bar), or of a loop played over and over. */
-function lay(x: Float32Array[], steps: number[] | null, bars = 4): Float32Array[] {
-  const sixteenth = Math.round((60 / BPM / 4) * SR)
-  const n = bars * 16 * sixteenth
-  const o = [new Float32Array(n), new Float32Array(n)]
-  const starts = steps ? Array.from({ length: bars }, (_, b) => steps.map((s) => (b * 16 + s) * sixteenth)).flat()
-    : Array.from({ length: Math.ceil(n / Math.max(1, x[0].length)) }, (_, k) => k * x[0].length)
-  for (const s of starts) for (let c = 0; c < 2; c++) for (let i = 0; i < x[c].length && s + i < n; i++) o[c][s + i] += x[c][i]
-  return o
-}
-
-const powerDb = (x: Float32Array[]) => {
-  let p = 0
-  for (const c of x) for (const v of c) p += v * v
-  return 10 * Math.log10(Math.max(1e-12, p / (x.length * x[0].length)))
-}
-/** The loudest 200 ms (power of both sides, dB; unweighted, so a little off `punch_db` on bass). */
-const loudest = (x: Float32Array[]) => {
-  const w = Math.round(0.2 * SR)
-  const sq = new Float64Array(x[0].length + 1)
-  for (let i = 0; i < x[0].length; i++) sq[i + 1] = sq[i] + 0.5 * (x[0][i] ** 2 + x[1][i] ** 2)
-  let best = 0
-  for (let i = w; i < sq.length; i += 64) best = Math.max(best, (sq[i] - sq[i - w]) / w)
-  return 10 * Math.log10(Math.max(1e-12, best))
-}
-const pct = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))]
-const f1 = (v: number) => v.toFixed(1).padStart(5)
 
 /** Run one role's compressor over `x` (anchored at `anchor` dB): the peak and mean gain reduction while it sounds, and the loudness taken off. */
 function measure(role: Role, x: Float32Array[], anchor: number) {
   const s = COMP_ROLES[role]!
-  const c = new Compressor()
-  const y = [new Float32Array(x[0].length), new Float32Array(x[0].length)]
-  const block = 128
-  let max = 0
-  let sum = 0
-  let sounding = 0
-  for (let at = 0; at < x[0].length; at += block) {
-    const end = Math.min(x[0].length, at + block)
-    const xi = x.map((ch) => ch.subarray(at, end))
-    c.process(xi, y.map((ch) => ch.subarray(at, end)), {
-      thresholdDb: anchor + s.overDb, ratio: s.ratio, kneeDb: s.kneeDb, attackMs: s.attackMs,
-      releaseMs: (s.releaseBeats * 60_000) / BPM, makeupDb: 0,
-    }, SR)
-    max = Math.min(max, c.gr)
-    if (powerDb(xi) > anchor - 20) { sum += c.gr; sounding++ }
-  }
-  return { peak: -max, mean: sounding ? -sum / sounding : 0, loss: powerDb(x) - powerDb(y) }
+  const { peak, mean, loss } = compress(x, {
+    thresholdDb: anchor + s.overDb, ratio: s.ratio, kneeDb: s.kneeDb, attackMs: s.attackMs,
+    releaseMs: (s.releaseBeats * 60_000) / BPM, makeupDb: 0, detectMs: s.detectMs,
+  }, anchor)
+  return { peak, mean, loss }
 }
 
 describe.runIf(!!LIB)('lane compressors on the real library', () => {
@@ -126,12 +60,12 @@ describe.runIf(!!LIB)('lane compressors on the real library', () => {
         const x = readWav(it.path)
         const anchor = m.render ? RENDER_PUNCH_DB[role] : it.punch
         if (!x.length || !x[0].length || anchor == null) continue
-        const laid = m.render ? x : lay(x, m.steps)
+        const laid = m.render ? x : lay(x, m.steps, BPM)
         rows.push({ level: loudest(laid), ...measure(role, laid, anchor) })
       }
       if (!rows.length) { out(`${role.padEnd(8)} none`); continue }
-      const col = (k: keyof (typeof rows)[number]) => [0.1, 0.5, 0.9].map((q) => f1(pct(rows.map((x) => x[k]), q))).join('')
-      out(`${role.padEnd(8)}${String(rows.length).padStart(3)}  ${col('level')}   ${col('peak')}   ${col('mean')}   ${col('loss')}`)
+      const c = (k: keyof (typeof rows)[number]) => col(rows.map((x) => x[k]))
+      out(`${role.padEnd(8)}${String(rows.length).padStart(3)}  ${c('level')}   ${c('peak')}   ${c('mean')}   ${c('loss')}`)
     }
   })
 })

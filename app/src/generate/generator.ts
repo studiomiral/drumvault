@@ -32,7 +32,7 @@ import {
 } from './character'
 import { balanceFrom, dropRanges, evenClips, levelLanes, punchRefs, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
-import { compLanes } from './comp'
+import { busLanes, compLanes } from './comp'
 import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
 import type { Score } from './score'
 
@@ -193,6 +193,8 @@ function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOpt
       l.levelDb = lead === 'stab' && kick != null ? Math.min(l.levelDb + LEAD_DB[lead], Math.max(l.levelDb, kick - 1)) : l.levelDb + LEAD_DB[lead]
     }
   }
+  // The drum bus last: its threshold goes from the drums' levels as they now stand.
+  busLanes(project, byPath, drops, laneRole)
   return { ...balance, measured, evened, mix }
 }
 

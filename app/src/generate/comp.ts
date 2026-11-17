@@ -1,9 +1,10 @@
 // The generated mix's compressors (SCOPE.md §6.6): almost every lane gets one, set as a producer
-// would for its part. The kick is what everything else ducks to, and FX, fills, crashes, hits and
-// build-ups are moments whose shape is the point, so they get none. Thresholds go from how loud the
+// would for its part and held against the user's own tracks. The kick is what everything else
+// ducks to, and FX, fills, crashes, hits and build-ups are moments whose shape is the point, so
+// they get none; nor does the ride. Thresholds go from how loud the
 // lane's sound is where it is loudest: a sample's `punch_db` (its loudest 200 ms) at its clip gain;
-// the renders (bass, strings, ambience, vocals, pads) aren't measured, so they go from what their
-// kind measures on the user's library. Settings measured there too (tests/bench/comp.test.ts): how
+// the renders (bass, strings, vocals) aren't measured, so they go from what their kind measures on
+// the user's library (the ambience bed and the pads get none: their levels spread too wide). Settings measured there too (tests/bench/comp.test.ts): how
 // much each takes off at the loudest hits, on average and in loudness, which the makeup gives
 // back, so the balance stays where balance.ts puts it.
 
@@ -20,6 +21,8 @@ export interface RoleComp {
   kneeDb: number
   attackMs: number
   releaseBeats: number
+  /** The detector's time (ms; 5 when unset): short to catch the hit itself. */
+  detectMs?: number
   /** The loudness it takes off, given back (dB; measured on the user's library). */
   makeupDb: number
   /** What it is for, in a few words (the lane panel). */
@@ -27,16 +30,22 @@ export interface RoleComp {
 }
 
 /**
- * Per part (a layer goes as its part: Clap 2 as the clap). A slow attack lets a hit's crack
- * through and brings its body up; a release of a 16th breathes with the groove.
+ * Per part (a layer goes as its part: Clap 2 as the clap). Held against the user's own tracks
+ * (tests/bench/dynamics.test.ts, their stems where each part plays full): the library's drums
+ * already sit where those tracks do (their loops are cut from finished stems), and a slow attack
+ * moves them away (the crack comes out ahead of the body: a clap's transient 8.8 → 11.1 dB over its
+ * 200 ms level, the user's tracks 8.7). So the drums are caught fast, at the hit, and lightly: the
+ * clap's tail comes up to where the tracks have it, the loops are levelled against each other by
+ * about 1 dB. The ride gets none (any moves it off). The bass, fast too, is evened out most.
+ * The stabs keep a slow attack (they're accents: their attack is the point); the strings and the
+ * vocal are levelled slowly.
  */
 export const COMP_ROLES: Partial<Record<Role, RoleComp>> = {
-  clap: { overDb: -5, ratio: 4, kneeDb: 6, attackMs: 20, releaseBeats: 0.15, makeupDb: 3, what: 'punch: the crack through, the body up' },
-  hats: { overDb: -3, ratio: 2, kneeDb: 6, attackMs: 5, releaseBeats: 0.25, makeupDb: 2.5, what: 'levelled, breathing on the 16ths' },
-  ride: { overDb: -5, ratio: 2, kneeDb: 6, attackMs: 8, releaseBeats: 0.25, makeupDb: 2, what: 'levelled, breathing on the 16ths' },
-  perc: { overDb: -3, ratio: 2.5, kneeDb: 6, attackMs: 8, releaseBeats: 0.25, makeupDb: 3, what: 'levelled, breathing on the 16ths' },
-  top: { overDb: -3.5, ratio: 2, kneeDb: 6, attackMs: 8, releaseBeats: 0.25, makeupDb: 2.5, what: 'levelled, breathing on the 16ths' },
-  bass: { overDb: -4.5, ratio: 3, kneeDb: 6, attackMs: 10, releaseBeats: 0.25, makeupDb: 3, what: 'the notes evened out, so the line rolls' },
+  clap: { overDb: 3, ratio: 4, kneeDb: 6, attackMs: 1, releaseBeats: 0.1, detectMs: 1, makeupDb: 3, what: 'caught at the hit, its tail up to where your tracks have it' },
+  hats: { overDb: 1, ratio: 2, kneeDb: 6, attackMs: 0.2, releaseBeats: 0.1, detectMs: 0.5, makeupDb: 2.5, what: 'levelled lightly, caught at the hits' },
+  perc: { overDb: 5, ratio: 2.5, kneeDb: 6, attackMs: 0.2, releaseBeats: 0.1, detectMs: 0.5, makeupDb: 2, what: 'levelled lightly, caught at the hits' },
+  top: { overDb: 0.5, ratio: 2, kneeDb: 6, attackMs: 0.2, releaseBeats: 0.1, detectMs: 0.5, makeupDb: 2.5, what: 'levelled lightly, caught at the hits' },
+  bass: { overDb: -0.5, ratio: 3, kneeDb: 6, attackMs: 0.2, releaseBeats: 0.25, detectMs: 0.5, makeupDb: 3.5, what: 'the notes evened out, so the line rolls' },
   stab: { overDb: -2, ratio: 2.5, kneeDb: 6, attackMs: 25, releaseBeats: 0.5, makeupDb: 2.5, what: 'steadier, the attack kept' },
   disco: { overDb: -2, ratio: 2.5, kneeDb: 6, attackMs: 25, releaseBeats: 0.5, makeupDb: 2.5, what: 'steadier, the attack kept' },
   strings: { overDb: -4, ratio: 3, kneeDb: 8, attackMs: 30, releaseBeats: 0.6, makeupDb: 2, what: 'levelled slowly: a bed' },
@@ -87,7 +96,7 @@ export function roleComp(role: Role, levelDb: number): LaneComp | null {
   if (!s) return null
   return {
     thresholdDb: Math.round((levelDb + s.overDb) * 10) / 10, ratio: s.ratio, kneeDb: s.kneeDb,
-    attackMs: s.attackMs, releaseBeats: s.releaseBeats, makeupDb: s.makeupDb,
+    attackMs: s.attackMs, releaseBeats: s.releaseBeats, makeupDb: s.makeupDb, ...(s.detectMs ? { detectMs: s.detectMs } : {}),
   }
 }
 
@@ -110,6 +119,67 @@ export function compLanes(project: Project, samples: Map<string, SampleListItem>
 /** A lane compressor in a few words (tooltips, the lane panel). */
 export function compSummary(c: LaneComp, role?: Role): string {
   const what = role ? COMP_ROLES[GROUP[role] ?? role]?.what : undefined
-  const ms = Math.round(c.attackMs)
+  const ms = c.attackMs < 1 ? +c.attackMs.toFixed(1) : Math.round(c.attackMs)
   return `${c.ratio}:1, ${ms} ms attack, ${c.releaseBeats} beat release${what ? ` (${what})` : ''}`
+}
+
+// ---------------------------------------------------------------------------
+// The drum bus
+// ---------------------------------------------------------------------------
+
+/** The parts on the drum bus (their layers with them): the drums that play the groove. */
+export const BUS_PARTS: Role[] = ['kick', 'clap', 'hats', 'ride', 'perc', 'top']
+
+/**
+ * The drum bus's compressor: its threshold against the drums' level together (`busLevelDb`).
+ * Measured on tracks made from the user's library against the drums of the user's own tracks
+ * (tests/bench/bus.test.ts): no setting moves the drums much either way (the tracks' drums are a
+ * touch sharper and longer in the tail than the made ones, whatever the bus does), so it is a
+ * gentle glue: 1.4 dB on average in the drops, 2.7 at the kicks, the kick's attack through.
+ */
+export const DRUM_BUS: RoleComp = {
+  overDb: -3, ratio: 2, kneeDb: 6, attackMs: 10, releaseBeats: 0.25, makeupDb: 2, what: 'the drums glued together',
+}
+
+const onBusRole = (role: Role | undefined) => !!role && BUS_PARTS.includes(GROUP[role] ?? role)
+
+/**
+ * How loud the bus lanes are together where they are loudest, at the bus (dB as `punch_db`): each
+ * one's level (`laneLevelDb`) at its volume and its level in the mix, their power added. (Their EQ
+ * and compressor each give back what they take off.) Null when no bus lane plays.
+ */
+export function busLevelDb(project: Project, samples: Map<string, SampleListItem>, drops: [number, number][],
+                           roleOf: (laneName: string) => Role | undefined): number | null {
+  let p = 0
+  for (const lane of project.lanes) {
+    const role = roleOf(lane.name)
+    if (!onBusRole(role) || lane.mute) continue
+    const level = laneLevelDb(project.clips.filter((c) => c.laneId === lane.id), samples, drops, role!)
+    if (level != null) p += 10 ** ((level + lane.volumeDb + (lane.levelDb ?? 0)) / 10)
+  }
+  return p > 0 ? 10 * Math.log10(p) : null
+}
+
+/**
+ * The drum bus of a generated track: its lanes (`Lane.bus`: the drum parts and their layers) and
+ * its compressor (`Project.drumBus`), the threshold from the drums' level together. Switched off,
+ * it stays off.
+ */
+export function busLanes(project: Project, samples: Map<string, SampleListItem>, drops: [number, number][],
+                         roleOf: (laneName: string) => Role | undefined): void {
+  for (const lane of project.lanes) {
+    if (onBusRole(roleOf(lane.name))) lane.bus = true
+    else delete lane.bus
+  }
+  const level = busLevelDb(project, samples, drops, roleOf)
+  if (level == null) {
+    delete project.drumBus
+    return
+  }
+  const s = DRUM_BUS
+  project.drumBus = {
+    thresholdDb: Math.round((level + s.overDb) * 10) / 10, ratio: s.ratio, kneeDb: s.kneeDb, attackMs: s.attackMs,
+    releaseBeats: s.releaseBeats, makeupDb: s.makeupDb, ...(s.detectMs ? { detectMs: s.detectMs } : {}),
+    ...(project.drumBus?.off ? { off: true } : {}),
+  }
 }

@@ -7,7 +7,7 @@ import { beatToSec, BEATS_PER_BAR, secToBeat } from '../lib/project'
 import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
-import { applyLane, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, loadComp, playEvent, resetDuck, setLaneMono, type LaneNodes } from './graph'
+import { applyLane, createBusDetector, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, loadComp, onBus, playEvent, resetDuck, setBusDetector, setLaneBus, setLaneMono, type LaneNodes } from './graph'
 import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
 import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
@@ -19,6 +19,8 @@ type Listener = () => void
 
 class PlaybackEngine {
   private master: GainNode | null = null
+  /** The drum bus's detector (made once the compressor worklet is loaded). */
+  private bus: AudioWorkletNode | null = null
   private lanes = new Map<string, LaneNodes>()
   private sources = new Set<AudioScheduledSourceNode>()
   /** The clip each playing sound belongs to (to swap a clip's sound while playing). */
@@ -66,19 +68,25 @@ class PlaybackEngine {
   /** Create/update lane nodes (volume, pan, mute, solo); call after lane edits. */
   syncLanes(lanes: Lane[]): void {
     const ctx = audioContext()
-    const bpm = this.getProject().bpm
+    const project = this.getProject()
+    // (The detector made once a track has a drum bus.)
+    if (!this.bus && project.lanes.some((l) => onBus(l, project))) this.bus = createBusDetector(ctx)
+    if (this.bus) setBusDetector(this.bus, project)
     for (const lane of lanes) {
       let n = this.lanes.get(lane.id)
       if (!n) {
         n = createLaneNodes(ctx, this.out())
         this.lanes.set(lane.id, n)
       }
-      applyLane(n, lane, laneAudible(lane, lanes), bpm, ctx.currentTime)
+      applyLane(n, lane, laneAudible(lane, lanes), project.bpm, ctx.currentTime)
+      setLaneBus(n, this.bus && onBus(lane, project) ? { drive: this.bus, tap: this.bus } : null)
     }
     for (const [id, n] of this.lanes) {
       if (!lanes.some((l) => l.id === id)) {
         setLaneMono(ctx, n, undefined)
+        setLaneBus(n, null)
         n.pan.disconnect()
+        n.out.disconnect()
         this.lanes.delete(id)
       }
     }

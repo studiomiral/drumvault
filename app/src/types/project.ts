@@ -46,6 +46,8 @@ export interface Lane {
   eq?: LaneEq
   /** The lane's compressor in the generated mix (SCOPE.md §6.6), after its EQ, in playback and baked into its stem. */
   comp?: LaneComp
+  /** The lane plays through the drum bus (`Project.drumBus`): the bus's gain, from all its lanes together, on this one's stem too. */
+  bus?: boolean
 }
 
 /**
@@ -60,6 +62,8 @@ export interface LaneComp {
   kneeDb: number
   attackMs: number
   releaseBeats: number
+  /** The level detector's time (ms): short to catch a hit itself, longer to go by its body. 5 ms when unset. */
+  detectMs?: number
   /** Gain after it (dB): what it takes off, given back, so the balance stands. */
   makeupDb: number
   off?: boolean
@@ -235,7 +239,16 @@ export interface Project {
    * so its lanes keep their modules in Arrange: a new sound, the lane made again.
    */
   generation?: GenerationMeta
+  /**
+   * The drum bus (SCOPE.md §6.6): one compressor heard from the lanes with `bus` together, its
+   * gain applied to each of them, so each stem carries its share and the stems still add up to the
+   * bus. Its threshold is at the bus (dBFS), after the lanes' volumes.
+   */
+  drumBus?: DrumBus
 }
+
+/** The drum bus's compressor: as a lane's, but its threshold at the bus (dBFS). */
+export type DrumBus = LaneComp
 
 /** What a generated project remembers of its generation (everything but the project itself). */
 export type GenerationMeta = Omit<Generation, 'project'>
