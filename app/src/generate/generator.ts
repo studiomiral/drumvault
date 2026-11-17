@@ -13,7 +13,7 @@ import type { Category, ReferenceTrack, SampleKind } from '../types/engine'
 import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
-import { bassModel, generateBassline, generatedMidi, isGenerated } from './bassline'
+import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
 import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
@@ -131,7 +131,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false }
+const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false, bassTurn: 'none' }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -398,8 +398,8 @@ export function arcOf(refs: ReferenceTrack[] | null | undefined, tpl: Template |
 export interface BassOptions {
   /** The MIDI library's basslines: what new basslines are learned from (bassline.ts). */
   midis: MidiItem[]
-  /** Loop length of new basslines in bars; null: as long as the library's tend to be. */
-  bars?: 1 | 2 | 4 | null
+  /** Loop length of new basslines in beats (2, 4, 8); null: as long as the library's really are. */
+  beats?: LoopBeats | null
   presets: SerumPreset[]
   /** Starred presets (paths): picked more often. */
   favorites: string[]
@@ -488,6 +488,15 @@ export function bassRenderOf(b: GenerationBass): BassRender {
     ...(b.notes || isGenerated(b.midi) ? { notes: b.notes ?? b.midi.notes, bars: b.bars ?? b.midi.bars } : {}),
     ...(b.groove ? { groove: b.groove } : {}),
   }
+}
+
+/**
+ * What a bass clip renders for a generation's bass, keeping the clip's own turn (a phrase-end
+ * clip stays one when the line, the patch or the key changes).
+ */
+export function bassClipRender(b: GenerationBass, old?: BassRender): BassRender {
+  const r = bassRenderOf(b)
+  return old?.turn ? { ...r, turn: old.turn } : r
 }
 
 /** Loop length of a generation's bass in bars (edited or the file's). */
@@ -1144,10 +1153,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // track key ----
   const bo = opts.bass
   const model = bo?.midis.length && bo.presets.length ? bassModel(bo.midis) : null
-  const bassMidi = model
-    ? keep.bassMidi ?? generatedMidi(generateBassline(model, rng, { key, bars: bo!.bars }), key) : null
-  const bassPreset = bassMidi && bo
+  const bassPreset = model && bo
     ? keep.bassPreset ?? rng.pickBy(bassPool(bo.presets, seed), (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
+  // (The line has an RNG of its own: the rest of the track is the same whatever line it writes. It
+  // may slide one note into the next on a patch that glides.)
+  const bassMidi = model && bassPreset
+    ? keep.bassMidi ?? generatedMidi(generateBassline(model, new Rng(seed ^ 0x4c494e45), { key, beats: bo!.beats, glide: !!bassPreset.glide }), key) : null
   const bass: GenerationBass | null = bassMidi && bassPreset
     ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key) + (bo?.octaves?.[bassPreset.path] ?? 0), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
@@ -1196,6 +1207,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const brng = new Rng(seed ^ 0x4255494c)
   // How the track fills up out of its intro (and thins out into its outro): an RNG of its own too.
   const lrng = new Rng(seed ^ 0x4c494654)
+  // The bassline's turns at phrase ends: an RNG of their own too.
+  const turnRng = new Rng(seed ^ 0x5455524e)
   // How the groove carries through breakdowns: an RNG of its own too.
   const grng = new Rng(seed ^ 0x474c5545)
   const buildDrawn = {
@@ -1349,6 +1362,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     bassBuild: rng.weighted([['filtered', 3], ['sweep', 1], ['none', 2]] as const),
     bassIO: rng.weighted([['none', 3], ['filtered', 1]] as const),
     bassHp: rng.int(BASS_HP_MIN_HZ + 10, 380),
+    // The bassline's turn (SCOPE.md §6.7): the loop stays strict through the drop, and the last
+    // loop of a phrase plays it changed (a gap, an octave jump or a 16th run into the 1): at the
+    // end of each drop, every 16 bars, every 8, or never.
+    bassTurn: turnRng.weighted([['drop', 3], ['16', 3], ['8', 2], ['none', 2]] as const) as 'drop' | '16' | '8' | 'none',
+    bassTurnKind: turnRng.weighted([['pickup', 3], ['gap', 2], ['octave', 2]] as const) as BassTurn,
     // The whole mix high-passed in the bars before drops (also when the track it's built on does it).
     mixHp: hpRng.chance(0.3) ? hpRng.weighted([[1, 1], [2, 2], [4, 1]] as const) as number : 0,
     // The intro fills up over its last bars with what the drops have and it doesn't yet (hats,
@@ -1557,6 +1575,29 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (bassSample && bassRender && to > from) {
       lanes.add('bass', { sample: bassSample, start: from * 4, length: (to - from) * 4 - gapBeats, filter, bass: bassRender })
     }
+  }
+  // The turn (rule `bassTurn`): the loop with its last beat changed, as its own clip in the last
+  // loop of a phrase (a line with its notes at hand: written, or edited).
+  const bassLoopBars = bass ? bassBars(bass) : 1
+  const bassTurnRender: BassRender | null = bassRender?.notes?.length && rules.bassTurn && rules.bassTurn !== 'none'
+    ? { ...bassRender, turn: rules.bassTurnKind as BassTurn } : null
+  const bassTurnSample: SampleListItem | null = bassTurnRender && bassSample ? { ...bassSample, rel_path: bassPath(bassTurnRender, bpm) } : null
+  /** A drop's bassline: the loop all through, turned in the last loop before each phrase line the rule turns on (and the drop's end). */
+  const bassDrop = (from: number, to: number, gapBeats: number) => {
+    if (!bassTurnRender || !bassTurnSample) return bassPart(from, to, undefined, gapBeats)
+    const every = rules.bassTurn === '8' ? 8 : rules.bassTurn === '16' ? 16 : Infinity
+    const ends: number[] = []
+    for (let p = from + every; p < to; p += every) ends.push(p)
+    ends.push(to)
+    let at = from
+    for (const end of ends) {
+      const t = end - bassLoopBars
+      if (t < at + bassLoopBars) continue  // (a phrase no longer than the loop: no room for a turn)
+      bassPart(at, t)
+      lanes.add('bass', { sample: bassTurnSample, start: t * 4, length: bassLoopBars * 4 - (end === to ? gapBeats : 0), bass: bassTurnRender })
+      at = end
+    }
+    if (at < to) bassPart(at, to, undefined, gapBeats)
   }
 
   /**
@@ -2032,7 +2073,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // track's rules ----
     if (bassSample) {
       const hp = (to: number | null = null): ClipFilter => ({ type: 'highpass', from: rules.bassHp, to, q: 0.7 })
-      if (sec.kind === 'drop') bassPart(a, z, undefined, gap)
+      if (sec.kind === 'drop') bassDrop(a, z, gap)
       else if (sec.kind === 'break' && lead === 'bass') {
         // The track's lead, exposed: the bassline in full from the breakdown's second part on (no kick over it).
         const from = breakShape(a, sec.bars).lead
@@ -2972,7 +3013,7 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   fills: ['phraseFill', 'dropFill', 'breakFill', 'outroFill'],
   fx: ['fx', 'dropRiser', 'breakSweep', 'fxLayers', 'dropSet'],
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
-  bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassHp'],
+  bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassHp', 'bassTurn', 'bassTurnKind'],
   disco: ['discoIn', 'discoCount', 'discoAt'],
   // The Strings lane made again: another sample and placement (it stays strings).
   strings: [...STRINGS_RULES],
@@ -3104,7 +3145,7 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
     // (Keys parts, stab patches and drones of older tracks stay as they are.)
     if (c.type === 'audio' && c.bass) {
       if (!bass || (c.bass.role ?? 'bass') !== 'bass') return c
-      const render = bassRenderOf(bass)
+      const render = bassClipRender(bass, c.bass)
       return { ...c, bass: render, sample: { ...c.sample, relPath: bassPath(render, project.bpm) } }
     }
     const hit = c.sample.category === 'disco_hit' || c.sample.category === 'chord_stab' ? hitOf.get(c.sample.relPath) : undefined
@@ -3288,7 +3329,7 @@ function sameRenders(g: Generation, project: Project): void {
   if (!b) return
   for (const c of project.clips) {
     if (c.type !== 'audio' || !c.bass || (c.bass.role ?? 'bass') !== 'bass') continue
-    c.bass = bassRenderOf(b)
+    c.bass = bassClipRender(b, c.bass)
     const bars = bassBars(b)
     c.sample = { ...c.sample, relPath: bassPath(c.bass, bpm), name: `${b.preset.name} · ${b.midi.name}`, bars, durationS: (bars * BEATS_PER_BAR * 60) / bpm }
     c.trimBeats %= bars * BEATS_PER_BAR

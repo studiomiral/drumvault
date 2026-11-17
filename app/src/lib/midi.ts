@@ -3,6 +3,7 @@
 // parts as notes, to play with the real Serum patch in Logic, §6.7).
 
 import type { MidiItem } from '../types/api'
+import { playedNotes } from '../generate/bassline'
 import type { Clip, Marker, Project } from '../types/project'
 
 export const PPQ = 480
@@ -58,7 +59,7 @@ export function bassNotes(project: Project, midis: MidiItem[]): PlacedNote[] {
   for (const c of project.clips as Clip[]) {
     if (c.type !== 'audio' || !c.bass || (c.bass.role ?? 'bass') !== 'bass') continue
     const midi = midis.find((m) => m.id === c.bass!.midiId)
-    const source = c.bass.notes ?? midi?.notes
+    const source = playedNotes(c.bass) ?? midi?.notes
     if (!source) continue
     const L = (c.bass.bars ?? midi?.bars ?? 1) * 4
     const end = c.start + c.length

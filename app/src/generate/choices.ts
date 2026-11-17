@@ -38,6 +38,11 @@ const NEXT_TO_DROPS = 'the half next to the drops'
 export const CHOICES: Choice[] = [
   { rule: 'dropBreath', label: 'Bar before drops', group: 'Drops', roles: [...BUILD_TOPS, 'groove', 'clap', ...HATS, 'perc', 'bass'],
     options: [{ value: null, label: 'everything plays on' }, { value: 'tops', label: 'tops out' }, { value: 'all', label: 'tops, drums and bass out' }] },
+  { rule: 'bassTurn', label: 'Bassline turns', group: 'Drops', roles: ['bass'], when: (g) => !!g.bass, unset: 'none',
+    options: [{ value: 'none', label: 'never: the loop all through' }, { value: 'drop', label: 'at the end of each drop' },
+      { value: '16', label: 'every 16 bars' }, { value: '8', label: 'every 8 bars' }] },
+  { rule: 'bassTurnKind', label: 'Bassline turn', group: 'Drops', roles: ['bass'], when: (g) => !!g.bass && !!g.rules.bassTurn && g.rules.bassTurn !== 'none',
+    options: [{ value: 'pickup', label: 'a 16th run into the 1' }, { value: 'gap', label: 'its last beat out' }, { value: 'octave', label: 'its last beat an octave up' }] },
   { rule: 'dropSilence', label: 'Silence before drops', group: 'Drops', roles: SILENCED,
     options: [{ value: 0, label: 'none' }, { value: 1, label: '1 beat' }, { value: 2, label: '2 beats' }] },
   { rule: 'dropKickOut', label: 'Kick into drops', group: 'Drops', roles: ['kick'], options: yesNo('four kicks out', 'plays on') },

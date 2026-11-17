@@ -102,12 +102,13 @@ function shortHash(s: string): string {
 export function bassPath(b: BassRender, bpm: number): string {
   const edit = b.notes ? `e${shortHash(JSON.stringify([b.bars ?? null, b.notes]))}` : `${b.midiId}`
   const feel = b.groove?.some((o) => o) ? `-g${shortHash(JSON.stringify(b.groove))}` : ''
+  const turn = b.turn && b.notes?.length ? `-t${b.turn}` : ''
   // (An older track's drone: its file is named after how it was made.)
   const d = b.drone
   const drone = d ? `-${d.rhythm}${d.warp && d.warp !== 'none' ? `-${d.warp}` : ''}${d.start ? `-s${Math.round(d.start * 100)}` : ''}` : ''
   // (A strings part shorter than 8 bars is another file than the 8-bar one.)
   const len = (b.role === 'strings' && b.bars && b.bars !== 8) || b.role === 'ambience' ? `-b${b.bars ?? 8}` : ''
-  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${feel}${drone}${len}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${turn}${feel}${drone}${len}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
 }
 
 /** The file a clip plays at the project tempo. */

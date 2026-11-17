@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .config import Thresholds
 from .midi import Note
 
 log = logging.getLogger(__name__)
@@ -249,7 +250,7 @@ def host(plugin_path: str, plugin_name: str) -> SerumHost:
 # of this Mac's disk (/Users, /Volumes, …) where there's no such file. Other paths that start with
 # "/" ("/Analog/Basic Mini.wav") are Serum's own, found in its Tables and Samples folders.
 _SAMPLE_PATH = re.compile(r"^(/|[A-Za-z]:[/\\])[^\n]{1,1000}\.(wav|aiff?|flac|mp3|ogg|sfz)$", re.I)
-_missing_cache: dict[tuple[str, float], list[str]] = {}
+_facts_cache: dict[tuple[str, float], dict] = {}
 
 
 def _sample_refs(x, out: list[str]) -> list[str]:
@@ -269,14 +270,25 @@ def _sample_refs(x, out: list[str]) -> list[str]:
     return out
 
 
-def missing_samples(preset: Path | str) -> list[str]:
-    """The sample files `preset` needs that aren't on this Mac (named by a path on the computer it
-    was made on, not embedded in it): Serum plays without them. Cached per preset file."""
+def _glides(patch: dict, min_porta: float) -> bool:
+    """Mono, legato and a portamento time: an overlapping next note glides (sections a preset
+    leaves at Serum's defaults say "default": mono and legato off, no portamento)."""
+    g = (patch.get("Global0") or {}).get("plainParams")
+    if not isinstance(g, dict):
+        return False
+    return (float(g.get("kParamMonoToggle", 0)) >= 0.5 and float(g.get("kParamLegato", 0)) >= 0.5
+            and float(g.get("kParamPortamentoTime", 0)) >= min_porta)
+
+
+def _facts(preset: Path | str) -> dict:
+    """What the pools need to know of a patch, decoded once per preset file: the sample files it
+    misses and whether it glides."""
     p = Path(preset)
     key = (str(p), p.stat().st_mtime)
-    if key not in _missing_cache:
+    if key not in _facts_cache:
         _, payload = read_xfer(p.read_bytes())
-        refs = set(_sample_refs(SerumHost._decode(payload), []))
+        patch = SerumHost._decode(payload)
+        refs = set(_sample_refs(patch, []))
 
         def foreign(s: str) -> bool:
             if re.match(r"^[A-Za-z]:[/\\]", s):
@@ -284,13 +296,26 @@ def missing_samples(preset: Path | str) -> list[str]:
             top = Path("/", Path(s).parts[1]) if len(Path(s).parts) > 1 else None
             return top is not None and top.exists() and not Path(s).exists()
 
-        _missing_cache[key] = sorted(s for s in refs if foreign(s))
-    return _missing_cache[key]
+        _facts_cache[key] = {"missing": sorted(s for s in refs if foreign(s)),
+                             "glide": _glides(patch, Thresholds().serum_glide_min_porta)}
+    return _facts_cache[key]
+
+
+def missing_samples(preset: Path | str) -> list[str]:
+    """The sample files `preset` needs that aren't on this Mac (named by a path on the computer it
+    was made on, not embedded in it): Serum plays without them. Cached per preset file."""
+    return _facts(preset)["missing"]
+
+
+def glides(preset: Path | str) -> bool:
+    """Whether the patch glides into an overlapping note (mono, legato, portamento)."""
+    return _facts(preset)["glide"]
 
 
 def list_presets(root: Path | str, folders: list[str] | None) -> list[dict]:
     """Presets under `root` (only in `folders`, relative to root, when given): path, name, folder,
-    tags, and how many of the sample files it names aren't on this Mac (`missing`)."""
+    tags, how many of the sample files it names aren't on this Mac (`missing`) and whether it
+    glides into an overlapping note (`glide`)."""
     root = Path(root)
     if not root.is_dir():
         return []
@@ -303,11 +328,13 @@ def list_presets(root: Path | str, folders: list[str] | None) -> list[dict]:
             except Exception:  # noqa: BLE001 - a damaged preset is skipped, not fatal
                 continue
             try:
-                missing = len(missing_samples(p))
+                facts = _facts(p)
+                missing, glide = len(facts["missing"]), facts["glide"]
             except Exception:  # noqa: BLE001 - a patch that doesn't decode is listed; Serum may still load it
-                missing = 0
+                missing, glide = 0, False
             out.append({"path": str(p), "name": h.get("presetName") or p.stem,
-                        "folder": str(p.parent.relative_to(root)), "tags": h.get("tags") or [], "missing": missing})
+                        "folder": str(p.parent.relative_to(root)), "tags": h.get("tags") or [], "missing": missing,
+                        "glide": glide})
     return out
 
 

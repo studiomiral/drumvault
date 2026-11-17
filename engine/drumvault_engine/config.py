@@ -115,6 +115,9 @@ class Thresholds:
     midi_bass_max_median_pitch: int = 55
     # Rendered basslines are loudness-matched so patches compare fairly.
     bass_lufs_target: float = -14.0
+    # A Serum 2 patch glides from one bass note into an overlapping next one (the bassline's slide)
+    # when it is mono with legato on and its portamento time (Serum's 0…1 knob) is at least this.
+    serum_glide_min_porta: float = 0.03
     bass_peak_dbfs: float = -1.0
     # Bass from a one-shot sample (basssample.py): a note fades out over bass_sample_release_ms once
     # let go, and over bass_sample_cut_ms where the next note cuts it; the softest note plays at

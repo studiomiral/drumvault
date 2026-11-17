@@ -84,3 +84,18 @@ def test_parts_render_side_by_side_from_rpc_threads():
     for t in threads:
         t.join()
     assert all(isinstance(v, float) and v > 0.01 for v in out.values()), out
+
+
+def test_knows_which_patches_glide(tmp_path: Path):
+    """Mono with legato and some portamento: an overlapping note glides (the bassline's slide)."""
+    def patch(name: str, global0) -> None:
+        raw = cbor2.dumps({"component": {}, "Global0": global0})
+        p = tmp_path / "Bass" / f"{name}.SerumPreset"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(write_xfer({"presetName": name, "tags": []}, struct.pack("<II", len(raw), 2) + zstandard.ZstdCompressor().compress(raw)))
+    patch("Slide", {"plainParams": {"kParamMonoToggle": 1.0, "kParamLegato": 1.0, "kParamPortamentoTime": 0.2}})
+    patch("Barely", {"plainParams": {"kParamMonoToggle": 1.0, "kParamLegato": 1.0, "kParamPortamentoTime": 0.0078}})
+    patch("Mono", {"plainParams": {"kParamMonoToggle": 1.0}})
+    patch("Init", "default")
+    listed = {x["name"]: x["glide"] for x in list_presets(tmp_path, ["Bass"])}
+    assert listed == {"Slide": True, "Barely": False, "Mono": False, "Init": False}
