@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { balanceFrom, dropRanges, KICK_LEVEL_DB, laneLoudness, levelLanes } from '../src/generate/balance'
+import { balanceFrom, dropRanges, HIT_DB, hitSteps, KICK_LEVEL_DB, laneLoudness, levelLanes } from '../src/generate/balance'
 import { LANES, laneRole } from '../src/generate/generator'
 import type { SampleListItem, TrackArrangement } from '../src/types/api'
 import type { AudioClip, Clip, Lane, PatternClip, Project, Velocity } from '../src/types/project'
@@ -43,6 +43,26 @@ describe('balance: how loud each part sits', () => {
     expect(b.db.top).toBe(-2)                  // −2, −1, −4
     expect(b.db.bass).toBe(-2)                 // no reference: the house default
     expect(balanceFrom([]).db.hats).toBe(-10)
+  })
+
+  it('takes how hard the stabs and the moments hit from the user\'s tracks: against the clap\'s hits', () => {
+    const withHits = (hits: Record<string, number>) => ({ ...arrangement({ kick: -16 }), levels: { parts: { kick: -16 }, normalized: false, hits } })
+    const refs = [
+      withHits({ kick: -5, clap: -15, crash: -13, fills: -9, fx: -14 }),
+      withHits({ kick: -6, clap: -16, crash: -15, fills: -10, fx: -15 }),
+      withHits({ kick: -4, clap: -14, crash: -14, fills: -6 }),
+      withHits({ kick: -5, crash: -2, fills: -1 }),          // no clap: says nothing
+    ]
+    const h = hitSteps(refs)
+    expect(h.crash).toBe(1)                    // +2, +1, 0
+    expect(h.fills).toBe(6)                    // +6, +6, +8
+    // FX in only two tracks: the house step stands (not in the set); the layers go with their main lane.
+    expect(h.fx).toBeUndefined()
+    expect(h.stab2).toBeUndefined()
+    const more = hitSteps([...refs, withHits({ kick: -5, clap: -15, fx: -13 })])
+    expect(more.fx).toBe(1)                    // +1, +1, +2: the median
+    expect(more.fx2! - more.fx!).toBe(HIT_DB.fx2! - HIT_DB.fx!)
+    expect(balanceFrom(refs).hits?.crash).toBe(1)
   })
 
   it('works out a lane\'s loudness from its samples\' energy, its steps and velocities, and its clip gains', () => {

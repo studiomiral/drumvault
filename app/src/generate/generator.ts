@@ -30,7 +30,7 @@ import {
   breakShape, CHARACTER_LABEL, characterRules, CHARACTERS, isReese, LEAD_DB, LEAD_LABEL, leadRules, PAD_BARS, PAD_CHANCE, padNotes, pickLead,
   type Character, type Lead,
 } from './character'
-import { balanceFrom, dropRanges, evenClips, levelLanes, punchRefs, type Balance } from './balance'
+import { balanceFrom, dropRanges, evenClips, laneHitDb, levelLanes, punchRefs, STAB_UNDER_KICK_DB, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
 import { busLanes, compLanes } from './comp'
 import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
@@ -183,14 +183,18 @@ function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOpt
   const mix = only ? null : checkMix(project, byPath, opts.templates ?? [], drops, laneRole, punch)
   // The mix check may have moved the clap: the stabs and the moments (fills, …) go by its hits, so they follow.
   if (mix?.moves.length) levelLanes(project, byPath, balance, drops, laneRole, startingDb, undefined, punch, true)
-  // The track's lead sits a little over where the balance puts it (a stab still never over the kick).
+  // The track's lead sits a little over where the balance puts it (a stab's hits still never near the kick's).
   if (lead && measured) {
-    const kick = project.lanes.find((l) => l.name === 'Kick')?.levelDb
+    const kickLane = project.lanes.find((l) => l.name === 'Kick')
+    const kick = kickLane ? laneHitDb(project, byPath, kickLane.id) : null
     for (const l of project.lanes) {
       const role = laneRole(l.name)
       const mine = lead === 'stab' ? STAB_ROLES.includes(role!) : role === lead
       if (!mine || l.levelDb == null || (only && !only.has(l.id))) continue
-      l.levelDb = lead === 'stab' && kick != null ? Math.min(l.levelDb + LEAD_DB[lead], Math.max(l.levelDb, kick - 1)) : l.levelDb + LEAD_DB[lead]
+      const hit = lead === 'stab' ? laneHitDb(project, byPath, l.id) : null
+      l.levelDb = hit != null && kick != null
+        ? Math.min(l.levelDb + LEAD_DB[lead], Math.max(l.levelDb, l.levelDb + kick - STAB_UNDER_KICK_DB - hit))
+        : l.levelDb + LEAD_DB[lead]
     }
   }
   // The drum bus last: its threshold goes from the drums' levels as they now stand.

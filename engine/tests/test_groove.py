@@ -187,6 +187,28 @@ def test_arrangement_measures_the_producers_balance():
     assert 10 * np.log10(sum(10 ** (v / 10) for v in sp)) == pytest.approx(0, abs=0.2)
 
 
+def test_arrangement_measures_each_part_s_loudest_hit():
+    """The stabs and the moments are levelled hit for hit: each hit part's loudest 200 ms, as a sample's punch."""
+    from drumvault_engine.audioutil import k_punch_db
+    th = Thresholds()
+    sr = 8000
+    kick = _bars([0.5] * 8)
+    clap = _bars([0.1] * 8)
+    crash = _bars([0.0] * 4 + [0.2] * 4)
+    stab = _bars([0.15] * 8)
+    a = arrangement.measure([("Kick", "kick", kick, sr), ("Clap", "clap", clap, sr), ("Crash", "cymbal", crash, sr),
+                             ("Track/Synth Stab.wav", "melodic", stab, sr), ("Bass Hit", "melodic", stab, sr),
+                             ("Riser", "fx_riser", clap, sr), ("Boom", "fx_impact", crash, sr)], BPM, 0.0, th)
+    hits = a["levels"]["hits"]
+    assert set(hits) == {"kick", "clap", "crash", "stab", "fx", "impact"}   # a bass named "hit" is the bass
+    w = th.punch_window_ms / 1000
+    for part, x in [("kick", kick), ("clap", clap), ("crash", crash), ("stab", stab)]:
+        assert hits[part] == pytest.approx(k_punch_db(x, sr, w), abs=0.1)
+    assert hits["kick"] > hits["stab"] > hits["clap"]
+    assert arrangement.hit_part("Chords", "melodic") == "stab" and arrangement.hit_part("Strings", "melodic") is None
+    assert arrangement.hit_part("Roll", "roll") == "fills" and arrangement.hit_part("Hat", "hat") is None
+
+
 def test_tone_of_a_sound():
     from drumvault_engine.arrangement import tone
     th = Thresholds()

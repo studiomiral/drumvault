@@ -23,11 +23,12 @@ placement and level. `levels.vocals_measured` says the vocals were looked for (n
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 import numpy as np
 
-from .audioutil import amp_to_db, k_weight
+from .audioutil import amp_to_db, k_punch_db, k_weight
 from .classify import is_bass, is_vocal
 from .config import Thresholds
 
@@ -38,6 +39,23 @@ PART_OF = {
     "fill": "fills", "roll": "fills",
     "fx_riser": "fx", "fx_downlifter": "fx", "fx_impact": "fx", "fx_sweep": "fx", "fx_atmos": "fx", "fx": "fx",
 }
+
+
+# The parts whose hits are measured one by one (SCOPE.md §6.6: the stabs and the moments are levelled
+# hit for hit against the clap's): the kick and clap they go by, and theirs.
+HIT_OF = {
+    "kick": "kick", "clap": "clap", "snare": "clap", "cymbal": "crash", "fill": "fills", "roll": "fills",
+    "fx_riser": "fx", "fx_sweep": "fx", "fx": "fx", "fx_impact": "impact", "fx_downlifter": "impact",
+}
+# A music stem named as stabs or chord hits (the user's tracks name them; nothing else tells them apart).
+STAB_NAME = re.compile(r"(?<![a-z])(stabs?|chords?|hits?)(?![a-z])", re.I)
+
+
+def hit_part(name: str, category: str) -> str | None:
+    """The part a stem's hits are measured for (`levels.hits`), or None."""
+    if category == "melodic":
+        return "stab" if not is_bass(name) and STAB_NAME.search(name.rsplit("/", 1)[-1]) else None
+    return HIT_OF.get(category)
 
 
 # Stems that play where their part does but aren't its level: a full drum loop is mostly its kick.
@@ -122,7 +140,8 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
     """`stems`: (name, category, mono or a function loading it, sample rate). One stem at a time
     is in memory when they come as functions (a track can have 40 stems of 6 minutes).
     {"bpm", "bars", "parts": {part: "0012…"}, "detail": {part: {"db": [...], "bright": [...]}},
-    "levels": {"parts": {part: LUFS}, "normalized": bool, "spectra": {part: [24 dB]}}}."""
+    "levels": {"parts": {part: LUFS}, "normalized": bool, "spectra": {part: [24 dB]},
+    "hits": {hit part: the K-weighted level of its loudest hit, its loudest 200 ms, as `punch_db`}}}."""
     vocals = [(n, c, m, sr) for n, c, m, sr in stems if is_vocal_stem(n, c)]
     stems = [(n, c, m, sr) for n, c, m, sr in stems if part_of(n, c)]
     if not stems:
@@ -133,6 +152,7 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
     # whole bars of the longest.
     per: list[tuple[str, str, np.ndarray, np.ndarray | None, np.ndarray]] = []
     peaks: list[float] = []
+    hits: dict[str, float] = {}
     reach = 0.0
     for n, c, m, sr in stems:
         mono = m() if callable(m) else m
@@ -143,6 +163,10 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
                     bar_power(k_weight(mono, sr), sr, bpm, bar_one_s, own) if c not in BALANCE_SKIP else None,
                     bar_bands(mono, sr, bpm, bar_one_s, own, th)))
         peaks.append(amp_to_db(float(np.max(np.abs(mono)))) if mono.size else -240.0)
+        hp = hit_part(n, c)
+        punch = k_punch_db(mono, sr, th.punch_window_ms / 1000) if hp else None
+        if hp and punch is not None:
+            hits[hp] = max(hits.get(hp, -240.0), punch)
         del mono
     bars = int(reach)
     if bars < 1:
@@ -192,7 +216,8 @@ def measure(stems: list[tuple[str, str, np.ndarray | Callable[[], np.ndarray], i
     normalized = len(peaks) >= th.arrangement_normalized_min_stems and hot >= th.arrangement_normalized_share * len(peaks)
     if not parts:
         return None
-    out_levels: dict = {"parts": levels, "normalized": bool(normalized), "spectra": spectra, "vocals_measured": True}
+    out_levels: dict = {"parts": levels, "normalized": bool(normalized), "spectra": spectra, "vocals_measured": True,
+                        "hits": {p: round(v, 1) for p, v in sorted(hits.items())}}
     vocal = _vocal(vocals, bpm, bar_one_s, bars, th) if vocals else None
     if vocal:
         out_levels["vocal"] = vocal

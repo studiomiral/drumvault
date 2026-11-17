@@ -334,6 +334,12 @@ export interface TrackArrangement {
     vocal?: { bars: string; lufs: number | null }
     /** The vocals were looked for (absent: measured before; no `vocal`: it doesn't sing). */
     vocals_measured?: boolean
+    /**
+     * Each hit part's loudest hit (absent: measured before): the K-weighted level of its loudest
+     * 200 ms, as `punch_db`. Parts: kick, clap, crash, fills, fx (risers, sweeps), impact (impacts,
+     * downlifters), stab (music stems named as stabs or chord hits).
+     */
+    hits?: Record<string, number>
   } | null
 }
 

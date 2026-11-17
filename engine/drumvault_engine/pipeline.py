@@ -1435,7 +1435,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
     each zip's arrangement (from its stems, on its stored grid; again for those measured before
-    the rides were, or the balance), and every sample's and hit's loudness. Nothing else changes."""
+    the rides were, the balance or the hits), and every sample's and hit's loudness. Nothing else changes."""
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)
@@ -1518,7 +1518,9 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             if not has_source(lib, z):
                 missing.append(z["file_name"])
                 # (Its arrangement as it was, its vocals never to be found: not looked for at every start.)
-                db.conn.execute("UPDATE arrangements SET levels = json_set(levels, '$.vocals_measured', json('true')) "
+                # (Nor its hits: an empty set, the house steps stand for it.)
+                db.conn.execute("UPDATE arrangements SET levels = json_set(levels, '$.vocals_measured', json('true'), "
+                                "'$.hits', json(COALESCE(json_extract(levels, '$.hits'), '{}'))) "
                                 "WHERE zip_id = ? AND levels IS NOT NULL AND json_extract(levels, '$.spectra') IS NOT NULL", (z["id"],))
                 continue
             stems = db.stems_for_zip(z["id"])

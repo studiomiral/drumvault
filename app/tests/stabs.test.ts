@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createEcho } from '../src/audio/reverb'
 import { ECHO_BEATS, eventsInRange } from '../src/audio/schedule'
-import { hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB, STAB_VS_KICK_DB } from '../src/generate/balance'
+import { hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB, STAB_VS_KICK_DB, type Balance } from '../src/generate/balance'
 import { refine, STAB_SHIFT } from '../src/generate/critic'
 import { hitPitch, hitSample } from '../src/generate/disco'
 import { generate, laneRole, setTrackRule, type GenerateOptions, type Generation } from '../src/generate/generator'
@@ -110,7 +110,8 @@ describe('stab levels: hit for hit', () => {
     id: nextHit++, rel_path: `${category}${nextHit}.wav`, name: category, kind, category, bpm: null, bars: null, body_bars: null, key_label: null, key_camelot: null,
     duration_s: 0.3, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001', energy_db: -15, tone: tone(100), ...extra,
   })
-  const kick = sample('oneshot', 'kick', { energy_db: -22, punch_db: -15 })
+  // (The kick's hits harder than the clap's, as in the user's tracks: about 10 dB.)
+  const kick = sample('oneshot', 'kick', { energy_db: -22, punch_db: -5 })
   const clap = sample('oneshot', 'clap', { energy_db: -18, punch_db: -11 })
   const stab = hitSample(hit({ energy_db: -19, punch_db: -12, duration_s: 0.25 }))
   const lane = (name: string): Lane => ({ id: name, name, color: '#fff', volumeDb: 0, pan: 0, mute: false, solo: false, height: 40 })
@@ -137,20 +138,28 @@ describe('stab levels: hit for hit', () => {
     const busy = level([2, 6, 10], 1)
     const lone = level([2], 2)
     expect(lone.Stab).toBe(busy.Stab)
-    // One stab hit = one clap hit less 3 dB.
+    // One stab hit = one clap hit and its step.
     expect(Math.abs(-12 + busy.Stab - (-11 + busy.Clap + STAB_VS_CLAP_DB))).toBeLessThanOrEqual(0.5)
-    expect(busy.Stab).toBeLessThan(busy.Kick - STAB_UNDER_KICK_DB)   // (not held down by the ceiling here)
+    expect(-12 + busy.Stab).toBeLessThan(-5 + busy.Kick - STAB_UNDER_KICK_DB)   // (not held down by the ceiling here)
   })
 
-  it('never puts a stab above the kick, and goes by the kick without a clap', () => {
-    const quiet = hitSample(hit({ energy_db: -50, punch_db: -45 }))   // a very quiet stab would be turned far up
-    const p = { bpm: BPM, lanes: [lane('Kick'), lane('Clap'), lane('Stab')],
-      clips: [pat('Kick', kick, [0, 4, 8, 12]), pat('Clap', clap, [4, 12]), pat('Stab', quiet, [2])] as Clip[] } as unknown as Project
-    levelLanes(p, new Map([kick, clap, quiet].map((s) => [s.rel_path, s])), { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0)
-    const by = Object.fromEntries(p.lanes.map((l) => [l.name, l.levelDb!]))
-    expect(by.Stab).toBe(by.Kick - STAB_UNDER_KICK_DB)
+  it('keeps a stab\'s hits under the kick\'s, loudness against loudness, and goes by the kick without a clap', () => {
+    const with_ = (s: SampleListItem, clapDb: number) => {
+      const p = { bpm: BPM, lanes: [lane('Kick'), lane('Clap'), lane('Stab')],
+        clips: [pat('Kick', kick, [0, 4, 8, 12]), pat('Clap', clap, [4, 12]), pat('Stab', s, [2])] as Clip[] } as unknown as Project
+      levelLanes(p, new Map([kick, clap, s].map((x) => [x.rel_path, x])), { db: { clap: clapDb }, tracks: 0 }, [[0, 64]], laneRole, () => 0)
+      return Object.fromEntries(p.lanes.map((l) => [l.name, l.levelDb!]))
+    }
+    // A quiet stab sample takes the gain it needs, more than the kick's lane (it used to be held at the kick's gain).
+    const quiet = hitSample(hit({ energy_db: -30, punch_db: -24 }))
+    const q = with_(quiet, -4)
+    expect(q.Stab).toBeGreaterThan(q.Kick)
+    expect(Math.abs(-24 + q.Stab - (-11 + q.Clap + STAB_VS_CLAP_DB))).toBeLessThanOrEqual(0.5)
+    // A clap pushed up to the kick: the stab's hits stay 3 dB under the kick's.
+    const by = with_(stab, 6)
+    expect(-12 + by.Stab).toBeCloseTo(-5 + by.Kick - STAB_UNDER_KICK_DB, 0)
     const noClap = level([2, 10], 1, false)
-    expect(Math.abs(-12 + noClap.Stab - (-15 + noClap.Kick + STAB_VS_KICK_DB))).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(-12 + noClap.Stab - (-5 + noClap.Kick + STAB_VS_KICK_DB))).toBeLessThanOrEqual(0.5)
   })
 })
 
@@ -173,9 +182,9 @@ describe('moments are levelled hit for hit too: disco hits, fills, impacts, cras
   })
   const ev = (laneId: string, x: SampleListItem, start: number): Clip => ({ id: `${laneId}${start}`, laneId, type: 'audio', start, length: 8, trimBeats: 0, gainDb: 0, sample: ref(x) } as Clip)
   const all = new Map([kick, clap, disco, fillA, fillLoud, fillQuiet].map((x) => [x.rel_path, x]))
-  const run = (clips: Clip[], lanes: string[]) => {
+  const run = (clips: Clip[], lanes: string[], hits?: Balance['hits']) => {
     const p = { bpm: BPM, lanes: ['Kick', 'Clap', ...lanes].map(lane), clips: [pat('Kick', kick, [0, 4, 8, 12]), pat('Clap', clap, [4, 12]), ...clips] } as unknown as Project
-    levelLanes(p, all, { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0)
+    levelLanes(p, all, { db: { clap: -4 }, tracks: 0, hits }, [[0, 64]], laneRole, () => 0)
     return p
   }
   const levelOf = (p: Project, name: string) => p.lanes.find((l) => l.name === name)!.levelDb!
@@ -206,10 +215,11 @@ describe('moments are levelled hit for hit too: disco hits, fills, impacts, cras
   })
 
   it('follows the clap when the mix check moves it afterwards (hit lanes only)', () => {
-    const p = run([ev('Fills', fillA, 0), pat('Disco Hit', disco, [0], 0, 4)], ['Fills', 'Disco Hit'])
+    // (Fills 1 dB under the clap's hits, so they're not at the kick's ceiling and follow the clap.)
+    const p = run([ev('Fills', fillA, 0), pat('Disco Hit', disco, [0], 0, 4)], ['Fills', 'Disco Hit'], { fills: -1 })
     const before = { fills: levelOf(p, 'Fills'), kick: levelOf(p, 'Kick'), clap: levelOf(p, 'Clap') }
     p.lanes.find((l) => l.name === 'Clap')!.levelDb! -= 3      // what checkMix may do to the clap
-    levelLanes(p, all, { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0, undefined, undefined, true)
+    levelLanes(p, all, { db: { clap: -4 }, tracks: 0, hits: { fills: -1 } }, [[0, 64]], laneRole, () => 0, undefined, undefined, true)
     expect(levelOf(p, 'Fills')).toBe(before.fills - 3)       // still 1 dB under the clap's hits
     expect([levelOf(p, 'Kick'), levelOf(p, 'Clap')]).toEqual([before.kick, before.clap - 3])  // the other lanes as they are
   })
@@ -300,7 +310,11 @@ const gens = Array.from({ length: 60 }, (_, i) => generate(LIB, opts, 5000 + i))
 const stabLanes = (g: Generation) => g.project.lanes.filter((l) => /^Stab/.test(l.name))
 const stabClips = (g: Generation) => g.project.clips.filter((c) => stabLanes(g).some((l) => l.id === c.laneId)) as PatternClip[]
 const hitOfClip = (c: Clip) => STABS.find((h) => h.rel_path === c.sample.relPath)!
-const kickOf = (g: Generation) => g.project.lanes.find((l) => l.name === 'Kick')!.levelDb!
+/** One of the kick's hits as the track plays it (its sample's punch at its level). */
+const kickHitOf = (g: Generation) => {
+  const k = g.project.lanes.find((l) => l.name === 'Kick')!
+  return LIB.find((s) => s.rel_path === g.project.clips.find((c) => c.laneId === k.id)!.sample.relPath)!.punch_db! + k.levelDb!
+}
 const two = (r: Velocity[][]) => [r[0], r[1 % r.length]]
 /** The bars a loop announces each drop over: drop start → the bars before it. */
 const announced = (g: Generation): Map<number, number> => {
@@ -346,8 +360,7 @@ describe('stabs written for the track', () => {
 
   it('levels every stab under the kick, the same whatever its rhythm', () => {
     for (const g of gens) {
-      const kick = g.project.lanes.find((l) => l.name === 'Kick')!
-      for (const l of stabLanes(g)) expect(l.levelDb!).toBeLessThanOrEqual(kick.levelDb! - 1)
+      for (const l of stabLanes(g)) expect(hitOfClip(stabClips(g).find((c) => c.laneId === l.id)!).punch_db! + l.levelDb!).toBeLessThanOrEqual(kickHitOf(g) - STAB_UNDER_KICK_DB + 0.25)
     }
     // The same stab in two tracks with different rhythms sits at the same level against the clap.
     const by = new Map<string, Set<number>>()
@@ -358,9 +371,9 @@ describe('stabs written for the track', () => {
       for (const l of stabLanes(g)) {
         const h = hitOfClip(stabClips(g).find((c) => c.laneId === l.id)!)
         if (!by.has(h.rel_path)) by.set(h.rel_path, new Set())
-        // (Held at the kick less 1 dB: under the ceiling, not where the clap puts it. A track led by
-        // its stabs has them 1.5 dB over that.)
-        if (l.levelDb! >= kickOf(g) - 1) continue
+        // (Held 3 dB under the kick's hits: under the ceiling, not where the clap puts it. A track led
+        // by its stabs has them 1.5 dB over that.)
+        if (h.punch_db! + l.levelDb! >= kickHitOf(g) - STAB_UNDER_KICK_DB - 0.25) continue
         const lead = g.rules.lead === 'stab' ? 1.5 : 0
         by.get(h.rel_path)!.add(Math.round(((h.punch_db! + l.levelDb! - lead) - (clapSample.punch_db! + clap.levelDb!)) * 2) / 2)
       }

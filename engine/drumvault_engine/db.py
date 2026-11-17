@@ -459,7 +459,8 @@ class LibraryDB:
         return self.conn.execute(
             "SELECT * FROM zips WHERE status IN ('done', 'needs_review') AND kind = 'stems' "
             "AND id NOT IN (SELECT zip_id FROM arrangements WHERE detail IS NOT NULL AND levels IS NOT NULL "
-            "AND json_extract(levels, '$.spectra') IS NOT NULL AND json_extract(levels, '$.vocals_measured') IS NOT NULL)").fetchall()
+            "AND json_extract(levels, '$.spectra') IS NOT NULL AND json_extract(levels, '$.vocals_measured') IS NOT NULL "
+            "AND json_extract(levels, '$.hits') IS NOT NULL)").fetchall()
 
     def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()
