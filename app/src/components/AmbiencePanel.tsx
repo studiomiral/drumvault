@@ -36,7 +36,7 @@ export function AmbiencePanel({ g, fixed }: { g: Generation; fixed?: boolean }) 
       ) : (
         <div className="space-y-2.5 text-[12.5px]">
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="secondary" onClick={reroll} title="Another texture under this track; the rest stays (← goes back)">
+            <Button variant="secondary" onClick={reroll} title="Another texture under this track; the rest stays (⌘Z goes back)">
               {render ? 'New ambience' : 'Add ambience'}
             </Button>
             {render ? (

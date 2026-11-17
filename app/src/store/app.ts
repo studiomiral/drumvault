@@ -3,7 +3,40 @@ import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo, SerumPreset } from '../types/api'
 
-export type View = 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'strings' | 'basses' | 'ambience' | 'splice' | 'generate' | 'arrange' | 'settings'
+export type View = 'create' | 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'strings' | 'basses' | 'ambience' | 'splice' | 'settings'
+
+/** The sidebar's pages: Create, Drums (its tabs: Drumvault, Library; Grid opens from a zip), Sounds, Settings. */
+export type Page = 'create' | 'drums' | 'sounds' | 'settings'
+
+export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
+  create: [{ view: 'create', label: 'Create' }],
+  drums: [{ view: 'process', label: 'Drumvault' }, { view: 'library', label: 'Library' }],
+  sounds: [
+    { view: 'stabs', label: 'Chord Stabs' }, { view: 'hits', label: 'Disco Hits' }, { view: 'strings', label: 'Strings' },
+    { view: 'basses', label: 'Bass Samples' }, { view: 'ambience', label: 'Ambience' }, { view: 'midi', label: 'MIDI' },
+  ],
+  settings: [{ view: 'settings', label: 'Settings' }],
+}
+
+/** The page a view is on (Grid with the drums, Splice with the sounds). */
+export function pageOf(v: View): Page {
+  if (v === 'grid') return 'drums'
+  if (v === 'splice') return 'sounds'
+  return (Object.keys(PAGE_TABS) as Page[]).find((p) => PAGE_TABS[p].some((t) => t.view === v)) ?? 'create'
+}
+
+const TABS_KEY = 'drumvault.pageTabs'
+
+function savedTabs(): Partial<Record<Page, View>> {
+  try {
+    return JSON.parse(localStorage.getItem(TABS_KEY) ?? '{}') as Partial<Record<Page, View>>
+  } catch {
+    return {}
+  }
+}
+
+/** Views from before Create (the old menu's commands, a remembered tab). */
+const viewOf = (v: string): View => (v === 'generate' || v === 'arrange' ? 'create' : v) as View
 
 export interface Toast {
   id: number
@@ -20,6 +53,8 @@ interface AppState {
   /** Bumped whenever the library database changed; views refetch on it. */
   libraryVersion: number
   view: View
+  /** Each page's last tab, to open it on again. */
+  tabs: Partial<Record<Page, View>>
   toasts: Toast[]
   modal: 'export' | 'shortcuts' | null
   /** The zip shown in the Grid view. */
@@ -27,6 +62,8 @@ interface AppState {
 
   init(): Promise<void>
   setView(v: View): void
+  /** Open a page of the sidebar on its last tab. */
+  openPage(p: Page): void
   openGrid(zipId: number): void
   setModal(m: AppState['modal']): void
   saveSettings(patch: Partial<AppSettings>): Promise<void>
@@ -44,7 +81,8 @@ export const useApp = create<AppState>((set, get) => ({
   deps: null,
   jobs: [],
   libraryVersion: 0,
-  view: 'process',
+  view: 'create',
+  tabs: savedTabs(),
   toasts: [],
   modal: null,
   gridZipId: null,
@@ -57,8 +95,8 @@ export const useApp = create<AppState>((set, get) => ({
     api.onJobs((jobs) => set({ jobs }))
     api.onLibraryChanged(() => set((s) => ({ libraryVersion: s.libraryVersion + 1 })))
     api.onMenu((cmd) => {
-      if (cmd.startsWith('view:')) set({ view: cmd.slice(5) as View })
-      if (cmd === 'export') set({ view: 'arrange', modal: 'export' })
+      if (cmd.startsWith('view:')) get().setView(viewOf(cmd.slice(5)))
+      if (cmd === 'export') set({ view: 'create', modal: 'export' })
       if (cmd === 'shortcuts') set({ modal: 'shortcuts' })
     })
     const [settings, engine, jobs] = await Promise.all([api.getSettings(), api.engineStatus(), api.listJobs()])
@@ -66,7 +104,25 @@ export const useApp = create<AppState>((set, get) => ({
     void get().refreshDeps()
   },
 
-  setView: (view) => set({ view }),
+  setView: (view) => {
+    const page = pageOf(view)
+    // (Grid and Splice open from a tab, and aren't one.)
+    if (PAGE_TABS[page].some((t) => t.view === view)) {
+      const tabs = { ...get().tabs, [page]: view }
+      try {
+        localStorage.setItem(TABS_KEY, JSON.stringify(tabs))
+      } catch {
+        // not remembered
+      }
+      set({ view, tabs })
+    } else {
+      set({ view })
+    }
+  },
+  openPage: (page) => {
+    const tab = get().tabs[page]
+    get().setView(tab && PAGE_TABS[page].some((t) => t.view === tab) ? tab : PAGE_TABS[page][0].view)
+  },
   openGrid: (gridZipId) => set({ gridZipId, view: 'grid' }),
   setModal: (modal) => set({ modal }),
 

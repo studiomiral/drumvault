@@ -74,7 +74,7 @@ export function SerumFolders({ module }: { module: SerumModule }) {
         <div className="px-4 py-3">
           <p className="text-[12px] text-muted mb-2">
             Folders under <span className="text-text">{root}</span> that {m.label} draws its patches from (a folder counts with all its
-            sub-folders). Star patches in Generate to hear them more often.{' '}
+            sub-folders). Star patches in Create to hear them more often.{' '}
             <button className="text-accent hover:underline" onClick={() => setView('settings')}>Presets folder…</button>
           </p>
           {error ? <p className="text-bad text-[12px]">{error}</p> : !folders ? <p className="text-faint text-[12px]">Reading presets…</p>

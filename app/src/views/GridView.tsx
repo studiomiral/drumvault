@@ -3,7 +3,8 @@ import { api } from '../api'
 import { audioContext } from '../audio/context'
 import { IconPlay, IconStop } from '../components/icons'
 import { Range } from '../components/Range'
-import { Button, cx, Empty, inputClass, PageTitle, Segmented, StatusChip } from '../components/ui'
+import { Button, cx, Empty, inputClass, Segmented, StatusChip } from '../components/ui'
+import { PageTabs } from '../components/PageTabs'
 import { beatsIn, blockPeaks, foldAttack, foldBeats, isDownbeat, roundMs } from '../grid/analysis'
 import { GRID_LEVELS, gridPlayer } from '../grid/player'
 import { formatBpm } from '../lib/format'
@@ -165,7 +166,7 @@ export function GridView() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-        <PageTitle className="mr-3">Grid</PageTitle>
+        <PageTabs view="grid" title="Grid" />
         <select className={cx(inputClass, 'w-[360px]')} value={zipId ?? ''} onChange={(e) => openGrid(Number(e.target.value))}>
           {zips.map((z) => (
             <option key={z.id} value={z.id}>

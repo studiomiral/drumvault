@@ -1,11 +1,11 @@
 import { eqSummary } from '../generate/eq'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { IconShuffle, IconSparkle } from '../components/icons'
+import { IconLock, IconSparkle } from '../components/icons'
 import { cx } from '../components/ui'
 import { laneRole } from '../generate/generator'
 import { useApp } from '../store/app'
-import { newSound, rerollLane } from '../store/generate'
+import { laneKept, LOCKABLE, rerollLane, setLaneVolume, toggleLane, toggleLaneKeep, useGenerate } from '../store/generate'
 import { LANE_PALETTE, makeLane, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
 import { panelOf, useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
@@ -24,7 +24,12 @@ export function LaneHeaders() {
   })
 
   return (
-    <div className="relative shrink-0 border-r border-line bg-panel-2 overflow-hidden" style={{ width: HEADER_W }}>
+    <div className="relative shrink-0 border-r border-line bg-panel-2 overflow-hidden" style={{ width: HEADER_W }}
+         onWheel={(e) => {
+           // Scrolls the lanes with the timeline (which keeps it inside the content).
+           const st = useArrange.getState()
+           st.setView({ scrollY: Math.max(0, st.scrollY + e.deltaY) })
+         }}>
       <div className="absolute inset-x-0 top-0 z-10 bg-panel border-b border-line flex items-end justify-between px-3 pb-1.5"
            style={{ height: TOP }}>
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">Lanes</span>
@@ -58,8 +63,11 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
 }) {
   const edit = useProject((s) => s.edit)
   const clipCount = useProject((s) => s.project.clips.filter((c) => c.laneId === lane.id).length)
-  // A generated project's lanes keep their module: a new sound, the lane made again, its panel.
-  const generated = useProject((s) => !!s.project.generation) && !!laneRole(lane.name)
+  // A generated track's lanes keep their module: kept for the next G, made again, its panel. Their
+  // volume, mute and solo carry over to the next tracks, like Generate's mix.
+  const role = laneRole(lane.name)
+  const generated = useProject((s) => !!s.project.generation) && !!role
+  const kept = useGenerate((s) => !!role && laneKept(role, s.keep))
   const panel = useArrange((s) => s.lanePanel)
   const open = !!panel && JSON.stringify(panel) === JSON.stringify(panelOf(lane.name))
   const toast = useApp((s) => s.toast)
@@ -67,10 +75,15 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
   const [palette, setPalette] = useState<DOMRect | null>(null)
   // Set while a control (volume, pan) is being dragged, so the lane itself doesn't start moving.
   const controlDrag = useRef(false)
-  const set = (label: string, patch: Partial<Lane>, coalesce?: string) =>
+  // `mix`: the lane's sound (volume, pan, sidechain, size) — a scratch track stays one.
+  const set = (label: string, patch: Partial<Lane>, coalesce?: string, mix = false) =>
     edit(label, (d) => {
       Object.assign(d.lanes.find((l) => l.id === lane.id)!, patch)
-    }, { coalesce })
+    }, { coalesce, keepScratch: mix })
+  const toggle = (what: 'mute' | 'solo') => {
+    if (generated) toggleLane(lane.name, what)
+    else set(what === 'mute' ? (lane.mute ? 'Unmute' : 'Mute') : lane.solo ? 'Unsolo' : 'Solo', { [what]: !lane[what] }, undefined, true)
+  }
   const compact = lane.height < 56
 
   const startResize = (e: React.MouseEvent) => {
@@ -80,7 +93,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
     const h0 = lane.height
     const move = (ev: MouseEvent) => set('Resize lane', {
       height: Math.round(Math.max(MIN_LANE_HEIGHT, Math.min(MAX_LANE_HEIGHT, h0 + ev.clientY - y0))),
-    }, `height-${lane.id}`)
+    }, `height-${lane.id}`, true)
     const up = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
@@ -115,7 +128,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
       {palette && (
         <ColorPalette anchor={palette} value={lane.color} onClose={() => setPalette(null)}
                       onPick={(color) => {
-                        set('Lane colour', { color })
+                        set('Lane colour', { color }, undefined, true)
                         setPalette(null)
                       }} />
       )}
@@ -138,24 +151,27 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
           )}
           {generated && (
             <>
-              <button title="New sound: other sounds of the same kind (another patch on Bass), the clips stay where they are"
-                      className="w-5 h-5 rounded bg-raised text-muted hover:text-text flex items-center justify-center"
-                      onClick={() => !newSound(lane.id) && toast('info', `No other sound for ${lane.name} in the library.`)}>
-                <IconShuffle className="w-3 h-3" />
-              </button>
-              <button title="Remake: the lane written again as Generate would (your edits on it are replaced; ⌘Z undoes)"
+              {role && LOCKABLE.includes(role) && (
+                <button title={kept ? `Kept: the next press of G keeps ${lane.name}` : `Keep ${lane.name} on the next press of G`}
+                        onClick={() => toggleLaneKeep(role)}
+                        className={cx('w-5 h-5 rounded flex items-center justify-center', kept ? 'bg-accent/20 text-accent' : 'bg-raised text-faint hover:text-text')}>
+                  <IconLock className="w-3 h-3" open={!kept} />
+                </button>
+              )}
+              <button title="Remake: a new sound and where it plays, the rest of the track stays (your edits on this lane are replaced; ⌘Z undoes)"
                       className="w-5 h-5 rounded bg-raised text-accent hover:bg-accent/20 flex items-center justify-center"
                       onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${lane.name}.`)}>
                 <IconSparkle className="w-3 h-3" />
               </button>
               <button title={open ? 'Close the lane panel' : 'Open the lane in the lane panel: its module, sounds and choices'}
                       className={cx('w-5 h-5 rounded text-[11px] font-bold', open ? 'bg-accent-soft text-accent' : 'bg-raised text-muted hover:text-text')}
-                      onClick={() => useArrange.getState().set({ lanePanel: open ? null : panelOf(lane.name) })}>⋯</button>
+                      onClick={() => useArrange.getState().set({ lanePanel: open ? null : panelOf(lane.name) })}
+                      >⋯</button>
             </>
           )}
-          <button title="Mute" onClick={() => set(lane.mute ? 'Unmute' : 'Mute', { mute: !lane.mute })}
+          <button title={generated ? 'Mute (the next tracks too)' : 'Mute'} onClick={() => toggle('mute')}
                   className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.mute ? 'bg-warn text-on-accent' : 'bg-raised text-muted hover:text-text')}>M</button>
-          <button title="Solo" onClick={() => set(lane.solo ? 'Unsolo' : 'Solo', { solo: !lane.solo })}
+          <button title={generated ? 'Solo (the next tracks too)' : 'Solo'} onClick={() => toggle('solo')}
                   className={cx('w-5 h-5 rounded text-[10.5px] font-bold', lane.solo ? 'bg-brand text-on-accent' : 'bg-raised text-muted hover:text-text')}>S</button>
           <button title={clipCount ? `Delete lane and its ${clipCount} clips` : 'Delete lane'}
                   className="w-4 h-5 text-faint hover:text-bad opacity-0 group-hover:opacity-100"
@@ -172,15 +188,15 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
             <BarSlider className="flex-1 min-w-0" min={-60} max={6} step={0.5} value={lane.volumeDb} reset={0}
                        color={lane.color} title={`Volume ${fmtDb(lane.volumeDb)} (⌥-click or double-click: 0 dB)${lane.levelDb ? `, ${fmtDb(lane.levelDb)} on top for the generated mix's balance` : ''}${
                          lane.eq ? `; EQ ${lane.eq.off ? 'off' : eqSummary(lane.eq.bands)}` : ''}`} dragging={controlDrag}
-                       onChange={(v) => set('Lane volume', { volumeDb: v }, `vol-${lane.id}`)} />
+                       onChange={(v) => (generated && role ? setLaneVolume(role, v) : set('Lane volume', { volumeDb: v }, `vol-${lane.id}`, true))} />
             <span className="w-11 text-right text-[10.5px] tabular-nums text-muted">{fmtDb(lane.volumeDb)}</span>
             <BarSlider className="w-12" min={-1} max={1} step={0.05} value={lane.pan} reset={0} origin={0}
                        color={lane.color} title={`Pan ${fmtPan(lane.pan)} (double-click: centre)`} dragging={controlDrag}
-                       onChange={(v) => set('Lane pan', { pan: v }, `pan-${lane.id}`)} />
+                       onChange={(v) => set('Lane pan', { pan: v }, `pan-${lane.id}`, true)} />
             {lane.duck !== undefined && (
               <BarSlider className="w-10" min={0} max={1} step={0.05} value={lane.duck} reset={0.6} color="#fda4af"
                          title={`Sidechain: ducks ${Math.round(lane.duck * 100)}% under the kick (double-click: 60%)`} dragging={controlDrag}
-                         onChange={(v) => set('Sidechain', { duck: v }, `duck-${lane.id}`)} />
+                         onChange={(v) => set('Sidechain', { duck: v }, `duck-${lane.id}`, true)} />
             )}
           </div>
         )}

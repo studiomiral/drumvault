@@ -13,7 +13,7 @@ enablePatches()
 const HISTORY_LIMIT = 200
 const COALESCE_MS = 1500
 
-interface Command {
+export interface Command {
   label: string
   patches: Patch[]
   inverse: Patch[]
@@ -26,16 +26,23 @@ export interface ProjectState {
   /** File name in the projects folder; null until first saved. */
   file: string | null
   dirty: boolean
+  /**
+   * A generation not kept yet (Create, SCOPE.md §6.6): it isn't saved until it's edited by hand,
+   * starred (⌘S) or exported. Changes from the generator's modules keep it a scratch track.
+   */
+  scratch: boolean
   past: Command[]
   future: Command[]
   selection: string[]          // clip ids
   selectedMarker: string | null
   editingClip: string | null   // pattern clip open in the step editor
 
-  edit(label: string, recipe: (draft: Draft<Project>) => void, opts?: { coalesce?: string }): void
+  edit(label: string, recipe: (draft: Draft<Project>) => void, opts?: { coalesce?: string; keepScratch?: boolean }): void
   undo(): void
   redo(): void
-  load(project: Project, file: string | null): void
+  load(project: Project, file: string | null, opts?: { scratch?: boolean; past?: Command[]; future?: Command[] }): void
+  /** Keep a scratch track: it's saved from now on. */
+  keep(): void
   markSaved(file: string): void
   select(ids: string[]): void
   selectMarker(id: string | null): void
@@ -46,6 +53,7 @@ export const useProject = create<ProjectState>((set, get) => ({
   project: newProject('Untitled', 124),
   file: null,
   dirty: false,
+  scratch: false,
   past: [],
   future: [],
   selection: [],
@@ -66,7 +74,7 @@ export const useProject = create<ProjectState>((set, get) => ({
     } else {
       history = [...past, { label, patches, inverse, coalesce: opts.coalesce, at: now }].slice(-HISTORY_LIMIT)
     }
-    set({ project: next, past: history, future: [], dirty: true, ...prune(next, get()) })
+    set({ project: next, past: history, future: [], dirty: true, scratch: get().scratch && !!opts.keepScratch, ...prune(next, get()) })
   },
 
   undo() {
@@ -85,8 +93,15 @@ export const useProject = create<ProjectState>((set, get) => ({
     set({ project: next, future: future.slice(0, -1), past: [...past, { ...cmd, coalesce: undefined }], dirty: true, ...prune(next, get()) })
   },
 
-  load(project, file) {
-    set({ project, file, dirty: false, past: [], future: [], selection: [], selectedMarker: null, editingClip: null })
+  load(project, file, opts = {}) {
+    set({
+      project, file, dirty: false, scratch: !!opts.scratch, past: opts.past ?? [], future: opts.future ?? [],
+      selection: [], selectedMarker: null, editingClip: null,
+    })
+  },
+
+  keep() {
+    if (get().scratch) set({ scratch: false, dirty: true })
   },
 
   markSaved(file) {

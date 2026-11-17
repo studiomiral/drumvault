@@ -37,7 +37,7 @@ export function StabsPart({ g }: { g: Generation }) {
   }
   const newButton = (
     <Button variant="secondary" onClick={reroll}
-            title="Another stab and another rhythm for this track; the rest stays (← goes back)">
+            title="Another stab and another rhythm for this track; the rest stays (⌘Z goes back)">
       New chord stabs
     </Button>
   )

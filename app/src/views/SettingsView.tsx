@@ -6,6 +6,7 @@ import { CATEGORY_LABELS } from '../lib/format'
 import { attempt, serumPresetRoot, useApp } from '../store/app'
 import { SERUM_MODULES } from '../components/SerumFolders'
 import { loadBass, useBass } from '../store/bass'
+import { loadReferences } from '../store/generate'
 import { cleanRenders } from '../store/renders'
 import type { CleanRendersResult, ReferencesResult } from '../types/engine'
 import type { ElevenStatus, LibraryFacets } from '../types/api'
@@ -354,13 +355,14 @@ function ReferencesSection() {
     setBusy(true)
     await load(true)
     setBusy(false)
+    void loadReferences()
     toast('info', 'References measured.')
   }
   const measured = refs?.tracks.filter((t) => t.profile) ?? []
   return (
     <section>
       <SectionTitle right={refs && <Button variant="ghost" onClick={() => void api.openFolder(refs.folder)}>Open folder</Button>}>References</SectionTitle>
-      <Field label="Reference tracks" hint="finished tracks (WAV, AIFF, FLAC, MP3) in the library's References folder: an export's masters are checked against them">
+      <Field label="Reference tracks" hint="finished tracks (WAV, AIFF, FLAC, MP3) in the library's References folder: Create follows their structures and arc, and an export's masters are checked against them">
         <span className="text-[12.5px] flex items-center gap-3">
           {!ready ? <span className="text-muted">Waiting for the engine…</span>
             : error ? <span className="text-bad select-text">{error}</span>
@@ -368,13 +370,13 @@ function ReferencesSection() {
                 : (
                   <span className="text-muted">
                     {measured.length} measured
-                    {refs.pending > 0 && <> · <span className="text-text">{refs.pending} new</span></>}
+                    {refs.pending > 0 && <> · <span className="text-text">{refs.pending} to measure</span></>}
                     {measured.length < 3 && <> · 3 or more are needed to compare against</>}
                   </span>
                 )}
           <Button variant="secondary" disabled={!ready || busy || !refs?.pending} onClick={() => void measure()}
-                  title="Measure the new and changed files: tempo, key, loudness, drops, tone and width (some seconds a track)">
-            {busy ? 'Measuring…' : 'Measure new tracks'}
+                  title="Measure the new and changed files, and those measured before Create could read their structure: tempo, key, loudness, kick and drops bar by bar, tone and width (some seconds a track)">
+            {busy ? 'Measuring…' : 'Measure tracks'}
           </Button>
         </span>
       </Field>

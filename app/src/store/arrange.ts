@@ -1,11 +1,11 @@
-// Arrange view state that is not part of the project (and not undoable).
+// Create's timeline state that is not part of the project (and not undoable).
 
 import { create } from 'zustand'
 import { laneRole } from '../generate/generator'
 import type { ProjectFileInfo } from '../types/project'
 
-/** What the lane panel shows (Generate's, and Arrange's beside the timeline): a module, or a lane (by name). */
-export type Panel = { module: 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb' } | { lane: string }
+/** What Create's side panel shows: the track (its key, structure, choices), a module, or a lane (by name). */
+export type Panel = { module: 'track' | 'bass' | 'chords' | 'vocals' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb' } | { lane: string }
 
 /** The panel a lane opens: its module (Bass, Chords, Strings, Disco Hits), else the lane itself. */
 export function panelOf(laneName: string): Panel {
@@ -28,8 +28,11 @@ interface ArrangeState {
   missing: Set<string>
   saving: boolean
   lastSaved: number | null
-  /** The lane panel beside the timeline (a generated project's lane or module), or closed. */
+  /** The side panel beside the timeline (the track, a module or a lane), or closed. */
   lanePanel: Panel | null
+  /** Bumped when a track is put on screen: the timeline zooms to fit it. */
+  fit: number
+  fitToTrack(): void
   setView(patch: Partial<Pick<ArrangeState, 'pxPerBeat' | 'scrollX' | 'scrollY' | 'libraryOpen'>>): void
   set(patch: Partial<ArrangeState>): void
 }
@@ -38,12 +41,36 @@ export const useArrange = create<ArrangeState>((set) => ({
   pxPerBeat: DEFAULT_PX_PER_BEAT,
   scrollX: 0,
   scrollY: 0,
-  libraryOpen: true,
+  libraryOpen: false,
   projects: [],
   missing: new Set(),
   saving: false,
   lastSaved: null,
-  lanePanel: null,
+  lanePanel: savedPanel(),
+  fit: 0,
+  fitToTrack: () => set((s) => ({ fit: s.fit + 1 })),
   setView: (patch) => set(patch),
-  set: (patch) => set(patch),
+  set: (patch) => {
+    if ('lanePanel' in patch) savePanel(patch.lanePanel ?? null)
+    set(patch)
+  },
 }))
+
+const PANEL_KEY = 'drumvault.create.panel'
+
+function savedPanel(): Panel | null {
+  try {
+    const v = localStorage.getItem(PANEL_KEY)
+    return v == null ? { module: 'track' } : (JSON.parse(v) as Panel | null)
+  } catch {
+    return { module: 'track' }
+  }
+}
+
+function savePanel(p: Panel | null): void {
+  try {
+    localStorage.setItem(PANEL_KEY, JSON.stringify(p))
+  } catch {
+    // not remembered
+  }
+}

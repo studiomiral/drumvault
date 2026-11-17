@@ -47,7 +47,7 @@ export function StringsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
         <div className="space-y-2.5 text-[12.5px]">
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="secondary" onClick={reroll}
-                    title="Other strings for this track: another sample and where it plays; the rest stays (← goes back)">
+                    title="Other strings for this track: another sample and where it plays; the rest stays (⌘Z goes back)">
               {render ? 'New strings' : 'Add strings'}
             </Button>
             {render ? (

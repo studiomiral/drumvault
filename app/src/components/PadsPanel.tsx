@@ -38,7 +38,7 @@ export function PadsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
       ) : (
         <div className="space-y-2.5 text-[12.5px]">
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="secondary" onClick={reroll} title="Another patch for the breakdown layer; the rest of the track stays (← goes back)">
+            <Button variant="secondary" onClick={reroll} title="Another patch for the breakdown layer; the rest of the track stays (⌘Z goes back)">
               {render ? 'New break layer' : 'Add a break layer'}
             </Button>
             {render ? (

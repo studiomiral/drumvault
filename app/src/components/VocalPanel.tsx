@@ -21,11 +21,11 @@ const WHERE: Record<string, string> = {
 const drawVocal = (bpm: number, keys: string[]) => randomVocal(bpm, keys, (n, phrases) => pickLines(n, Math.random, phrases ? PHRASES : LYRICS))
 
 /**
- * Vocals (SCOPE.md §6.11): made in Arrange, one for each track. ElevenLabs sings a take in the
+ * Vocals (SCOPE.md §6.11): made for one track at a time, in Create. ElevenLabs sings a take in the
  * track's key (lines drawn, or the ones typed in), and it's placed as Generate would: its phrase,
- * its chops or both, and where. Generate itself sings none.
+ * its chops or both, and where. A new track (G) sings none.
  */
-export function VocalPanel({ g, where, fixed }: { g: Generation; where: 'generate' | 'arrange'; fixed?: boolean }) {
+export function VocalPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const bpm = useApp((s) => s.settings?.engine.library_bpm ?? 124)
   const setView = useApp((s) => s.setView)
   const vocals = useVocals((s) => s.vocals)
@@ -56,13 +56,8 @@ export function VocalPanel({ g, where, fixed }: { g: Generation; where: 'generat
   const summary = pick ? <><span className="text-text">{pick.name}</span> · {how}</> : 'No vocal in this track'
 
   return (
-    <Module id="vocals" title="Vocals" fixed={fixed} enabled onEnabled={() => {}} enabledTitle="Made in Arrange, one for each track" summary={summary}>
-      {where === 'generate' ? (
-        <p className="text-muted text-[12.5px]">
-          {pick && <>This track sings <span className="text-text">{pick.name}</span>. </>}
-          Vocals are made in Arrange, one for each track: send the track there to give it one.
-        </p>
-      ) : !eleven ? null : !eleven.hasKey ? (
+    <Module id="vocals" title="Vocals" fixed={fixed} enabled onEnabled={() => {}} enabledTitle="Made for this track, one at a time" summary={summary}>
+      {!eleven ? null : !eleven.hasKey ? (
         <p className="text-muted text-[12.5px]">
           Add your ElevenLabs API key in Settings to make vocals.{' '}
           <Button variant="ghost" onClick={() => setView('settings')}>Open Settings</Button>

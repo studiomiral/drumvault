@@ -3,7 +3,7 @@ import { isGenerated } from '../src/generate/bassline'
 import { stringsBars } from '../src/generate/strings'
 import { breakShape } from '../src/generate/character'
 import {
-  applyMix, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newLaneSound, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
+  applyMix, arcOf, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newLaneSound, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
   transposeTo, type GenerateOptions, type Generation,
 } from '../src/generate/generator'
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
@@ -14,7 +14,9 @@ import { hitPitch } from '../src/generate/disco'
 import { parseKey } from '../src/generate/bassline'
 import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
-import { readSections, templateFrom } from '../src/generate/template'
+import { readReference, readSections, templateFrom, templateFromReference } from '../src/generate/template'
+import { arcFit, bestOf, scoreGeneration } from '../src/generate/score'
+import type { MixProfile, ReferenceTrack } from '../src/types/engine'
 import { SAVED_EXACT, stabParts, stabRhythm } from '../src/generate/stabs'
 import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
@@ -872,6 +874,119 @@ describe('generator: structures from real tracks', () => {
   it("ignores arrangements that don't read as a dance track", () => {
     expect(templateFrom(track('S0001', { kick: [[0, 64]], hats: [[2, 64]] }), new Rng(1), 64, 200)).toBeNull()
     expect(templateFrom(track('S0002', { kick: [[2, 24]] }), new Rng(1), 64, 200)).toBeNull()
+  })
+})
+
+describe('generator: structures and arcs from reference tracks', () => {
+  type Kind = 'intro' | 'build' | 'drop' | 'break' | 'outro'
+  /** A finished mix as the engine profiles it: `lead` silent bars, then the sections bar by bar. */
+  function reference(name: string, runs: [Kind, number][], lead = 0, arc = { lift: 3, depth: 9 }, current = true): ReferenceTrack {
+    const kick: boolean[] = []
+    const full: boolean[] = []
+    const lufs: (number | null)[] = []
+    for (let b = 0; b < lead; b++) { kick.push(false); full.push(false); lufs.push(null) }
+    for (const [kind, bars] of runs) {
+      for (let b = 0; b < bars; b++) {
+        kick.push(kind !== 'break')
+        full.push(kind === 'drop')
+        lufs.push(kind === 'drop' ? -8 : kind === 'break' ? -17 : kind === 'build' ? -14 + (4 * b) / bars : -12)
+      }
+    }
+    const drops: MixProfile['drops'] = []
+    for (let b = 0; b < full.length; b++) {
+      if (full[b] && !full[b - 1]) drops.push({ bar: b, bars: full.slice(b).findIndex((x) => !x), lufs: -8, lift_lu: arc.lift, lift_low_db: 12 })
+    }
+    const profile = {
+      seconds: (full.length * 240) / 124, bpm: 124, bars: full.length, sections_known: false, lufs: -8, peak_db: -0.3, true_peak_db: -0.1,
+      plr_db: 8, bar_lufs: lufs, full_bars: full.filter(Boolean).length, full_lufs: -8, regions: null, width_db: -10, low_side_db: -30,
+      drops, lift_lu: arc.lift, lift_low_db: 12, break_depth_lu: arc.depth, dc_db: -90, head_ms: 0, tail_db: -60, intro: null, outro: null,
+      ...(current ? { bar_kick: kick, bar_full: full, bar_low_db: lufs.map((v) => (v == null ? null : v - 6)) } : {}),
+    } as MixProfile
+    return { rel_path: `${name}.wav`, name, bpm: 124, key_label: 'Am', grid_confidence: 0.9, error: null, analyzed_at: '', profile }
+  }
+  const RUNS: [Kind, number][] = [['intro', 32], ['build', 16], ['drop', 32], ['break', 16], ['build', 8], ['drop', 32], ['outro', 32]]
+  const REF = reference('Ref A', RUNS, 2)
+
+  it("reads a reference's sections from its kick and drops, on the grid of its first drop", () => {
+    expect(readReference(REF.profile!)!.map((s) => [s.kind, s.from, s.to - s.from])).toEqual([
+      ['intro', 2, 32], ['build', 34, 16], ['drop', 50, 32], ['break', 82, 16], ['build', 98, 8], ['drop', 106, 32], ['outro', 138, 32],
+    ])
+    // Measured before the profile kept the bars' kicks: nothing to read.
+    expect(readReference(reference('Old', RUNS, 0, undefined, false).profile!)).toBeNull()
+  })
+
+  it('takes its structure, its breakdown kick and its arc, without rides of its own', () => {
+    const rng = new Rng(3)
+    for (let i = 0; i < 30; i++) {
+      const t = templateFromReference(REF, rng, 64 * 1.5, 200)!
+      expect(t.label).toBe('the reference “Ref A”')
+      expect(t.sections.map((x) => x.kind)).toEqual(['intro', 'build', 'drop', 'break', 'build', 'drop', 'outro'])
+      expect(t.sections.every((x) => !x.src)).toBe(true)
+      expect(t.sections.filter((x) => x.kind === 'drop').at(-1)!.peak).toBe(true)
+      expect(t.arc).toEqual({ liftLu: 3, breakDepthLu: 9 })
+    }
+    const ts = Array.from({ length: 40 }, () => templateFromReference(REF, rng, 64 * 1.5, 200)!)
+    // No kick in its breakdown, and none in the bar before its drops: kept mostly (12 % drawn again, some changed).
+    expect(ts.filter((t) => t.sections.find((x) => x.kind === 'break')!.kick === 'out').length).toBeGreaterThan(ts.length * 0.5)
+    expect(ts.filter((t) => t.rules.dropKickOut === false).length).toBeGreaterThan(ts.length * 0.75)
+  })
+
+  it('shares structures evenly with the zips, and scores against the arc it follows', () => {
+    const REAL: TrackArrangement = {
+      zip_id: 1, source_code: 'S0042', bpm: 124, bars: 144, parts: {
+        kick: '2'.repeat(32) + '2'.repeat(32) + '0'.repeat(16) + '2'.repeat(64),
+        bass: '0'.repeat(32) + '2'.repeat(32) + '0'.repeat(16) + '2'.repeat(32) + '0'.repeat(32),
+        hats: '2'.repeat(144),
+      },
+    }
+    const opts = { ...OPTS, templates: [REAL], references: [REF] }
+    const tg = Array.from({ length: 80 }, (_, i) => generate(LIB, opts, 7000 + i))
+    const fromRef = tg.filter((g) => g.template === 'Ref A')
+    const fromZip = tg.filter((g) => g.template === 'S0042')
+    expect(fromRef.length).toBeGreaterThan(tg.length * 0.25)
+    expect(fromZip.length).toBeGreaterThan(tg.length * 0.25)
+    for (const g of fromRef) {
+      expect(g.choices[0]).toMatch(/^structure after the reference “Ref A” \(/)
+      expect(g.arc).toEqual({ liftLu: 3, breakDepthLu: 9, from: 'the reference “Ref A”' })
+    }
+    // A track not on the reference aims at the references' arc all the same (candidates are scored alike).
+    for (const g of fromZip) expect(g.arc).toEqual({ liftLu: 3, breakDepthLu: 9, from: 'the reference “Ref A”' })
+    // Same seed, same track.
+    expect(strip(generate(LIB, opts, 7001))).toBe(strip(generate(LIB, opts, 7001)))
+    // Without references, nothing changes: no arc, and the same tracks as before.
+    const plain = generate(LIB, { ...OPTS, templates: [REAL] }, 7003)
+    expect(plain.arc).toBeNull()
+    expect(strip(plain)).toBe(strip(generate(LIB, { ...OPTS, templates: [REAL], references: [] }, 7003)))
+
+  })
+
+  it('scores candidates on the arc, from the plan', () => {
+    // Measured samples: the plan's loudness can be worked out.
+    const loud = LIB.map((x, i) => ({ ...x, energy_db: (x.category.startsWith('hat') ? -12 : -16) + (i % 7) - 3 }))
+    const make = (seed: number) => generate(loud, { ...OPTS, references: [REF], templates: [] }, seed)
+    const g = Array.from({ length: 20 }, (_, i) => make(7200 + i)).find((x) => x.arc && x.sections.filter((y) => y.kind === 'drop').length > 1)!
+    const sc = scoreGeneration(loud, g)
+    expect(sc.arc).toBeGreaterThan(0)
+    expect(sc.arc).toBeLessThanOrEqual(1)
+    expect(sc.breakDepth).toBeGreaterThan(0)
+    // The same plan against an arc far from it scores lower.
+    const far = scoreGeneration(loud, { ...g, arc: { liftLu: 30, breakDepthLu: 40, from: 'x' } })
+    expect(far.total).toBeLessThan(sc.total)
+    const best = bestOf(loud, 7100, 4, make)
+    if (best.arc) expect(best.choices.join('\n')).toMatch(/arc \d\.\d\d against /)
+  })
+
+  it("aims at the references' median arc otherwise", () => {
+    const three = [reference('A', RUNS, 0, { lift: 2, depth: 6 }), reference('B', RUNS, 0, { lift: 3, depth: 8 }), reference('C', RUNS, 0, { lift: 5, depth: 12 })]
+    expect(arcOf(three, null)).toEqual({ liftLu: 3, breakDepthLu: 8, from: '3 reference tracks' })
+    expect(arcOf(three.slice(0, 2), null)).toEqual({ liftLu: 2.5, breakDepthLu: 7, from: '2 reference tracks' })
+    expect(arcOf([], null)).toBeNull()
+    // Nearer the arc scores higher; nothing to compare, nothing scored.
+    const arc = { liftLu: 3, breakDepthLu: 8, from: 'x' }
+    expect(arcFit(arc, [{ lu: 3 }], 8)).toBeCloseTo(1)
+    expect(arcFit(arc, [{ lu: 3.5 }], 9)!).toBeGreaterThan(arcFit(arc, [{ lu: 6 }], 14)!)
+    expect(arcFit(arc, [], null)).toBeNull()
+    expect(arcFit(null, [{ lu: 3 }], 8)).toBeNull()
   })
 })
 

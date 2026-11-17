@@ -80,6 +80,12 @@ def _fresh(r, p: Path) -> bool:
     return r is not None and r["size"] == st.st_size and abs((r["mtime"] or 0) - st.st_mtime) < 1e-3
 
 
+def _current(r) -> bool:
+    """Measured with today's profile (it has what the generator reads a structure from); one from
+    before still counts for the pre-flight, and is measured again with the next new ones."""
+    return r is None or r["profile"] is None or '"bar_kick"' in r["profile"]
+
+
 def summary(profiles: list[dict], th: Thresholds) -> dict | None:
     """Per measure {"median", "min", "max", "n"} over the references that have it, and "regions"
     the same per region; None with fewer than `reference_min_tracks`."""
@@ -104,8 +110,9 @@ def summary(profiles: list[dict], th: Thresholds) -> dict | None:
 
 def scan(settings: Settings, analyze: bool = False, progress: Callable[[str, float], None] | None = None) -> dict:
     """The references as the library knows them: {"folder", "tracks": [...], "pending": files not
-    measured yet, "summary"}. With `analyze`, new and changed files are measured first (a track
-    takes some seconds) and the rows of files that are gone are dropped."""
+    measured yet (or measured before the profile kept what the generator reads), "summary"}.
+    With `analyze`, new and changed files are measured first (a track takes some seconds) and the
+    rows of files that are gone are dropped."""
     root = folder(settings)
     root.mkdir(parents=True, exist_ok=True)
     found = {str(p.relative_to(root)): p for p in files(settings)}
@@ -114,7 +121,7 @@ def scan(settings: Settings, analyze: bool = False, progress: Callable[[str, flo
         if analyze:
             for rel in set(rows) - set(found):
                 db.delete_reference(rel)
-            todo = [rel for rel, p in found.items() if not _fresh(rows.get(rel), p)]
+            todo = [rel for rel, p in found.items() if not _fresh(rows.get(rel), p) or not _current(rows.get(rel))]
             for i, rel in enumerate(todo):
                 p = found[rel]
                 if progress:
@@ -130,5 +137,6 @@ def scan(settings: Settings, analyze: bool = False, progress: Callable[[str, flo
                     db.set_reference(rel, size=st.st_size, mtime=st.st_mtime, error=f"{type(e).__name__}: {e}")
             rows = {r["rel_path"]: r for r in db.list_references()}
     tracks = [_row(rows[rel]) for rel in found if rel in rows and _fresh(rows[rel], found[rel])]
-    return {"folder": str(root), "tracks": tracks, "pending": len(found) - len(tracks),
+    stale = sum(1 for t in tracks if not _current(rows[t["rel_path"]]))
+    return {"folder": str(root), "tracks": tracks, "pending": len(found) - len(tracks) + stale,
             "summary": summary([t["profile"] for t in tracks], settings.thresholds)}

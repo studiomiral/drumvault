@@ -9,6 +9,9 @@
 // - the drops landing, predicted: every lane's loudness (its clips' measured energy, its level and
 //   volume) over each drop's first 8 bars against the 8 before; a drop lands from 1 LU up, and a
 //   lift of 3 LU or more counts in full (the pre-flight's check, made on the plan instead of the render).
+// - the arc, with reference tracks (SCOPE.md §5.17): the drops' median lift and the break depth
+//   (the quietest 8 bars between the first and the last drop under the drops) as planned, against
+//   the reference the structure follows, else the references' median.
 // Unmeasured parts count as halfway. The same seed and library give the same candidates and the
 // same pick; the generation keeps its own seed, so typing that seed makes exactly it again.
 
@@ -28,6 +31,11 @@ const FULL_LIFT_LU = 3
 const LIFT_BARS = 8
 /** The parts' weights in the score. */
 const W = { clash: 0.35, interlock: 0.2, palette: 0.2, drops: 0.25 }
+/** With an arc to aim for, its weight (the others share the rest as above). */
+const W_ARC = 0.2
+/** How far from the arc's lift and break depth (LU) a track still counts a little over half (a Gaussian's width). */
+const ARC_LIFT_LU = 2
+const ARC_DEPTH_LU = 3
 /** Drum picks whose palette is scored. */
 const PALETTE_ROLES = ['kick', 'clap', 'hats', 'perc', 'top', 'groove'] as const
 
@@ -42,6 +50,10 @@ export interface Score {
   palette: number | null
   /** Each drop's predicted lift over the 8 bars before it (LU), by its bar. */
   lifts: { bar: number; lu: number }[]
+  /** The quietest 8 bars between the first and the last drop under the drops (LU); null with one drop. */
+  breakDepth?: number | null
+  /** 0…1 against the arc (Generation.arc); null or absent without one. */
+  arc?: number | null
   /** How many tracks it was the best of (1: made as it came). */
   of: number
 }
@@ -61,24 +73,68 @@ function windowPower(clips: Clip[], samples: Map<string, SampleListItem>, bpm: n
   return measured ? acc / (to - from) : null
 }
 
-/** The drops' lifts as planned: every audible lane's power over a drop's first bars against the bars before. */
-export function predictedLifts(project: Project, sections: Generation['sections'], samples: Map<string, SampleListItem>, punch: PunchRefs): { bar: number; lu: number }[] {
+/** The track's power over bars [a, z) as planned: every audible lane's clips, at its level and volume. */
+function planPower(project: Project, samples: Map<string, SampleListItem>, punch: PunchRefs): (a: number, z: number) => number {
   const byLane = new Map<string, Clip[]>()
   for (const c of project.clips) byLane.set(c.laneId, [...(byLane.get(c.laneId) ?? []), c])
+  return (a, z) => project.lanes.reduce((sum, l) => {
+    if (l.mute) return sum
+    const p = windowPower(byLane.get(l.id) ?? [], samples, project.bpm, a * 4, z * 4, punch)
+    return sum + (p ?? 0) * 10 ** (((l.levelDb ?? 0) + l.volumeDb) / 10)
+  }, 0)
+}
+
+/** The drops' lifts as planned: every audible lane's power over a drop's first bars against the bars before. */
+export function predictedLifts(project: Project, sections: Generation['sections'], samples: Map<string, SampleListItem>, punch: PunchRefs): { bar: number; lu: number }[] {
+  const at = planPower(project, samples, punch)
   const out: { bar: number; lu: number }[] = []
   for (const s of sections) {
     if (s.kind !== 'drop' || s.start < LIFT_BARS) continue
     const n = Math.min(LIFT_BARS, s.bars)
-    const at = (a: number, z: number) => project.lanes.reduce((sum, l) => {
-      if (l.mute) return sum
-      const p = windowPower(byLane.get(l.id) ?? [], samples, project.bpm, a * 4, z * 4, punch)
-      return sum + (p ?? 0) * 10 ** (((l.levelDb ?? 0) + l.volumeDb) / 10)
-    }, 0)
     const before = at(s.start - n, s.start)
     const after = at(s.start, s.start + n)
     if (before > 0 && after > 0) out.push({ bar: s.start, lu: Math.round(10 * Math.log10(after / before) * 10) / 10 })
   }
   return out
+}
+
+/**
+ * The break depth as planned, as the engine measures a mix's (mixprofile.py): the drops' power
+ * against the quietest 8 bars between the first and the last drop, in LU (capped at 40). Null
+ * with fewer than two drops or nothing measured.
+ */
+export function predictedBreakDepth(project: Project, sections: Generation['sections'], samples: Map<string, SampleListItem>, punch: PunchRefs): number | null {
+  const drops = sections.filter((s) => s.kind === 'drop')
+  if (drops.length < 2) return null
+  const at = planPower(project, samples, punch)
+  const full = drops.reduce((n, d) => n + at(d.start, d.start + d.bars) * d.bars, 0) / drops.reduce((n, d) => n + d.bars, 0)
+  const a = drops[0].start + drops[0].bars
+  const z = drops.at(-1)!.start
+  if (full <= 0 || z - a < LIFT_BARS) return null
+  // Each bar once, then every 8 bars in turn (a window's power is its bars' mean).
+  const bars = Array.from({ length: z - a }, (_, i) => at(a + i, a + i + 1))
+  let quiet = Infinity
+  for (let i = 0; i + LIFT_BARS <= bars.length; i++) quiet = Math.min(quiet, bars.slice(i, i + LIFT_BARS).reduce((n, v) => n + v, 0) / LIFT_BARS)
+  return Math.round(Math.min(40, 10 * Math.log10(full / Math.max(quiet, full * 1e-4))) * 10) / 10
+}
+
+function median(xs: number[]): number | null {
+  if (!xs.length) return null
+  const v = [...xs].sort((a, b) => a - b)
+  const m = v.length >> 1
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2
+}
+
+/** How near a plan's lifts and break depth are to the arc, 0…1 (each a Gaussian); null when nothing compares. */
+export function arcFit(arc: Generation['arc'], lifts: { lu: number }[], depth: number | null): number | null {
+  if (!arc) return null
+  const fits: number[] = []
+  const g = (d: number, w: number) => Math.exp(-0.5 * (d / w) ** 2)
+  if (arc.liftLu != null && lifts.length) {
+    fits.push(g(median(lifts.map((l) => l.lu))! - arc.liftLu, ARC_LIFT_LU))
+  }
+  if (arc.breakDepthLu != null && depth != null) fits.push(g(depth - arc.breakDepthLu, ARC_DEPTH_LU))
+  return fits.length ? fits.reduce((a, b) => a + b, 0) / fits.length : null
 }
 
 /** Shared per library: what the palette and the punch are measured against. */
@@ -99,9 +155,13 @@ export function scoreGeneration(all: SampleListItem[], g: Generation, refs: Scor
   const lifts = predictedLifts(g.project, g.sections, refs.byPath, refs.punch)
   const drops = lifts.length
     ? lifts.reduce((n, l) => n + (l.lu < LANDS_LU ? 0 : 0.5 + 0.5 * Math.min(1, l.lu / FULL_LIFT_LU)), 0) / lifts.length : NEUTRAL
-  const total = 100 * (W.clash / (1 + clash) + W.interlock * (interlock ?? NEUTRAL) + W.palette * (palette ?? NEUTRAL) + W.drops * drops)
+  const base = W.clash / (1 + clash) + W.interlock * (interlock ?? NEUTRAL) + W.palette * (palette ?? NEUTRAL) + W.drops * drops
+  const breakDepth = g.arc ? predictedBreakDepth(g.project, g.sections, refs.byPath, refs.punch) : null
+  const arc = arcFit(g.arc, lifts, breakDepth)
+  const total = 100 * (arc == null ? base : (1 - W_ARC) * base + W_ARC * arc)
   const r2 = (v: number | null) => (v == null ? null : Math.round(v * 100) / 100)
-  return { total: Math.round(total * 10) / 10, clash, interlock: r2(interlock), palette: r2(palette), lifts, of }
+  return { total: Math.round(total * 10) / 10, clash, interlock: r2(interlock), palette: r2(palette), lifts, of,
+    ...(g.arc ? { breakDepth, arc: r2(arc) } : {}) }
 }
 
 /** The seeds of a new track's candidates: its own first, then ones derived from it. */
@@ -125,7 +185,7 @@ export function* bestOfSteps(all: SampleListItem[], seed: number, n: number, mak
   }
   const { g, s } = best!
   g.score = s
-  if (n > 1) g.choices.splice(g.template ? 1 : 0, 0, scoreLine(s))
+  if (n > 1) g.choices.splice(g.template ? 1 : 0, 0, scoreLine(s, g.arc))
   return g
 }
 
@@ -138,8 +198,19 @@ export function bestOf(all: SampleListItem[], seed: number, n: number, make: (se
   }
 }
 
+/** "(lift +2.1 for +2.6, breaks 7.5 deep for 9)": the plan's against the arc's. */
+function arcNumbers(s: Score, arc: NonNullable<Generation['arc']>): string {
+  const lift = median(s.lifts.map((l) => l.lu))
+  const sg = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`
+  const bits = [
+    arc.liftLu != null && lift != null ? `lift ${sg(lift)} for ${sg(arc.liftLu)} LU` : null,
+    arc.breakDepthLu != null && s.breakDepth != null ? `breaks ${s.breakDepth.toFixed(1)} deep for ${arc.breakDepthLu.toFixed(1)} LU` : null,
+  ].filter(Boolean)
+  return bits.length ? ` (${bits.join(', ')})` : ''
+}
+
 /** "best of 12 (score 78): no clashes, loops interlock 0.81, palette 0.74, every drop lands (+3.2 LU)". */
-export function scoreLine(s: Score): string {
+export function scoreLine(s: Score, arc?: Generation['arc']): string {
   const landed = s.lifts.filter((l) => l.lu >= LANDS_LU).length
   const lift = s.lifts.length ? Math.min(...s.lifts.map((l) => l.lu)) : null
   const parts = [
@@ -147,6 +218,7 @@ export function scoreLine(s: Score): string {
     s.interlock != null ? `loops interlock ${s.interlock.toFixed(2)}` : null,
     s.palette != null ? `palette ${s.palette.toFixed(2)}` : null,
     s.lifts.length ? (landed === s.lifts.length ? `every drop lands (+${lift!.toFixed(1)} LU at least)` : `${landed} of ${s.lifts.length} drops land`) : null,
+    s.arc != null && arc ? `arc ${s.arc.toFixed(2)} against ${arc.from}${arcNumbers(s, arc)}` : null,
   ].filter(Boolean)
   return `best of ${s.of} (score ${Math.round(s.total)}): ${parts.join(', ')}`
 }

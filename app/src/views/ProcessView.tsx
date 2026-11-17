@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import { api } from '../api'
 import { EngineBanner } from '../components/EngineBanner'
 import { IconDrop, IconHit, IconKey, IconLoop, IconSparkle, IconX } from '../components/icons'
-import { Button, Chip, cx, Empty, Modal, PageTitle, ProgressBar, SectionTitle, Segmented, StatusChip } from '../components/ui'
+import { Button, Chip, cx, Empty, Modal, ProgressBar, SectionTitle, Segmented, StatusChip } from '../components/ui'
+import { PageTabs } from '../components/PageTabs'
 import { ENGINE_DEFAULTS } from '../lib/defaults'
 import { formatBpm, KIND_PASTEL } from '../lib/format'
 import { attempt, useApp } from '../store/app'
@@ -103,7 +104,7 @@ export function ProcessView() {
     >
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-          <PageTitle>Drumvault</PageTitle>
+          <PageTabs view="process" />
           <div className="flex-1" />
         </header>
         <EngineBanner />

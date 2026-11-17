@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { audioContext } from '../audio/context'
 import { IconPlay, IconStop } from '../components/icons'
-import { Button, cx, Empty, inputClass, PageTitle, Segmented } from '../components/ui'
+import { Button, cx, Empty, inputClass, Segmented } from '../components/ui'
+import { PageTabs } from '../components/PageTabs'
 import { attempt, useApp } from '../store/app'
 import { loadHits } from '../store/hits'
 import type { SpliceCandidate, SpliceScan } from '../types/api'
@@ -116,7 +117,7 @@ export function SpliceView() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-        <PageTitle className="mr-3">Splice</PageTitle>
+        <PageTabs view="splice" title="Splice" />
         <span className="text-faint text-[12px] tabular-nums">
           {scan?.found ? `${all.length} suggested of ${scan.files} sounds` : ''}
         </span>

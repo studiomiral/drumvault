@@ -16,6 +16,6 @@
     "noEmit": true
   },
   "include": ["electron/**/*.ts", "src/lib/**/*.ts", "src/types/**/*.ts", "src/audio/*.ts", "src/api.ts", "src/store/**/*.ts",
-              "src/arrange/geometry.ts", "src/arrange/commands.ts", "src/arrange/exporter.ts", "src/arrange/Preflight.tsx", "src/vocals/**/*.ts", "src/generate/**/*.ts", "src/grid/analysis.ts", "tests/**/*.ts",
+              "src/arrange/geometry.ts", "src/arrange/commands.ts", "src/arrange/persistence.ts", "src/arrange/peaks.ts", "src/arrange/exporter.ts", "src/arrange/Preflight.tsx", "src/vocals/**/*.ts", "src/generate/**/*.ts", "src/grid/analysis.ts", "tests/**/*.ts",
               "electron.vite.config.ts", "vitest.config.ts"]
 }

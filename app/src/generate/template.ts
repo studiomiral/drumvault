@@ -1,9 +1,12 @@
 // Structure templates (SCOPE.md §6.6): a real track's arrangement, measured by the engine
 // (arrangement.py: per part and bar silent / quiet / full), read as sections and track rules a
 // producer chose, then changed a little so the result is new: one section longer or shorter,
-// another kick treatment in a breakdown, a few rules drawn again.
+// another kick treatment in a breakdown, a few rules drawn again. A reference track (§5.17: a
+// finished mix, no stems) gives one too, read from its loudness, kick and drops bar by bar: its
+// sections, its breakdown kicks and the bar before its drops, and the arc its drops make.
 
 import type { TrackArrangement } from '../types/api'
+import type { MixProfile, ReferenceTrack } from '../types/engine'
 import type { Rng } from './rng'
 import {
   fit, layout, LIMITS, PHRASE, pickBuildStyle, pickKickMode, type KickMode, type Section, type SectionKind,
@@ -18,10 +21,18 @@ const DROP_ENERGY = 0.75
 const PLAYS = 0.5
 /** Chance that a rule read from the track is drawn again instead (the "10 %" that is new). */
 const REDRAW = 0.12
+/** A reference's bar is silent under this loudness (LUFS). */
+const SILENT_LUFS = -60
+/** A reference's build rises when its second half is this much louder than its first (LU). */
+const RISING_LU = 2
 
 export interface Template {
-  /** Source code of the track (S0012). */
+  /** Source code of the track (S0012), or a reference track's name. */
   source: string
+  /** As the choices name it: "S0012", "the reference “Name”". */
+  label: string
+  /** A reference track's arc (its median drop lift and break depth, LU): what its candidates are scored against. */
+  arc?: Arc
   sections: Section[]
   /** Track rules read from the track (the generator's names; the rest it draws itself). */
   rules: Record<string, unknown>
@@ -29,7 +40,13 @@ export interface Template {
   changes: string[]
 }
 
+/** How hard a track's drops lift (LU over the 8 bars before) and how deep it goes between them (LU under its drops). */
+export interface Arc { liftLu: number | null; breakDepthLu: number | null }
+
 type Raw = Omit<Section, 'start' | 'label'>
+type Read = { kind: SectionKind; from: number; to: number }
+/** A phrase as read: a kick through it, as full as a drop, or nothing there. */
+type Phrase = { kick: boolean; drop: boolean; silent: boolean }
 
 /** Share of the bars in [from, to) where `part` plays at `level` or louder; 0 without that part. */
 export function share(a: TrackArrangement, part: string, from: number, to: number, level = 1): number {
@@ -41,7 +58,7 @@ export function share(a: TrackArrangement, part: string, from: number, to: numbe
 }
 
 /** The track's sections as it was produced (phrase by phrase), before fitting them to our rules. */
-export function readSections(a: TrackArrangement): { kind: SectionKind; from: number; to: number }[] | null {
+export function readSections(a: TrackArrangement): Read[] | null {
   const n = Math.floor(a.bars / PHRASE)
   const ph = Array.from({ length: n }, (_, p) => {
     const f = (part: string, level = 1) => share(a, part, p * PHRASE, (p + 1) * PHRASE, level)
@@ -52,18 +69,45 @@ export function readSections(a: TrackArrangement): { kind: SectionKind; from: nu
       silent: Object.keys(a.parts).every((part) => f(part) < 0.1),
     }
   })
+  const kicks = ph.filter((p) => p.kick && !p.silent)
+  if (!kicks.length) return null
+  const top = Math.max(...kicks.map((p) => p.energy))
+  return sectionsOf(ph.map((x) => ({ kick: x.kick, drop: x.kick && (x.bass || x.energy >= DROP_ENERGY * top), silent: x.silent })), 0)
+}
+
+/**
+ * A reference track's sections, read from its mix bar by bar: phrases on the grid of its first
+ * drop (a track's phrases needn't start on its first bar); no kick = breakdown, full = drop. Null
+ * for a profile from before it kept the bars' kicks, or one without a drop.
+ */
+export function readReference(p: MixProfile): Read[] | null {
+  if (!p.bar_kick || !p.bar_full || !p.drops.length) return null
+  const off = p.drops[0].bar % PHRASE
+  const n = Math.floor((p.bars - off) / PHRASE)
+  const ph = Array.from({ length: n }, (_, i) => {
+    const bars = Array.from({ length: PHRASE }, (_, k) => off + i * PHRASE + k)
+    const f = (xs: boolean[]) => bars.filter((b) => xs[b]).length / PHRASE
+    const kick = f(p.bar_kick!) >= PLAYS
+    return {
+      kick, drop: kick && f(p.bar_full!) >= PLAYS,
+      silent: bars.filter((b) => (p.bar_lufs[b] ?? -200) < SILENT_LUFS).length / PHRASE >= 0.9,
+    }
+  })
+  return sectionsOf(ph, off)
+}
+
+/** Phrases (from bar `off`) as sections, before fitting them to our rules. */
+function sectionsOf(ph: Phrase[], off: number): Read[] | null {
+  const n = ph.length
   let first = 0
   let last = n - 1
   while (first < n && ph[first].silent) first++
   while (last > first && ph[last].silent) last--
   if (last - first + 1 < 8) return null
-  const kicks = ph.slice(first, last + 1).filter((p) => p.kick)
-  if (!kicks.length) return null
-  const top = Math.max(...kicks.map((p) => p.energy))
   const kinds: SectionKind[] = []
   for (let p = first; p <= last; p++) {
     const x = ph[p]
-    kinds.push(!x.kick ? 'break' : x.bass || x.energy >= DROP_ENERGY * top ? 'drop' : 'build')
+    kinds.push(!x.kick ? 'break' : x.drop ? 'drop' : 'build')
   }
   const d0 = kinds.indexOf('drop')
   const d1 = kinds.lastIndexOf('drop')
@@ -80,9 +124,9 @@ export function readSections(a: TrackArrangement): { kind: SectionKind; from: nu
     while (j > d0 && kinds[j - 1] === 'build') j--
     if (kinds[j - 1] !== 'break') kinds[i] = 'drop'
   }
-  const out: { kind: SectionKind; from: number; to: number }[] = []
+  const out: Read[] = []
   kinds.forEach((k, i) => {
-    const bar = (first + i) * PHRASE
+    const bar = off + (first + i) * PHRASE
     const prev = out[out.length - 1]
     if (prev && prev.kind === k) prev.to = bar + PHRASE
     else out.push({ kind: k, from: bar, to: bar + PHRASE })
@@ -107,10 +151,12 @@ function kickModeOf(a: TrackArrangement, from: number, to: number, rng: Rng): Ki
  * grammar, fitted to [minBars, maxBars] only when outside it), its rules, and a few changes.
  * Null when the arrangement doesn't read as a dance track (too short, no drop).
  */
-export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, maxBars: number): Template | null {
-  const read = readSections(a)
+type Part = Raw & { from: number; to: number }
+
+/** Sections as read, in the generator's grammar: an intro, a build or a drop next, builds into drops, a DJ outro. */
+function shape(read: Read[] | null): Part[] | null {
   if (!read || read.length < 3) return null
-  const parts: (Raw & { from: number; to: number })[] = read.map((r) => ({ kind: r.kind, bars: r.to - r.from, from: r.from, to: r.to }))
+  const parts: Part[] = read.map((r) => ({ kind: r.kind, bars: r.to - r.from, from: r.from, to: r.to }))
   // The generator's grammar: an intro, then a build or a drop; builds run into a drop.
   if (parts[1].kind === 'break') parts[1].kind = 'build'
   for (let i = 1; i < parts.length - 1; i++) {
@@ -129,9 +175,23 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
     merged.push({ kind: 'outro', bars: 16, from: end.to, to: end.to + 16 })
   }
   if (merged[0].kind !== 'intro' || merged.at(-1)!.kind !== 'outro' || !merged.some((p) => p.kind === 'drop')) return null
+  return merged
+}
 
-  const s: (Raw & { from: number; to: number })[] = merged.map((p) => {
-    const x: Raw & { from: number; to: number } = { ...p, bars: clampBars(p.kind, p.bars) }
+/** The longest breakdown is the long one (when there are several, or it is 16 bars or more). */
+function markLong(s: Part[]): void {
+  const breaks = s.filter((x) => x.kind === 'break')
+  const longest = Math.max(0, ...breaks.map((x) => x.bars))
+  const long = breaks.filter((x) => x.bars === longest)
+  if (long.length === 1 && (breaks.length > 1 || longest >= 16)) long[0].long = true
+}
+
+export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, maxBars: number): Template | null {
+  const merged = shape(readSections(a))
+  if (!merged) return null
+
+  const s: Part[] = merged.map((p) => {
+    const x: Part = { ...p, bars: clampBars(p.kind, p.bars) }
     if (p.kind === 'break') x.kick = kickModeOf(a, p.from, p.to, rng)
     if (p.kind === 'build') {
       const mid = Math.round((p.from + p.to) / 2)
@@ -143,10 +203,7 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
     if (p.kind === 'drop') x.switchHalfway = rng.chance(0.3)
     return x
   })
-  const breaks = s.filter((x) => x.kind === 'break')
-  const longest = Math.max(0, ...breaks.map((x) => x.bars))
-  const long = breaks.filter((x) => x.bars === longest)
-  if (long.length === 1 && (breaks.length > 1 || longest >= 16)) long[0].long = true
+  markLong(s)
 
   // ---- the rules the producer chose ----
   const rules: Record<string, unknown> = {}
@@ -242,7 +299,18 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
     rules.fx = busy < 0.12 ? 'sparse' : busy < 0.3 ? 'normal' : 'busy'
   }
 
-  // ---- make it new: a few rules drawn again, a section a phrase longer or shorter, … ----
+  const { sections, changes } = makeNew(s, rules, rng, minBars, maxBars, a.source_code)
+  return { source: a.source_code, label: a.source_code, sections, rules, changes }
+}
+
+/**
+ * Made new: a few rules drawn again, a section a phrase longer or shorter, sometimes another
+ * breakdown kick or build; then fitted to [minBars, maxBars] when outside it. `src`: the
+ * arrangement the sections stand for (their rides), none for a reference.
+ */
+function makeNew(s: Part[], rules: Record<string, unknown>, rng: Rng, minBars: number, maxBars: number, src: string | null): { sections: Section[]; changes: string[] } {
+  const where = (kind: SectionKind) => s.filter((x) => x.kind === kind)
+  const brks = where('break')
   const changes: string[] = []
   for (const k of Object.keys(rules)) if (rng.chance(REDRAW)) delete rules[k]
   const middle = s.filter((x) => x.kind !== 'intro' && x.kind !== 'outro')
@@ -274,7 +342,57 @@ export function templateFrom(a: TrackArrangement, rng: Rng, minBars: number, max
   if (lb && s.some((x) => x !== lb && x.kind === 'break' && x.bars >= lb.bars)) delete lb.long
   s.filter((x) => x.kind === 'drop').at(-1)!.peak = true
   const total = s.reduce((n, x) => n + x.bars, 0)
-  const raw: Raw[] = s.map(({ from, to, ...x }) => ({ ...x, src: { code: a.source_code, from, to } }))
+  const raw: Raw[] = s.map(({ from, to, ...x }) => (src ? { ...x, src: { code: src, from, to } } : x))
   if (total < minBars || total > maxBars) fit(rng, raw, total < minBars ? minBars : maxBars)
-  return { source: a.source_code, sections: layout(raw), rules, changes }
+  return { sections: layout(raw), changes }
+}
+
+/**
+ * A template from a reference track (a finished mix): its sections as read from its mix, the kick
+ * in its breakdowns, builds that rise or not, the kick out in the bar before its drops, and its
+ * arc. Everything a mix doesn't tell (hats, tops, bass in breakdowns, …) the generator draws.
+ * Null when the profile doesn't read as a dance track or is from before it kept the bars' kicks.
+ */
+export function templateFromReference(ref: ReferenceTrack, rng: Rng, minBars: number, maxBars: number): Template | null {
+  const p = ref.profile
+  if (!p) return null
+  const merged = shape(readReference(p))
+  if (!merged) return null
+  const kickShare = (from: number, to: number) => {
+    let n = 0
+    for (let b = from; b < to; b++) if (p.bar_kick![b]) n++
+    return to > from ? n / (to - from) : 0
+  }
+  const loud = (from: number, to: number) => {
+    const xs = p.bar_lufs.slice(from, to).filter((v): v is number => v != null)
+    return xs.length ? 10 * Math.log10(xs.reduce((n, v) => n + 10 ** (v / 10), 0) / xs.length) : null
+  }
+  const s: Part[] = merged.map((x0) => {
+    const x: Part = { ...x0, bars: clampBars(x0.kind, x0.bars) }
+    if (x0.kind === 'break') {
+      const k = kickShare(x0.from, x0.to)
+      x.kick = k < 0.15 ? 'out' : k >= PLAYS ? rng.weighted([['thin', 2], ['filtered', 1], ['sweep', 0.5]] as const) : pickKickMode(rng)
+    }
+    if (x0.kind === 'build') {
+      const mid = Math.round((x0.from + x0.to) / 2)
+      const a = loud(x0.from, mid)
+      const z = loud(mid, x0.to)
+      x.build = a != null && z != null && z - a >= RISING_LU ? rng.weighted([['layered', 3], ['doubletime', 1]] as const)
+        : rng.chance(0.4) ? 'all' : pickBuildStyle(rng)
+    }
+    if (x0.kind === 'drop') x.switchHalfway = rng.chance(0.3)
+    return x
+  })
+  markLong(s)
+  const rules: Record<string, unknown> = {}
+  const into = s.filter((x) => x.kind === 'drop' && x.from >= 4)
+  if (into.length) {
+    const outs = into.filter((d) => !p.bar_kick![d.from - 1] && kickShare(d.from - 4, d.from - 1) > 0)
+    rules.dropKickOut = outs.length / into.length >= PLAYS
+  }
+  const { sections, changes } = makeNew(s, rules, rng, minBars, maxBars, null)
+  return {
+    source: ref.name, label: `the reference “${ref.name}”`, sections, rules, changes,
+    arc: { liftLu: p.lift_lu, breakDepthLu: p.break_depth_lu },
+  }
 }
