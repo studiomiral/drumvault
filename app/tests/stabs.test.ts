@@ -195,12 +195,23 @@ describe('moments are levelled hit for hit too: disco hits, fills, impacts, cras
     expect(a.gainDb).toBe(0)
     expect(loud.gainDb).toBe(-6)
     expect(quiet.gainDb).toBeGreaterThan(0)
-    // No fill above the kick, however quiet its sample.
-    for (const c of [a, loud, quiet]) expect(levelOf(p, 'Fills') + c.gainDb).toBeLessThanOrEqual(levelOf(p, 'Kick') - 1)
+    // No fill's hits above the kick's, however quiet its sample (loudness, not gain: a quiet fill may take more gain than the kick).
+    const hitAt = (c: Clip, name: string) => hitLoudness(all.get(c.sample.relPath))! + levelOf(p, name) + c.gainDb
+    const kickHit = hitAt(p.clips.find((c) => c.laneId === 'Kick')!, 'Kick')
+    for (const c of [a, loud, quiet]) expect(hitAt(c, 'Fills')).toBeLessThanOrEqual(kickHit - 1 + 0.25)
     // Doing it again changes nothing.
     const was = p.clips.map((c) => c.gainDb)
     levelLanes(p, all, { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0)
     expect(p.clips.map((c) => c.gainDb)).toEqual(was)
+  })
+
+  it('follows the clap when the mix check moves it afterwards (hit lanes only)', () => {
+    const p = run([ev('Fills', fillA, 0), pat('Disco Hit', disco, [0], 0, 4)], ['Fills', 'Disco Hit'])
+    const before = { fills: levelOf(p, 'Fills'), kick: levelOf(p, 'Kick'), clap: levelOf(p, 'Clap') }
+    p.lanes.find((l) => l.name === 'Clap')!.levelDb! -= 3      // what checkMix may do to the clap
+    levelLanes(p, all, { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0, undefined, undefined, true)
+    expect(levelOf(p, 'Fills')).toBe(before.fills - 3)       // still 1 dB under the clap's hits
+    expect([levelOf(p, 'Kick'), levelOf(p, 'Clap')]).toEqual([before.kick, before.clap - 3])  // the other lanes as they are
   })
 })
 
@@ -531,6 +542,20 @@ describe('one stab loop in a generated track', () => {
     return c.steps.slice(from, from + 16)
   }
 
+  it('never rests inside a drop: some stab plays in every bar of every drop', () => {
+    let long = 0
+    for (const g of gens.filter((x) => x.rules.stabs && stabLanes(x).length)) {
+      for (const d of g.sections.filter((s) => s.kind === 'drop')) {
+        if (d.bars >= 32) long++
+        for (let b = d.start; b < d.start + d.bars; b++) {
+          const any = stabLanes(g).some((l) => stepsAt(bar(g, l, b), b).some(Boolean))
+          expect(any, `seed ${g.seed}: no stab in bar ${b} (drop ${d.start}–${d.start + d.bars})`).toBe(true)
+        }
+      }
+    }
+    expect(long).toBeGreaterThan(10)
+  })
+
   it('plays the whole loop in the drops, every hit full: a layer with the main sound, a little under it; the pickups on their own', () => {
     const seen = new Set<string>()
     for (const g of gens) {
@@ -540,7 +565,6 @@ describe('one stab loop in a generated track', () => {
       const drops = g.sections.filter((s) => s.kind === 'drop')
       const d = drops[drops.length - 1]
       for (let b = d.start; b < d.start + 4; b++) {
-        if (g.rules.stabsRest && d.bars >= 32 && b >= d.start + 16 && b < d.start + 24) continue
         const parts = lanes.map((l) => stepsAt(bar(g, l, b), b))
         const want = (g.rules.stabRhythm as number[][])[(b - d.start) % (g.rules.stabRhythm as number[][]).length]
         expect(parts.reduce((n, p) => n.map((v, i) => Math.max(v, p[i])), new Array(16).fill(0)).map(Boolean)).toEqual(want.map(Boolean))

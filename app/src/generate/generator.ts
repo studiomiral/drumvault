@@ -155,6 +155,8 @@ function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOpt
   eqLanes(project, byPath, opts.templates ?? [], drops, laneRole, only)
   // The whole mix against the user's tracks (a whole track only: one lane made again keeps the rest's levels).
   const mix = only ? null : checkMix(project, byPath, opts.templates ?? [], drops, laneRole, punch)
+  // The mix check may have moved the clap: the stabs and the moments (fills, …) go by its hits, so they follow.
+  if (mix?.moves.length) levelLanes(project, byPath, balance, drops, laneRole, startingDb, undefined, punch, true)
   // The track's lead sits a little over where the balance puts it (a stab still never over the kick).
   if (lead && measured) {
     const kick = project.lanes.find((l) => l.name === 'Kick')?.levelDb
@@ -1448,13 +1450,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       loop: stabLoopEarly,
     } : undefined),
     // How a phrase's last bar turns; a slow filter opening over the first bars of drop 1 or of every
-    // drop; a dark tease at the end of a long intro; drop 1 on the lean rhythm at first; a phrase of
-    // rest in long drops; delay throws on the last bar of every 8 or 16 bars, or only into breakdowns.
+    // drop; a dark tease at the end of a long intro; drop 1 on the lean rhythm at first (they never
+    // rest inside a drop); delay throws on the last bar of every 8 or 16 bars, or only into breakdowns.
     stabTurn: srng.weighted([['none', 2], ['drop', 3], ['push', 3], ['double', 2]] as const) as StabTurn,
     stabsOpen: srng.weighted([['none', 2], ['first', 3], ['each', 2]] as const),
     stabsTease: srng.chance(0.6),
     stabsGrow: srng.chance(0.5),
-    stabsRest: srng.chance(0.5),
     stabEcho: srng.weighted([['none', 2], ['8', 2], ['16', 3], ['breaks', 2]] as const),
     stabsIn: srng.weighted([['drops', 1], ['keys', 1]] as const),
     stabsBreaks: srng.weighted([['filtered', 2], ['none', 1]] as const),
@@ -1753,8 +1754,6 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       const opening = rules.stabsOpen === 'each' || (rules.stabsOpen === 'first' && drop === 0)
         ? Math.min(32, Math.max(PHRASE, Math.floor(n / 2 / PHRASE) * PHRASE)) : 0
       for (let b = a; b < z; b++) {
-        // A phrase of rest in a long drop: its third.
-        if (rules.stabsRest && n >= 4 * PHRASE && b >= a + 2 * PHRASE && b < a + 3 * PHRASE) continue
         const lean = rules.stabsGrow && drop === 0 && b < half
         const echo = rules.stabEcho === '8' ? phraseEnd(b) : rules.stabEcho === '16' ? (b - a) % (2 * PHRASE) === 2 * PHRASE - 1
           : rules.stabEcho === 'breaks' ? b === z - 1 && next?.kind === 'break' : false
@@ -3213,7 +3212,7 @@ export function rerollStabs(all: SampleListItem[], opts: GenerateOptions, g: Gen
 
 /** The rules the stab reroll draws again. */
 const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff', 'stabCount', 'stabTurns',
-  'stabFit', 'stabBass', 'stabTurn', 'stabsOpen', 'stabsTease', 'stabsGrow', 'stabsRest', 'stabEcho', 'stabLoop', 'stabLayout', 'stabAnnounce', 'stabRoll',
+  'stabFit', 'stabBass', 'stabTurn', 'stabsOpen', 'stabsTease', 'stabsGrow', 'stabEcho', 'stabLoop', 'stabLayout', 'stabAnnounce', 'stabRoll',
   'stabMove', 'stabMoveAt']
 
 /**

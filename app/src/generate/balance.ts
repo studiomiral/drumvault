@@ -158,10 +158,13 @@ export function laneLoudness(clips: Clip[], samples: Map<string, SampleListItem>
  * Each generated lane's level (`Lane.levelDb`): what brings it, with its slider at 0 dB, to its
  * place against the kick. `starting`: each lane's step in the starting mix (layers sit that much
  * under the lane they layer), and the level of a lane nothing on is measured for. `only`: just
- * these lanes (the rest keep theirs). The number of lanes levelled from their measured samples.
+ * these lanes (the rest keep theirs). `hitsOnly`: just the lanes levelled hit for hit, against the
+ * clap and kick as they are now (after the mix check moved them). The number of lanes levelled
+ * from their measured samples.
  */
 export function levelLanes(project: Project, samples: Map<string, SampleListItem>, balance: Balance, drops: [number, number][],
-                           roleOf: (laneName: string) => Role | undefined, starting: (role: Role) => number, only?: Set<string>, punch?: PunchRefs): number {
+                           roleOf: (laneName: string) => Role | undefined, starting: (role: Role) => number, only?: Set<string>, punch?: PunchRefs,
+                           hitsOnly = false): number {
   const roles = new Map(project.lanes.map((l) => [l.id, roleOf(l.name)]))
   const present = new Set([...roles.values()].filter((r): r is Role => !!r))
   const partOf = (r: Role) => PART[r] ?? (GROUP[r] ?? r)
@@ -185,7 +188,7 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
     const loud = lane && hitLoudness(mainOf(lane.id))
     return lane && loud != null ? loud + (lane.levelDb ?? 0) : null
   }
-  for (const lane of project.lanes) {
+  for (const lane of hitsOnly ? [] : project.lanes) {
     if (only && !only.has(lane.id)) continue
     const role = roles.get(lane.id)
     if (!role || HIT_DB[role] != null) continue
@@ -221,13 +224,18 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
       continue
     }
     measured++
-    lane.levelDb = Math.round(Math.max(-MAX_LEVEL_DB, Math.min(MAX_LEVEL_DB, ceiling, want - own)) * 2) / 2
+    // Fills: never louder than the kick's hits (a fill sample is often much quieter than a kick
+    // sample, so it may take more gain than the kick's lane); the others never past the kick's gain.
+    const loudCap = role === 'fills' && kick != null
+    const cap = loudCap ? kick! - FILL_UNDER_KICK_DB - own : ceiling
+    lane.levelDb = Math.round(Math.max(-MAX_LEVEL_DB, Math.min(MAX_LEVEL_DB, cap, want - own)) * 2) / 2
     if (!TRIMMED.has(role)) continue
     for (const c of project.clips) {
       if (c.laneId !== lane.id || c.type !== 'audio' || c.bass) continue
       const h = hitLoudness(samples.get(c.sample.relPath))
       // Its own hits at the main sample's level, and with that never above the kick either.
-      const trim = h == null ? 0 : Math.max(-MAX_TRIM_DB, Math.min(MAX_TRIM_DB, own - h, ceiling - lane.levelDb))
+      const over = h == null ? 0 : loudCap ? kick! - FILL_UNDER_KICK_DB - h - lane.levelDb : ceiling - lane.levelDb
+      const trim = h == null ? 0 : Math.max(-MAX_TRIM_DB, Math.min(MAX_TRIM_DB, own - h, over))
       const was = c.gainDb
       c.gainDb = Math.round(trim * 2) / 2 || 0
       if (c.gainTo != null) c.gainTo += c.gainDb - was
@@ -243,6 +251,8 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
 export const STAB_VS_CLAP_DB = 0
 export const STAB_VS_KICK_DB = -6
 export const STAB_UNDER_KICK_DB = 1
+/** A fill's hits stay this far under the kick's hits (dB): loudness against loudness, not gain against gain. */
+export const FILL_UNDER_KICK_DB = 1
 /**
  * The lanes levelled hit for hit, and how far under the clap's hits one of theirs sits (dB): the
  * stabs and the moments. Few, short sounds: an average over the bar (how the references' parts are

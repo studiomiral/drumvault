@@ -66,7 +66,7 @@ export function characterRules(c: Character, rng: Rng, kickEnds: readonly (reado
       clapRolls: rolls, stabsOpen: 'none', phraseFill: true, phraseCrash: true }
   }
   if (c === 'drums') {
-    return { stringsIn: false, discoIn: false, fx: 'sparse', stabCount: 1, stabsRest: true, stabsGrow: true, perc2From: 0, dropTops: 3, kickEnd8: kickEnd,
+    return { stringsIn: false, discoIn: false, fx: 'sparse', stabCount: 1, stabsGrow: true, perc2From: 0, dropTops: 3, kickEnd8: kickEnd,
       clapGhost: ghost, stabEcho: 'breaks', gluePerc: 'through' }
   }
   return { stringsIn: true, stringsAt: 'later', stabsIn: 'keys', stabsBreaks: 'filtered', bassBreaks: 'filtered', fx: 'normal', ride: 'late', stabsCutoff: midCut,

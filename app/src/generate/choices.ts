@@ -157,8 +157,6 @@ CHOICES.push(
   { rule: 'stabsOpen', label: 'Stab filter', group: 'Drops', roles: STAB_ROLES, when: fitted,
     options: [{ value: 'none', label: 'open' }, { value: 'first', label: 'opens over drop 1' }, { value: 'each', label: 'opens over every drop' }] },
   { rule: 'stabsGrow', label: 'Stabs in drop 1', group: 'Drops', roles: STAB_ROLES, when: fitted, options: yesNo('lean at first, full halfway', 'full from the start') },
-  { rule: 'stabsRest', label: 'Stabs in long drops', group: 'Drops', roles: STAB_ROLES, when: (g) => fitted(g) && g.sections.some((s) => s.kind === 'drop' && s.bars >= 32),
-    options: yesNo('rest for a phrase', 'play through') },
   { rule: 'stabsTease', label: 'Stabs', group: 'Intro & outro', roles: STAB_ROLES,
     when: (g) => fitted(g) && g.sections[0]?.kind === 'intro' && g.sections[0].bars >= 24, options: yesNo('teased at the end of the intro', 'not before the drop') },
 )
