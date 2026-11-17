@@ -35,7 +35,7 @@ export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   }
   const newButton = (
     <Button variant="secondary" onClick={reroll}
-            title="Other disco hits and/or other places for them in this track; the rest stays (← goes back)">
+            title="Other disco hits and/or other places for them in this track; the rest stays (⌘Z goes back)">
       {used.length ? 'New disco hits' : 'Add disco hits'}
     </Button>
   )

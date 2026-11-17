@@ -242,6 +242,10 @@ export interface MixProfile {
   /** True peak over integrated loudness. */
   plr_db: number | null;
   bar_lufs: (number | null)[];
+  /** Per bar: its lows (dB), whether it's full (a drop's), whether a kick plays. Absent in profiles measured before. */
+  bar_low_db?: (number | null)[];
+  bar_full?: boolean[];
+  bar_kick?: boolean[];
   full_bars: number;
   full_lufs: number | null;
   /** dB of the whole, in the drops: lows, low mids, mids, high mids, highs. */

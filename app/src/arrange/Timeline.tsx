@@ -17,6 +17,9 @@ import { onPeaks } from './peaks'
 
 export const SAMPLE_MIME = 'application/x-drumvault-sample'
 
+/** The last fit request the timeline zoomed for (it may come while the timeline isn't shown). */
+let fitted = 0
+
 type Drag =
   | { kind: 'move'; x0: number; y0: number; lane0: number; ids: string[]; primary: Clip; copy: boolean; moved: boolean }
   | { kind: 'resize-r' | 'resize-l'; x0: number; ids: string[]; primary: Clip }
@@ -47,6 +50,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
   const base = useRef<HTMLCanvasElement>(null)
   const over = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ w: 800, h: 400 })
+  const [measured, setMeasured] = useState(false)
   const [peaksVersion, setPeaksVersion] = useState(0)
   const drag = useRef<Drag | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -62,10 +66,22 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
 
   useLayoutEffect(() => {
     const el = wrap.current!
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }))
+    const ro = new ResizeObserver(() => {
+      setSize({ w: el.clientWidth, h: el.clientHeight })
+      setMeasured(true)
+    })
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // A track put on screen: zoomed to fit the window, from bar 1 (once measured).
+  const fit = useArrange((s) => s.fit)
+  useEffect(() => {
+    if (!measured || fit === fitted) return
+    fitted = fit
+    const beats = project.lengthBars * BEATS_PER_BAR
+    setView({ pxPerBeat: Math.max(MIN_PX_PER_BEAT, Math.min(MAX_PX_PER_BEAT, (size.w - 24) / beats)), scrollX: 0, scrollY: 0 })
+  }, [fit, measured, size.w, project.lengthBars, setView])
 
   // Keep scroll inside the content.
   const maxX = Math.max(0, (project.lengthBars * BEATS_PER_BAR + 8) * px - size.w)
@@ -613,6 +629,7 @@ export function Timeline({ onMarkerEdit }: { onMarkerEdit: (m: Marker, x: number
               onMouseDown={onMouseDown} onMouseMove={onMouseMove} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
       <HScrollbar width={size.w} contentWidth={(project.lengthBars * BEATS_PER_BAR + 8) * px} />
+      <VScrollbar height={size.h - TOP} contentHeight={lanesHeight(project.lanes) + 60} />
     </div>
   )
 }
@@ -646,6 +663,33 @@ function fitFades<T extends Clip>(c: T): T {
   const fadeOut = Math.min(c.fadeOut ?? 0, c.length)
   const fadeIn = Math.min(c.fadeIn ?? 0, c.length - fadeOut)
   return { ...c, fadeIn: fadeIn || undefined, fadeOut: fadeOut || undefined }
+}
+
+/** The lanes' vertical scrollbar, below the markers and ruler; only when they don't fit. */
+function VScrollbar({ height, contentHeight }: { height: number; contentHeight: number }) {
+  const { scrollY, setView } = useArrange()
+  const max = Math.max(0, contentHeight - height)
+  if (max <= 0) return null
+  const thumb = Math.max(40, (height / contentHeight) * height)
+  const top = (Math.min(scrollY, max) / max) * (height - thumb)
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const y0 = e.clientY
+    const s0 = scrollY
+    const move = (ev: MouseEvent) => setView({ scrollY: Math.max(0, Math.min(max, s0 + ((ev.clientY - y0) / (height - thumb)) * max)) })
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+  return (
+    <div className="absolute right-0 bottom-2.5 w-2.5" style={{ top: TOP }}>
+      <div onMouseDown={startDrag} className="absolute left-0.5 w-1.5 rounded-full bg-[rgb(255_255_255/0.18)] hover:bg-[rgb(255_255_255/0.3)]"
+           style={{ top, height: thumb }} />
+    </div>
+  )
 }
 
 function HScrollbar({ width, contentWidth }: { width: number; contentWidth: number }) {

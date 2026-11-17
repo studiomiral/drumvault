@@ -1,10 +1,11 @@
-// Generate view session (SCOPE.md §6.6): the generations made this session, keep toggles and
-// options. The next generation is computed and its audio decoded ahead of time, so cycling is
-// instant.
+// Create's session (SCOPE.md §6.6): the tracks made this session, keep toggles and options. The
+// next generation is computed and its audio decoded ahead of time, so cycling is instant.
 //
-// The modules (Bass, Chords, Disco Hits, a lane's sound and choices) act on "the track": in
-// Generate the generation on screen, in Arrange the open project when it was sent from Generate
-// (it keeps its generation, Project.generation). There a change is an edit of the project (⌘Z).
+// The track on screen is always the open project (useProject): a generation is loaded into it as a
+// scratch track, which is saved only once it's kept (edited by hand, starred, exported). The
+// modules (Bass, Chords, Disco Hits, a lane's sound and choices) act on it through its generation
+// (Project.generation); every change is an edit of the project (⌘Z). The history holds the tracks
+// cycled through (← / →), each as it was left.
 
 import { create } from 'zustand'
 import { api } from '../api'
@@ -26,8 +27,11 @@ import { hitSampleId, hitTranspose } from '../generate/disco'
 import { bassModel, generateBassline, generatedMidi, isGenerated } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
 import { bestOf, bestOfSteps, CANDIDATES } from '../generate/score'
-import { newProject, uid } from '../lib/project'
+import { serializeProject } from '../lib/project'
+import { nextGeneratedName, onProjects, openProject, refreshProjectList, saveNow, createProject, deleteCurrentProject } from '../arrange/persistence'
+import { useArrange } from './arrange'
 import type { HitItem, SampleListItem, SavedStabRhythm, TrackArrangement } from '../types/api'
+import type { ReferenceTrack } from '../types/engine'
 import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
 import { attempt, useApp } from './app'
 import { useProject } from './project'
@@ -175,6 +179,8 @@ interface GenerateState {
   samples: SampleListItem[] | null
   /** Real tracks' arrangements: structure templates for most generations. */
   templates: TrackArrangement[]
+  /** Reference tracks (measured): structure templates beside the zips', and the arc candidates are scored on. */
+  references: ReferenceTrack[]
   history: Generation[]
   index: number
   settings: GenerateSettings
@@ -182,12 +188,13 @@ interface GenerateState {
   lanes: LaneToggles
   /** The next generation, computed (and preloaded) ahead of time for the current keep/options. */
   pending: Generation | null
-  /** Generations starred to keep (saved in the library), newest last. */
-  shortlist: ShortlistItem[]
+  /** The open project isn't one of the history's tracks (a track built by hand, or none yet). */
+  detached: boolean
   set(patch: Partial<Omit<GenerateState, 'set'>>): void
 }
 
-export interface ShortlistItem {
+/** Starred generations of the old shortlist (.drumvault/shortlist.json): moved to the saved tracks. */
+interface ShortlistItem {
   id: string
   savedAt: string
   g: Generation
@@ -196,35 +203,48 @@ export interface ShortlistItem {
 export const useGenerate = create<GenerateState>((set) => ({
   samples: null,
   templates: [],
+  references: [],
   history: [],
   index: -1,
   settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), locks: savedLocks() },
   keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
   lanes: { mute: [], solo: [] },
   pending: null,
-  shortlist: [],
+  detached: true,
   set: (patch) => set(patch),
 }))
 
-const EMPTY = newProject('Generate', 124)
+/** How a track of the history was left: its file once saved, and whether it's still a scratch track. */
+interface Entry {
+  file: string | null
+  scratch: boolean
+}
+const entries = new WeakMap<Generation, Entry>()
+const entryOf = (g: Generation): Entry => entries.get(g) ?? { file: null, scratch: true }
 
-const inArrange = () => useApp.getState().view === 'arrange'
-
-/** The generation on screen in Generate. */
-function generated(): Generation | null {
-  const { history, index } = useGenerate.getState()
-  return history[index] ?? null
+/** The history's tracks not saved yet, and the prefetched one: settings changes follow into them. */
+function scratchTracks(): Generation[] {
+  const { history, index, detached, pending } = useGenerate.getState()
+  // (The one on screen follows in the project itself.)
+  return [...history.filter((g, i) => entryOf(g).scratch && (detached || i !== index)), ...(pending ? [pending] : [])]
 }
 
 /**
- * The track the modules act on: Generate's generation on screen, or in Arrange the open project's
- * (a copy to change: `apply` writes it back), when it was sent from Generate.
+ * The track the modules act on: the open project's generation (a copy to change: `apply` writes
+ * it back), or null for a track built by hand.
  */
 export function current(): Generation | null {
-  return inArrange() ? arrangeTrack(useProject.getState().project) : generated()
+  return arrangeTrack(useProject.getState().project)
 }
 
-/** A project sent from Generate as its generation (a copy), its bass as its clips play it now. */
+/** A change to the track on screen that keeps it a scratch track (a setting followed, not a hand edit). */
+function onScreen(label: string, recipe: (p: Project) => void, coalesce?: string): void {
+  const st = useProject.getState()
+  if (!st.project.generation) return
+  st.edit(label, (d) => recipe(d as Project), { coalesce, keepScratch: true })
+}
+
+/** A project's generation (a copy), its bass as its clips play it now. */
 export function arrangeTrack(project: Project): Generation | null {
   if (!project.generation) return null
   const { generation, ...rest } = project
@@ -252,41 +272,19 @@ export function metaOf(g: Generation): GenerationMeta {
 }
 
 /**
- * `next` becomes the track: in Generate a new step in the history right after the current one
- * (`step` 'new': ← goes back to it) or the current one changed ('same'); in Arrange an edit of
- * the project named `label` (⌘Z goes back). Its clips `ids` load, and swap in at the playhead.
+ * `next` becomes the track: an edit of the project named `label` (⌘Z goes back), which keeps a
+ * scratch track a scratch track. Changes in place (`step` 'same': a patch, a note dragged) are one
+ * undo step while they keep coming. Its clips `ids` load, and swap in at the playhead.
  */
 function apply(next: Generation, ids: Iterable<string>, label: string, step: 'new' | 'same' = 'new'): void {
-  if (inArrange()) {
-    // Changes in place (a patch, a note dragged) one undo step while they keep coming.
-    useProject.getState().edit(label, (d) => {
-      d.clips = next.project.clips
-      d.lanes = next.project.lanes
-      d.generation = metaOf(next)
-    }, { coalesce: step === 'same' ? `generation-${label}` : undefined })
-    const p = useProject.getState().project
-    playback.syncLanes(p.lanes)
-    void playback.reloadClips(p, ids)
-    return
-  }
-  const { history, index, set } = useGenerate.getState()
-  const h = [...history]
-  if (step === 'new') {
-    h.splice(index + 1, 0, next)
-    set({ history: h, index: index + 1 })
-  } else {
-    const was = h[index]
-    h[index] = next
-    set({ history: h })
-    // A starred generation changed: its shortlisted copy follows.
-    const id = was && starred.get(was)
-    if (id) {
-      starred.set(next, id)
-      updateShortlisted(id, next)
-    }
-  }
-  playback.syncLanes(next.project.lanes)
-  void playback.reloadClips(next.project, ids)
+  useProject.getState().edit(label, (d) => {
+    d.clips = next.project.clips
+    d.lanes = next.project.lanes
+    d.generation = metaOf(next)
+  }, { coalesce: step === 'same' ? `generation-${label}` : undefined, keepScratch: true })
+  const p = useProject.getState().project
+  playback.syncLanes(p.lanes)
+  void playback.reloadClips(p, ids)
   invalidate()
 }
 
@@ -321,14 +319,15 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
     Object.assign(rules, { discoIn: true, discoCount: g.picks.disco2 ? 2 : 1 })
   }
   return {
-    structure: k.structure ? g.sections : undefined, key: k.key ? g.key : undefined, picks, rules,
+    structure: k.structure ? g.sections : undefined, arc: k.structure ? g.arc ?? null : undefined, key: k.key ? g.key : undefined, picks, rules,
     bassMidi: k.bassline ? g.bass?.midi : undefined, bassPreset: k.patch ? g.bass?.preset : undefined,
     bassEdit: k.bassline && g.bass?.notes ? { notes: g.bass.notes, bars: bassBars(g.bass) } : undefined,
   }
 }
 
-function options(): GenerateOptions {
-  const { settings, templates } = useGenerate.getState()
+/** The generator's options: for a new track (`fresh`, which sings no vocal) or the one on screen. */
+function options(fresh = false): GenerateOptions {
+  const { settings, templates, references } = useGenerate.getState()
   const { basslines } = useBass.getState()
   const presets = bassPatches(settings.bass.source)
   const bass = settings.bass.enabled && basslines.length && presets.length
@@ -341,14 +340,14 @@ function options(): GenerateOptions {
   const stabs = settings.stabs.enabled && stabHits.length ? { hits: stabHits, rhythms: stabsSettings().rhythms ?? [] } : null
   const stringHits = hits.filter((h) => h.kind === 'strings')
   const strings = settings.strings.enabled && stringHits.length ? { hits: stringHits, sidechain: settings.strings.sidechain } : null
-  // Vocals are made in Arrange, one for the track open there (SCOPE.md §6.11): Generate sings none.
-  const take = inArrange() ? projectTake(useProject.getState().project) : null
+  // Vocals are made for one track (SCOPE.md §6.11): a new track sings none.
+  const take = fresh ? null : projectTake(useProject.getState().project)
   const vocals = take ? { takes: [take] } : null
   const padPresets = useBass.getState().padPresets
   const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
   const bedHits = hits.filter((h) => h.kind === 'ambience')
   const ambience = settings.ambience.enabled && bedHits.length ? { hits: bedHits } : null
-  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates }
+  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates, references }
 }
 
 /**
@@ -358,9 +357,9 @@ function options(): GenerateOptions {
 function make(seed?: number): Generation | null {
   const { samples, keep } = useGenerate.getState()
   if (!samples?.length) return null
-  const opts = options()
-  const kept = keepFrom(generated(), keep)
-  const one = (s: number) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes })
+  const opts = options(true)
+  const kept = keepFrom(current(), keep)
+  const one = (s: number) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }, true)
   const g = seed != null ? one(seed) : bestOf(samples, randomSeed(), CANDIDATES, one)
   applyLaneToggles(g.project, useGenerate.getState().lanes)
   return g
@@ -370,9 +369,9 @@ function make(seed?: number): Generation | null {
 async function makeSoon(): Promise<Generation | null> {
   const { samples, keep } = useGenerate.getState()
   if (!samples?.length) return null
-  const opts = options()
-  const kept = keepFrom(generated(), keep)
-  const it = bestOfSteps(samples, randomSeed(), CANDIDATES, (s) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }))
+  const opts = options(true)
+  const kept = keepFrom(current(), keep)
+  const it = bestOfSteps(samples, randomSeed(), CANDIDATES, (s) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }, true))
   for (;;) {
     const r = it.next()
     if (r.done) {
@@ -384,9 +383,9 @@ async function makeSoon(): Promise<Generation | null> {
 }
 
 /** The track as the critic leaves it (critic.ts): its clashing loops swapped; as it is with "Listen back" off. */
-function listenBack(g: Generation, o: RefineOptions = {}): Generation {
+function listenBack(g: Generation, o: RefineOptions = {}, fresh = false): Generation {
   const { samples, settings } = useGenerate.getState()
-  return samples && settings.listenBack ? refine(samples, options(), g, o) : g
+  return samples && settings.listenBack ? refine(samples, options(fresh), g, o) : g
 }
 
 function applyLaneToggles(project: Project, t: LaneToggles): void {
@@ -407,20 +406,27 @@ export function toggleLaneEq(laneId: string): void {
   apply(next, [], eq.off ? 'EQ off' : 'EQ on', 'same')
 }
 
-/** Mute or solo a lane (M / S in the overview): this and every other generation follow. */
+/**
+ * Mute or solo a generated lane (M / S in its header): the track on screen (⌘Z), and the lane of
+ * that name stays so in the next tracks while cycling.
+ */
 export function toggleLane(name: string, what: 'mute' | 'solo'): void {
-  const { lanes, history, pending, set } = useGenerate.getState()
-  const list = lanes[what].includes(name) ? lanes[what].filter((n) => n !== name) : [...lanes[what], name]
-  const next = { ...lanes, [what]: list }
+  const { lanes, set } = useGenerate.getState()
+  const lane = useProject.getState().project.lanes.find((l) => l.name === name)
+  const on = lane ? !lane[what] : !lanes[what].includes(name)
+  const next = { ...lanes, [what]: [...lanes[what].filter((n) => n !== name), ...(on ? [name] : [])] }
   set({ lanes: next })
-  for (const g of [...history, pending]) if (g) applyLaneToggles(g.project, next)
-  const g = generated()
-  if (g) playback.syncLanes(g.project.lanes)
+  for (const g of scratchTracks()) applyLaneToggles(g.project, next)
+  const label = what === 'mute' ? (on ? 'Mute' : 'Unmute') : on ? 'Solo' : 'Unsolo'
+  onScreen(label, (p) => {
+    const l = p.lanes.find((x) => x.name === name)
+    if (l) l[what] = on
+  })
 }
 
 /**
  * A new sound for one lane, the rest of the track as it is (the overview's per-lane button):
- * added to the history right after the current generation (← goes back to it), and swapped in
+ * an edit of the track (⌘Z goes back), and swapped in
  * at the playhead while playing.
  */
 export function rerollLane(laneId: string): boolean {
@@ -547,7 +553,7 @@ export const LOCKABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove'
 
 /**
  * New disco hits for the current generation (the Disco Hits module's button): other hits and/or
- * other places, the rest of the track as it is. A new step in the history (← goes back).
+ * other places, the rest of the track as it is. An edit of the track (⌘Z goes back).
  */
 export function newDiscoHits(): boolean {
   const { samples } = useGenerate.getState()
@@ -561,7 +567,7 @@ export function newDiscoHits(): boolean {
 
 /**
  * New chord stabs for the current generation (the Chord Stabs module's button): other stabs, another
- * rhythm and placement, or stabs in a track that had none. A new step in the history (← goes back).
+ * rhythm and placement, or stabs in a track that had none. An edit of the track (⌘Z goes back).
  */
 export function newChordStabs(): boolean {
   const { samples } = useGenerate.getState()
@@ -605,12 +611,13 @@ function prefetch(): void {
  * follow at once (no re-roll), and the next ones are made with it. Remembered between sessions.
  */
 export function setLaneVolume(role: Role, volumeDb: number): void {
-  const { settings, history, pending, set } = useGenerate.getState()
+  const { settings, set } = useGenerate.getState()
   const mix = { ...settings.mix, [role]: volumeDb }
   set({ settings: { ...settings, mix } })
-  for (const g of [...history, pending]) if (g) applyMix(g.project, mix)
-  const g = current()
-  if (g) playback.syncLanes(g.project.lanes)
+  for (const g of scratchTracks()) applyMix(g.project, mix)
+  onScreen('Lane volume', (p) => {
+    for (const l of p.lanes) if (laneRole(l.name) === role) l.volumeDb = volumeDb
+  }, `vol-${role}`)
   try {
     localStorage.setItem(MIX_KEY, JSON.stringify(mix))
   } catch {
@@ -665,17 +672,17 @@ export function setGenerationBass(change: Partial<GenerationBass>, g: Generation
 
 /** Bass on/off and sidechain depth: remembered; the sidechain applies to the current generation at once. */
 export function setBassOptions(patch: Partial<GenerateSettings['bass']>): void {
-  const { settings, history, pending, set } = useGenerate.getState()
+  const { settings, set } = useGenerate.getState()
   const bass = { ...settings.bass, ...patch }
   set({ settings: { ...settings, bass } })
   // (Only when the amount itself moves: each track's sidechain was set for its own kick and bassline.)
   if (patch.sidechain !== undefined) {
-    for (const g of [...history, pending]) {
-      const lane = g?.project.lanes.find((l) => l.name === 'Bass')
+    for (const g of scratchTracks()) {
+      const lane = g.project.lanes.find((l) => l.name === 'Bass')
       if (lane) lane.duck = bass.sidechain
     }
+    duckOnScreen('Bass', bass.sidechain)
   }
-  if (patch.sidechain !== undefined) duckInArrange('Bass', bass.sidechain)
   try {
     localStorage.setItem(BASS_KEY, JSON.stringify(bass))
   } catch {
@@ -698,13 +705,12 @@ export function newBassline(bars: 1 | 2 | 4 | null = useGenerate.getState().sett
   return true
 }
 
-/** A sidechain slider moved while in Arrange: the project's lane follows. */
-function duckInArrange(lane: string, duck: number): void {
-  if (!inArrange() || !useProject.getState().project.generation) return
-  useProject.getState().edit('Sidechain', (d) => {
-    const l = d.lanes.find((x) => x.name === lane)
+/** A module's sidechain slider moved: the track's lane follows. */
+function duckOnScreen(lane: string, duck: number): void {
+  onScreen('Sidechain', (p) => {
+    const l = p.lanes.find((x) => x.name === lane)
     if (l) l.duck = duck
-  }, { coalesce: `duck-${lane}` })
+  }, `duck-${lane}`)
 }
 
 /**
@@ -712,18 +718,14 @@ function duckInArrange(lane: string, duck: number): void {
  * and prefetched generations (and a generated track in Arrange) follow it at once. Remembered.
  */
 export function setStringsOptions(patch: Partial<GenerateSettings['strings']>): void {
-  const { settings, history, pending, set } = useGenerate.getState()
+  const { settings, set } = useGenerate.getState()
   const strings = { ...settings.strings, ...patch }
   set({ settings: { ...settings, strings } })
-  for (const g of [...history, pending]) {
-    const lane = g?.project.lanes.find((l) => l.name === 'Strings')
+  for (const g of scratchTracks()) {
+    const lane = g.project.lanes.find((l) => l.name === 'Strings')
     if (lane) lane.duck = strings.sidechain
   }
-  if (patch.sidechain !== undefined) {
-    duckInArrange('Strings', strings.sidechain)
-    const g = current()
-    if (g) playback.syncLanes(g.project.lanes)
-  }
+  if (patch.sidechain !== undefined) duckOnScreen('Strings', strings.sidechain)
   try {
     localStorage.setItem(STRINGS_KEY, JSON.stringify(strings))
   } catch {
@@ -734,7 +736,7 @@ export function setStringsOptions(patch: Partial<GenerateSettings['strings']>): 
 
 /**
  * New strings for the current generation (the Strings module's button): another sample and
- * placement, or strings in a track that had none. A new step in the history (← goes back).
+ * placement, or strings in a track that had none. An edit of the track (⌘Z goes back).
  */
 /** The ambience bed on or off for new generations (remembered). */
 export function setAmbienceOptions(patch: Partial<GenerateSettings['ambience']>): void {
@@ -795,7 +797,7 @@ export function newStrings(): boolean {
   return true
 }
 
-/** The take the project open in Arrange sings (its generation's pick), once it's analysed. */
+/** The take the open track sings (its generation's pick), once it's analysed. */
 function projectTake(project: Project): VocalTake | null {
   const rel = project.generation?.picks.vocal?.rel_path
   if (!rel) return null
@@ -803,7 +805,7 @@ function projectTake(project: Project): VocalTake | null {
 }
 
 /**
- * A vocal made for the track open in Arrange (the Vocals module, SCOPE.md §6.11): a new take from
+ * A vocal made for the track on screen (the Vocals module, SCOPE.md §6.11): a new take from
  * ElevenLabs, sung in the track's key, then placed as Generate would (its phrase, chops or both,
  * and where). An edit of the project (⌘Z); the take it replaces is never offered again.
  */
@@ -816,8 +818,8 @@ export async function makeVocal(req: VocalRequest): Promise<void> {
     const take = await api.makeVocal(req)
     useVocals.setState((s) => ({ vocals: [...s.vocals.filter((v) => v.id !== take.id), take] }))
     const sung = `“${take.lines.join(' / ')}”`
-    if (!inArrange() || useProject.getState().project.createdAt !== was) {
-      toast('info', `The vocal ${sung} was made, but the track it was for isn't open in Arrange any more.`)
+    if (useProject.getState().project.createdAt !== was) {
+      toast('info', `The vocal ${sung} was made, but the track it was for isn't on screen any more.`)
       return
     }
     const { samples } = useGenerate.getState()
@@ -915,14 +917,16 @@ export function setHitPitchInTrack(hit: HitItem, pitch: number): void {
  * generations already made (their sends scale with it).
  */
 export function setVerbOptions(patch: Partial<GenerateSettings['verb']>): void {
-  const { settings, history, pending, set } = useGenerate.getState()
+  const { settings, set } = useGenerate.getState()
   const verb = { ...settings.verb, ...patch }
   set({ settings: { ...settings, verb } })
   if (patch.amount !== undefined && settings.verb.amount > 0) {
     const k = verb.amount / settings.verb.amount
-    for (const g of [...history, pending]) {
-      for (const c of g?.project.clips ?? []) if (c.verb) c.verb = { from: c.verb.from * k, to: c.verb.to * k }
+    const scale = (p: Project) => {
+      for (const c of p.clips) if (c.verb) c.verb = { from: c.verb.from * k, to: c.verb.to * k }
     }
+    for (const g of scratchTracks()) scale(g.project)
+    if (useProject.getState().scratch) onScreen('Reverb builds', scale, 'verb-amount')
   }
   try {
     localStorage.setItem(VERB_KEY, JSON.stringify(verb))
@@ -938,81 +942,62 @@ export function invalidate(): void {
 }
 
 export async function loadSamples(): Promise<void> {
-  const [samples, templates] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), loadBass(), loadHits(), loadVocals(), loadShortlist()])
-  useGenerate.getState().set({ samples, templates })
+  const [samples, templates, references] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), fetchReferences(),
+    loadBass(), loadHits(), loadVocals()])
+  useGenerate.getState().set({ samples, templates, references })
   prefetch()
+  void moveShortlist()
 }
 
-// ---- the shortlist: starred generations, saved in the library (.drumvault/shortlist.json) ----
+/** The measured reference tracks (none when the engine can't list them). */
+async function fetchReferences(): Promise<ReferenceTrack[]> {
+  try {
+    return (await api.scanReferences(false)).tracks.filter((t) => t.profile)
+  } catch {
+    return []
+  }
+}
 
-/** Generations in the history that are (copies of) shortlisted ones, by shortlist id. */
-const starred = new WeakMap<Generation, string>()
+/** The reference tracks again (after they were measured): the next tracks follow them. */
+export async function loadReferences(): Promise<void> {
+  useGenerate.getState().set({ references: await fetchReferences() })
+  invalidate()
+}
 
-async function loadShortlist(): Promise<void> {
+// ---- keeping a track: saved tracks are projects (.drumvault/projects) ----
+
+/** Whether the track on screen is saved (a project file, or kept and about to be). */
+export const isKept = (): boolean => !useProject.getState().scratch
+
+/** Keep the track on screen (★ / ⌘S): it's saved now and autosaved from then on. */
+export async function keepTrack(): Promise<void> {
+  useProject.getState().keep()
+  await saveNow()
+}
+
+/**
+ * The old shortlist's starred generations become saved tracks, once: the file keeps them under
+ * "migrated", so nothing is lost and they aren't moved twice.
+ */
+async function moveShortlist(): Promise<void> {
   try {
     const text = await api.readShortlist()
-    const items = text ? (JSON.parse(text) as ShortlistItem[]) : []
-    useGenerate.getState().set({ shortlist: Array.isArray(items) ? items : [] })
+    const items = text ? (JSON.parse(text) as unknown) : null
+    if (!Array.isArray(items) || !items.length) return
+    for (const item of items as ShortlistItem[]) {
+      const name = await nextGeneratedName()
+      const project = { ...item.g.project, name, createdAt: item.savedAt, generation: metaOf(item.g) }
+      await api.writeProject(null, name, serializeProject(project))
+    }
+    await api.writeShortlist(JSON.stringify({ migrated: items }))
+    await refreshProjectList()
+    useApp.getState().toast('info', `${items.length} starred track${items.length === 1 ? '' : 's'} moved to Saved.`)
   } catch (e) {
-    useApp.getState().toast('error', `Could not read the shortlist: ${(e as Error).message}`)
+    useApp.getState().toast('error', `Could not move the starred tracks to Saved: ${(e as Error).message}`)
   }
 }
 
-let saving: Promise<void> = Promise.resolve()
-
-function saveShortlist(items: ShortlistItem[]): void {
-  useGenerate.getState().set({ shortlist: items })
-  const text = JSON.stringify(items)
-  saving = saving.then(() => api.writeShortlist(text)).catch((e) => useApp.getState().toast('error', `Could not save the shortlist: ${(e as Error).message}`))
-}
-
-function updateShortlisted(id: string, g: Generation): void {
-  const items = useGenerate.getState().shortlist
-  if (items.some((x) => x.id === id)) saveShortlist(items.map((x) => (x.id === id ? { ...x, g: structuredClone(g) } : x)))
-}
-
-/** The shortlist id of a generation in the history, when it is starred. */
-export function shortlistId(g: Generation | null, items = useGenerate.getState().shortlist): string | null {
-  const id = g ? starred.get(g) : undefined
-  return id && items.some((x) => x.id === id) ? id : null
-}
-
-/** Star the generation on screen (S), or take it off the shortlist. */
-export function toggleStar(): void {
-  const g = generated()
-  if (!g) return
-  const items = useGenerate.getState().shortlist
-  const id = shortlistId(g, items)
-  if (id) {
-    saveShortlist(items.filter((x) => x.id !== id))
-    return
-  }
-  const item = { id: uid('s'), savedAt: new Date().toISOString(), g: structuredClone(g) }
-  starred.set(g, item.id)
-  saveShortlist([...items, item])
-}
-
-export function removeShortlisted(id: string): void {
-  saveShortlist(useGenerate.getState().shortlist.filter((x) => x.id !== id))
-}
-
-/** Open a shortlisted generation: it comes back at the end of the history, starred. */
-export function openShortlisted(id: string): void {
-  const item = useGenerate.getState().shortlist.find((x) => x.id === id)
-  if (!item) return
-  const at = useGenerate.getState().history.findIndex((g) => starred.get(g) === id)
-  if (at >= 0) {
-    show(at, 0)
-    return
-  }
-  const g = structuredClone(item.g)
-  applyLaneToggles(g.project, useGenerate.getState().lanes)
-  applyMix(g.project, useGenerate.getState().settings.mix)
-  starred.set(g, id)
-  const { history } = useGenerate.getState()
-  useGenerate.getState().set({ history: [...history, g] })
-  show(history.length, 0)
-}
+// ---- the history: cycling through tracks ----
 
 /** Section index the playhead is in (to keep listening to the same part). */
 function sectionAtPlayhead(g: Generation | null): number {
@@ -1022,52 +1007,136 @@ function sectionAtPlayhead(g: Generation | null): number {
   return Math.max(0, i)
 }
 
-function show(index: number, from?: number): void {
-  const was = playback.playing
-  const section = sectionAtPlayhead(generated())
-  useGenerate.getState().set({ index })
-  const g = generated()
+/** The track on screen goes back into the history as it is now (edits, saved file and all). */
+function commit(): void {
+  const { history, index, detached, set } = useGenerate.getState()
+  if (detached || !history[index]) return
+  const st = useProject.getState()
+  const g = arrangeTrack(st.project)
   if (!g) return
-  const start = from ?? (g.sections[Math.min(section, g.sections.length - 1)]?.start ?? 0) * 4
-  if (was || from != null) void playback.play(start)
-  else playback.setPosition(0)
+  entries.set(g, { file: st.file, scratch: st.scratch })
+  const h = [...history]
+  h[index] = g
+  set({ history: h })
 }
 
-/** A new generation (G / →), or the next one in the history when stepping forward. */
+/** Put a track of the history on screen. */
+function load(g: Generation): void {
+  const e = entryOf(g)
+  const project: Project = { ...structuredClone(g.project), generation: metaOf(g) }
+  useProject.getState().load(project, e.file, { scratch: e.scratch })
+  playback.syncLanes(project.lanes)
+  useArrange.getState().fitToTrack()
+  if (e.file) void useApp.getState().saveSettings({ lastProject: e.file })
+}
+
+/** Track switches one at a time: the one on screen is saved (when kept) before the next loads. */
+let switching: Promise<void> = Promise.resolve()
+function switchTo(fn: () => Promise<void> | void): Promise<void> {
+  switching = switching.catch(() => {}).then(async () => {
+    await saveNow()
+    commit()
+    await fn()
+  })
+  return switching
+}
+
+function show(index: number, from?: number): void {
+  void switchTo(() => {
+    const was = playback.playing
+    const section = sectionAtPlayhead(current())
+    const g = useGenerate.getState().history[index]
+    if (!g) return
+    useGenerate.getState().set({ index, detached: false })
+    load(g)
+    const start = from ?? (g.sections[Math.min(section, g.sections.length - 1)]?.start ?? 0) * 4
+    if (was || from != null) void playback.play(start)
+    else playback.setPosition(0)
+    if (useGenerate.getState().keep.lanes.length || useGenerate.getState().keep.structure || useGenerate.getState().keep.key) invalidate()
+  })
+}
+
+/** → : the next track of the history, or a new one at its end. */
+export function forward(): void {
+  const { history, index, detached } = useGenerate.getState()
+  if (!detached && index < history.length - 1) show(index + 1)
+  else next()
+}
+
+/** A new track (G): the best of CANDIDATES, or exactly the one a typed `seed` makes. */
 export function next(seed?: number): void {
-  const { history, index, pending } = useGenerate.getState()
-  if (seed == null && index < history.length - 1) {
-    show(index + 1)
-    return
-  }
-  const g = seed == null && pending ? pending : make(seed)
-  if (!g) return
-  useGenerate.getState().set({ history: [...history, g], pending: null })
-  show(history.length, playback.playing ? undefined : 0)
-  prefetch()
+  void switchTo(() => {
+    const { pending, history: h } = useGenerate.getState()
+    const was = playback.playing
+    const section = sectionAtPlayhead(current())
+    const g = seed == null && pending ? pending : make(seed)
+    if (!g) return
+    entries.set(g, { file: null, scratch: true })
+    useGenerate.getState().set({ history: [...h, g], index: h.length, pending: null, detached: false })
+    load(g)
+    const start = was ? (g.sections[Math.min(section, g.sections.length - 1)]?.start ?? 0) * 4 : 0
+    void playback.play(start)
+    prefetch()
+  })
 }
 
 export function previous(): void {
-  const { index } = useGenerate.getState()
-  if (index > 0) show(index - 1)
+  const { index, detached, history } = useGenerate.getState()
+  if (detached && history[index]) show(index)
+  else if (index > 0) show(index - 1)
 }
 
+/** Play from a section (1–9): the track's sections, or the markers of one built by hand. */
 export function playSection(i: number): void {
-  const g = generated()
-  const s = g?.sections[i]
-  if (s) void playback.play(s.start * 4)
+  const g = current()
+  const starts = g ? g.sections.map((s) => s.start * 4) : [...useProject.getState().project.markers].sort((a, b) => a.start - b.start).map((m) => m.start)
+  if (starts[i] != null) void playback.play(starts[i])
 }
 
-/** Play generations while the Generate view is open; give the transport back to Arrange after. */
-export function attachPlayback(): () => void {
-  playback.stop()
-  playback.connect(() => generated()?.project ?? EMPTY)
-  playback.setPosition(0)
-  return () => {
-    playback.stop()
-    const arrange = useProject.getState().project
-    playback.connect(() => useProject.getState().project)
-    playback.syncLanes(arrange.lanes)
-    playback.setPosition(0)
-  }
+/** Open a saved track (the Saved menu): it joins the history. */
+export function openTrack(file: string): Promise<void> {
+  return switchTo(() => openProject(file))
 }
+
+/** An empty track to build by hand. */
+export function newEmptyTrack(): Promise<void> {
+  return switchTo(() => createProject())
+}
+
+/** Delete the track on screen (its file when saved), and show the one before it. */
+export function deleteTrack(): Promise<void> {
+  switching = switching.catch(() => {}).then(async () => {
+    const { history, index, detached, set } = useGenerate.getState()
+    const h = detached ? history : history.filter((_, i) => i !== index)
+    const at = Math.min(index, h.length - 1)
+    set({ history: h, index: at, detached: true })
+    await deleteCurrentProject(h[at] ? () => {
+      set({ index: at, detached: false })
+      load(h[at])
+    } : undefined)
+  })
+  return switching
+}
+
+// A saved track opened (at start, from the Saved menu): a generated one joins the history.
+onProjects({
+  opened(file) {
+    const project = useProject.getState().project
+    const g = arrangeTrack(project)
+    const { history, set } = useGenerate.getState()
+    useArrange.getState().fitToTrack()
+    if (!g) {
+      set({ detached: true })
+      return
+    }
+    entries.set(g, { file, scratch: useProject.getState().scratch })
+    const at = file ? history.findIndex((x) => entryOf(x).file === file) : -1
+    if (at >= 0) {
+      const h = [...history]
+      h[at] = g
+      set({ history: h, index: at, detached: false })
+    } else {
+      set({ history: [...history, g], index: history.length, detached: false })
+    }
+  },
+})

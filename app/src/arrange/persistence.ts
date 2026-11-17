@@ -1,4 +1,6 @@
-// Loading, saving and autosaving Arrange projects (<Library>/.drumvault/projects/*.dvproj).
+// Loading, saving and autosaving Create's tracks (<Library>/.drumvault/projects/*.dvproj).
+// A generation on screen is a scratch track (useProject.scratch): it's saved only once it's kept
+// (edited by hand, starred with ⌘S, or exported), then autosaved like any project.
 
 import { produce } from 'immer'
 import { api } from '../api'
@@ -36,16 +38,34 @@ export async function resolveSamples(project: Project): Promise<Project> {
   })
 }
 
-async function open(project: Project, file: string | null): Promise<void> {
+/** Told when a project file is opened (Create puts a generated one in its history). */
+type Listener = { opened(file: string | null): void }
+const listeners: Listener[] = []
+export function onProjects(l: Listener): void {
+  listeners.push(l)
+}
+
+async function open(project: Project, file: string | null, scratch = false): Promise<void> {
   playback.stop()
   clearPeaks()
   const resolved = await resolveSamples(project)
-  useProject.getState().load(resolved, file)
+  useProject.getState().load(resolved, file, { scratch })
   playback.setPosition(0)
   playback.syncLanes(resolved.lanes)
   void playback.preload(resolved)
   if (file) void useApp.getState().saveSettings({ lastProject: file })
+  for (const l of listeners) l.opened(file)
 }
+
+/** The next free "Generated NN" name. */
+export async function nextGeneratedName(): Promise<string> {
+  await refreshProjectList()
+  const used = useArrange.getState().projects.map((p) => /^Generated (\d+)$/.exec(p.name)?.[1]).filter(Boolean).map(Number)
+  return `Generated ${String(Math.max(0, ...used) + 1).padStart(2, '0')}`
+}
+
+/** The generator's own name for a track: it becomes "Generated NN" when it's first saved. */
+const UNNAMED = 'Generated'
 
 export async function refreshProjectList(): Promise<void> {
   useArrange.getState().set({ projects: await api.listProjects() })
@@ -65,10 +85,16 @@ export function saveNow(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  const { project, file, dirty, markSaved } = useProject.getState()
-  if (!dirty && file) return
+  const { file, dirty, scratch, markSaved } = useProject.getState()
+  if ((!dirty && file) || scratch) return
   useArrange.getState().set({ saving: true })
   try {
+    if (!file && useProject.getState().project.name === UNNAMED) {
+      // (Not an edit: the name comes with the first save.)
+      const name = await nextGeneratedName()
+      useProject.setState((s) => ({ project: { ...s.project, name } }))
+    }
+    const { project } = useProject.getState()
     const saved = await api.writeProject(file, project.name, serializeProject(project))
     // Edits made while saving keep the project dirty.
     if (useProject.getState().project === project) markSaved(saved)
@@ -86,27 +112,22 @@ export async function openProject(file: string): Promise<void> {
   await open(parseProject(await api.readProject(file)), file)
 }
 
+/** An empty track to build by hand (Create's Saved menu): saved once something is put on it. */
 export async function createProject(name = 'Untitled'): Promise<void> {
   await saveNow()
-  await open(newProject(name, libraryBpm()), null)
-  await saveNow()
+  await open(newProject(name, libraryBpm()), null, true)
 }
 
-/** Generate → Send to Arrange: open a generated arrangement as a new project ("Generated 03"). */
-export async function openGenerated(project: Project): Promise<void> {
-  await saveNow()
-  await refreshProjectList()
-  const used = useArrange.getState().projects.map((p) => /^Generated (\d+)$/.exec(p.name)?.[1]).filter(Boolean).map(Number)
-  const name = `Generated ${String(Math.max(0, ...used) + 1).padStart(2, '0')}`
-  await open({ ...structuredClone(project), name, createdAt: new Date().toISOString() }, null)
-  await saveNow()
-}
-
-export async function deleteCurrentProject(): Promise<void> {
+/** Delete the open track's file; `then` shows what comes instead (the next saved track, by default). */
+export async function deleteCurrentProject(then?: () => Promise<void> | void): Promise<void> {
   const { file } = useProject.getState()
   if (file) await api.deleteProject(file)
-  useProject.setState({ file: null, dirty: false })
+  useProject.setState({ file: null, dirty: false, scratch: true })
   await refreshProjectList()
+  if (then) {
+    await then()
+    return
+  }
   const next = useArrange.getState().projects[0]
   if (next) await open(parseProject(await api.readProject(next.file)), next.file)
   else await createProject()
@@ -126,7 +147,7 @@ export async function initProjects(): Promise<void> {
   } catch (e) {
     useApp.getState().toast('error', `Could not open project: ${(e as Error).message}`)
   }
-  await open(newProject('Untitled', libraryBpm()), null)
+  await open(newProject('Untitled', libraryBpm()), null, true)
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -137,7 +158,7 @@ export function startAutosave(): void {
   started = true
   useProject.subscribe((s, prev) => {
     if (s.project !== prev.project) playback.syncLanes(s.project.lanes)
-    if (!s.dirty) return
+    if (!s.dirty || s.scratch) return
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       void saveNow().catch((e) => useApp.getState().toast('error', `Autosave failed: ${(e as Error).message}`))

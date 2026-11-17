@@ -1,22 +1,13 @@
-import type { View } from '../store/app'
+import type { Page } from '../store/app'
 
-export type MenuIconName = View | 'shortcuts'
+export type MenuIconName = Page | 'shortcuts'
 
 // Flat SVG artwork stays sharp at every display density. Explicit URLs let Vite
 // bundle the same assets into development and packaged Electron builds.
 const artwork: Record<MenuIconName, string> = {
-  process: new URL('../assets/menu-flat/process.svg', import.meta.url).href,
-  library: new URL('../assets/menu-flat/library.svg', import.meta.url).href,
-  grid: new URL('../assets/menu-flat/grid.svg', import.meta.url).href,
-  midi: new URL('../assets/menu-flat/midi.svg', import.meta.url).href,
-  hits: new URL('../assets/menu-flat/hits.svg', import.meta.url).href,
-  stabs: new URL('../assets/menu-flat/stabs.svg', import.meta.url).href,
-  strings: new URL('../assets/menu-flat/strings.svg', import.meta.url).href,
-  basses: new URL('../assets/menu-flat/basses.svg', import.meta.url).href,
-  ambience: new URL('../assets/menu-flat/ambience.svg', import.meta.url).href,
-  splice: new URL('../assets/menu-flat/splice.svg', import.meta.url).href,
-  generate: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
-  arrange: new URL('../assets/menu-flat/arrange.svg', import.meta.url).href,
+  create: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
+  drums: new URL('../assets/menu-flat/process.svg', import.meta.url).href,
+  sounds: new URL('../assets/menu-flat/stabs.svg', import.meta.url).href,
   settings: new URL('../assets/menu-flat/settings.svg', import.meta.url).href,
   shortcuts: new URL('../assets/menu-flat/shortcuts.svg', import.meta.url).href,
 }

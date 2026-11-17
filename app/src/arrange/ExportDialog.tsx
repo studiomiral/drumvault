@@ -6,6 +6,8 @@ import { formatBpm } from '../lib/format'
 import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
+import { keepTrack } from '../store/generate'
+import { nextGeneratedName } from './persistence'
 import type { WavFormat } from '../audio/wav'
 import { Preflight } from './Preflight'
 import { exportDir, exportFolderName, exportStems, exportTargets, hasVocals, MASTERED_FILE, MASTERED_INSTRUMENTAL_FILE, midiParts, safeName, type ExportOptions, type ExportResult } from './exporter'
@@ -39,6 +41,15 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     if (!dir) void api.defaultExportFolder().then(setDir)
   }, [dir])
 
+  // A track not saved yet is kept when it's exported: the folder is named as it will be.
+  useEffect(() => {
+    const st = useProject.getState()
+    if (st.scratch && !st.file && st.project.name === 'Generated') {
+      void nextGeneratedName().then((name) => setFolder((f) => (f === exportFolderName(project) ? exportFolderName({ ...project, name }) : f)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const r = range === 'loop' && hasLoop
     ? { startBeat: project.loop.start, endBeat: project.loop.end }
     : { startBeat: 0, endBeat: project.lengthBars * BEATS_PER_BAR }
@@ -66,6 +77,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       void saveSettings({ lastExportDir: opts.dir })
     }
     playback.stop()
+    if (useProject.getState().scratch) await keepTrack()
     setPhase({ kind: 'running', message: 'Preparing', pct: 0 })
     try {
       const result = await exportStems(project, opts, (message, pct) => setPhase({ kind: 'running', message, pct }),

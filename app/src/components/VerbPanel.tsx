@@ -44,7 +44,7 @@ export function VerbPanel({ fixed }: { fixed?: boolean }) {
           <span className="w-10 text-right tabular-nums text-muted">{Math.round(opts.amount * 100)}%</span>
         </span>
         <span />
-        <span className="text-faint text-[11.5px]">Baked into the stems on export. Per clip in Arrange: select it and set Reverb.</span>
+        <span className="text-faint text-[11.5px]">Baked into the stems on export. Per clip: select it on the timeline and set Reverb.</span>
       </div>
     </Module>
   )

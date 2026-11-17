@@ -86,6 +86,23 @@ def beat_pulse_db(low: np.ndarray, sr: int, bpm: float, start_s: float, beats: i
     return round(_db(on / n_on) - _db(off / n_off), 1)
 
 
+def bar_kicks(low: np.ndarray, low_db: np.ndarray, sr: int, bpm: float, bar_one_s: float, bars: int, th: Thresholds) -> np.ndarray:
+    """Per bar, whether a kick plays on its beats: its lows pulse on every beat (`beat_pulse_db`
+    over the bar) and are near enough the track's (not the faint lows of a hat or a pad)."""
+    sounding = low_db > -100
+    if not sounding.any():
+        return np.zeros(bars, dtype=bool)
+    top_low = float(np.percentile(low_db[sounding], th.profile_full_pct))
+    bar_s = 240.0 / bpm
+    out = np.zeros(bars, dtype=bool)
+    for b in range(bars):
+        if low_db[b] < top_low + th.profile_kick_low_rel_db:
+            continue
+        p = beat_pulse_db(low, sr, bpm, bar_one_s + b * bar_s, 4, th.profile_pulse_share)
+        out[b] = p is not None and p >= th.profile_kick_pulse_db
+    return out
+
+
 def full_bars(lufs: np.ndarray, low_db: np.ndarray, th: Thresholds) -> np.ndarray:
     """Without sections: the bars where the track is full, loud and with the low end in. A stretch
     of kick and hats as loud as that counts too: in the user's own tracks it is 1 to 4 LU under
@@ -156,6 +173,11 @@ def measure(data: np.ndarray, sr: int, bpm: float, bar_one_s: float, th: Thresho
         "seconds": round(frames / sr, 2), "bpm": float(bpm), "bars": bars, "sections_known": known,
         "lufs": None, "peak_db": None, "true_peak_db": None, "plr_db": None,
         "bar_lufs": [round(float(v), 1) if v > -100 else None for v in lufs],
+        # Per bar: its lows (dB), whether it is full (a drop's) and whether a kick plays: what a
+        # reference's sections are read from (the generator's templates, SCOPE.md §5.17).
+        "bar_low_db": [round(float(v), 1) if v > -100 else None for v in low_db],
+        "bar_full": [bool(v) for v in full],
+        "bar_kick": [bool(v) for v in bar_kicks(low_mid, low_db, sr, bpm, bar_one_s, bars, th)] if bars else [],
         "full_bars": int(full.sum()), "full_lufs": None, "regions": None, "width_db": None, "low_side_db": None,
         "drops": [], "lift_lu": None, "lift_low_db": None, "break_depth_lu": None,
         "dc_db": None, "head_ms": None, "tail_db": None, "intro": None, "outro": None,

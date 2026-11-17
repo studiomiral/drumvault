@@ -325,6 +325,8 @@ class Thresholds:
     profile_lift_bars: int = 8              # a drop's first bars against as many before it
     profile_dj_bars: int = 16               # the mix-in and mix-out: the first and the last bars
     profile_pulse_share: float = 0.4        # a kick's lows sit in this first share of each beat
+    profile_kick_pulse_db: float = 3.0      # a bar has a kick when its lows are this much stronger on the beats...
+    profile_kick_low_rel_db: float = -24.0  # ...and within this of the full bars' lows (else it's only noise in the lows)
     profile_head_db: float = -60.0          # the first sample over this is where the sound starts
     profile_tail_ms: float = 10.0           # the file's end: its peak over these last ms
     profile_true_peak_oversample: int = 4

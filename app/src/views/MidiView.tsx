@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { api } from '../api'
 import { IconDrop, IconX } from '../components/icons'
-import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
+import { Button, cx, Empty, inputClass } from '../components/ui'
+import { PageTabs } from '../components/PageTabs'
 import { SerumFolders } from '../components/SerumFolders'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -76,7 +77,7 @@ export function MidiView() {
          onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)}
          onDrop={(e) => void onDrop(e)}>
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-        <PageTitle className="mr-3">MIDI</PageTitle>
+        <PageTabs view="midi" />
         <span className="text-[12px] text-muted flex items-center gap-2">
           <span className="w-2 h-2 rounded-full" style={{ background: COLOR }} />
           Bass

@@ -7,11 +7,11 @@ import { MenuIcon, type MenuIconName } from './components/MenuIcon'
 import { ShortcutsDialog } from './components/ShortcutsDialog'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { cx } from './components/ui'
-import { useApp, type View } from './store/app'
-import { ArrangeView } from './views/ArrangeView'
+import { pageOf, useApp, type Page } from './store/app'
+import { CreateView } from './views/CreateView'
 import { copySelection, cutSelection, duplicateSelection, pasteAtPlayhead } from './arrange/commands'
 import { useProject } from './store/project'
-import { GenerateView } from './views/GenerateView'
+import { keepTrack } from './store/generate'
 import { GridView } from './views/GridView'
 import { MidiView } from './views/MidiView'
 import { HitsView } from './views/HitsView'
@@ -21,37 +21,22 @@ import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
 import { WelcomeView } from './views/WelcomeView'
 
-const NAV_GROUPS: { label: string; items: { view: View; label: string }[] }[] = [
-  // The source material: drums from the stem zips, and the music Generate plays over them.
-  { label: 'Drums', items: [
-    { view: 'process', label: 'Drumvault' },
-    { view: 'library', label: 'Library' },
-    { view: 'grid', label: 'Grid' },
-  ] },
-  { label: 'Music', items: [
-    { view: 'midi', label: 'MIDI' },
-    { view: 'stabs', label: 'Chord Stabs' },
-    { view: 'hits', label: 'Disco Hits' },
-    { view: 'strings', label: 'Strings' },
-    { view: 'basses', label: 'Bass Samples' },
-    { view: 'ambience', label: 'Ambience' },
-    { view: 'splice', label: 'Splice' },
-  ] },
-  { label: 'Create', items: [
-    { view: 'generate', label: 'Generate' },
-    { view: 'arrange', label: 'Arrange' },
-  ] },
-  { label: 'Settings', items: [{ view: 'settings', label: 'Settings' }] },
+// Four pages (SCOPE.md §6.1): Create is where the tracks are made; Drums and Sounds hold the
+// material it draws on, each with its tabs.
+const NAV: { page: Page; label: string }[] = [
+  { page: 'create', label: 'Create' },
+  { page: 'drums', label: 'Drums' },
+  { page: 'sounds', label: 'Sounds' },
+  { page: 'settings', label: 'Settings' },
 ]
-
 export function App() {
-  const { ready, settings, view, setView, jobs, init, modal, setModal } = useApp()
+  const { ready, settings, view, openPage, jobs, init, modal, setModal } = useApp()
 
   useEffect(() => {
     void init()
   }, [init])
 
-  // Arrange: load the library's last project once the library is known (and on switch).
+  // Create: load the library's last track once the library is known (and on switch).
   const libraryPath = settings?.libraryPath
   useEffect(() => {
     if (!libraryPath) return
@@ -92,24 +77,16 @@ export function App() {
 
   return (
     <div className="h-full flex bg-bg">
-      <nav className="w-[224px] shrink-0 bg-panel border-r border-line flex flex-col">
+      <nav className="w-[184px] shrink-0 bg-panel border-r border-line flex flex-col">
         {/* Room for the window buttons; lines up with the views' top bars. */}
         <div className="app-drag topbar-art topbar-art-sidebar h-14 shrink-0 border-b border-line" />
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-5 space-y-6">
-          {NAV_GROUPS.map((g) => (
-            <div key={g.label}>
-              <div className="px-2.5 mb-2 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint">{g.label}</div>
-              <div className="flex flex-col gap-1">
-                {g.items.map(({ view: v, label }) => (
-                  <NavItem key={v} label={label} icon={v} active={view === v} onClick={() => setView(v)}
-                           badge={v === 'process' && active > 0 ? active : null} />
-                ))}
-                {g.label === 'Settings' && (
-                  <NavItem label="Shortcuts" icon="shortcuts" active={false} onClick={() => setModal('shortcuts')} hint="?" />
-                )}
-              </div>
-            </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-5 flex flex-col gap-1">
+          {NAV.map(({ page, label }) => (
+            <NavItem key={page} label={label} icon={page} active={pageOf(view) === page} onClick={() => openPage(page)}
+                     badge={page === 'drums' && active > 0 ? active : null} />
           ))}
+          <div className="mt-4" />
+          <NavItem label="Shortcuts" icon="shortcuts" active={false} onClick={() => setModal('shortcuts')} hint="?" />
         </div>
         <div className="mx-4 border-t border-line" />
         <div className="px-4 py-4 flex items-center gap-3">
@@ -136,8 +113,7 @@ export function App() {
         {view === 'basses' && <HitsView key="basses" kind="bass" />}
         {view === 'ambience' && <HitsView key="ambience" kind="ambience" />}
         {view === 'splice' && <SpliceView />}
-        {view === 'generate' && <GenerateView />}
-        {view === 'arrange' && <ArrangeView />}
+        {view === 'create' && <CreateView />}
         {view === 'settings' && <SettingsView />}
         </ErrorBoundary>
       </main>
@@ -186,9 +162,12 @@ function Toasts() {
 function runEditCommand(cmd: string): boolean {
   const el = document.activeElement as HTMLElement | null
   const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && (el as HTMLInputElement).type !== 'range'
-  const arrange = useApp.getState().view === 'arrange'
+  const arrange = useApp.getState().view === 'create'  // the timeline is on screen
   const p = useProject.getState()
-  if (cmd === 'undo' || cmd === 'redo') {
+  if (cmd === 'keep') {
+    if (!arrange) return false
+    void keepTrack()
+  } else if (cmd === 'undo' || cmd === 'redo') {
     if (typing) document.execCommand(cmd)
     else if (arrange) (cmd === 'undo' ? p.undo : p.redo)()
     else return false

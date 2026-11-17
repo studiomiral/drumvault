@@ -9,7 +9,7 @@
 
 import { expandCompatible } from '../lib/camelot'
 import { BEATS_PER_BAR, makeLane, makeMarker, newProject, replaceSample, sampleRef, STEPS_PER_BAR, uid } from '../lib/project'
-import type { Category, SampleKind } from '../types/engine'
+import type { Category, ReferenceTrack, SampleKind } from '../types/engine'
 import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
@@ -23,7 +23,7 @@ import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, 
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
-import { templateFrom } from './template'
+import { readReference, templateFrom, templateFromReference, type Arc, type Template } from './template'
 import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
 import {
   breakShape, CHARACTER_LABEL, characterRules, CHARACTERS, isReese, LEAD_DB, LEAD_LABEL, leadRules, PAD_BARS, PAD_CHANCE, padNotes, pickLead,
@@ -334,10 +334,43 @@ export interface GenerateOptions {
    * template for their structure and rules, changed a little. None: the grammar only.
    */
   templates?: TrackArrangement[] | null
+  /**
+   * Reference tracks (finished mixes, SCOPE.md §5.17): their structures are templates beside the
+   * zips' (an even share), and their arc (drop lift, break depth) is what candidates are scored on.
+   */
+  references?: ReferenceTrack[] | null
 }
 
 /** Share of generations built on a real track's structure when there are templates. */
 const TEMPLATE_CHANCE = 0.8
+/** With both, the share of templates taken from the reference tracks (the rest from the zips). */
+const REFERENCE_SHARE = 0.5
+
+/** A structure template: from a zip's arrangement or a reference track, an even share when there are both. */
+function pickTemplate(rng: Rng, arrangements: TrackArrangement[], refs: ReferenceTrack[], minBars: number, maxBars: number): Template | null {
+  const fromRef = refs.length > 0 && (!arrangements.length || rng.chance(REFERENCE_SHARE))
+  return fromRef ? templateFromReference(rng.pick(refs), rng, minBars, maxBars)
+    : templateFrom(rng.pick(arrangements), rng, minBars, maxBars)
+}
+
+/**
+ * The arc to aim for: the template reference's own, else the references' median (every candidate
+ * of a track then has one, so they are scored alike); null without references.
+ */
+export function arcOf(refs: ReferenceTrack[] | null | undefined, tpl: Template | null): (Arc & { from: string }) | null {
+  if (tpl?.arc && (tpl.arc.liftLu != null || tpl.arc.breakDepthLu != null)) return { ...tpl.arc, from: tpl.label }
+  const ps = (refs ?? []).map((r) => r.profile).filter((p): p is NonNullable<typeof p> => !!p)
+  const med = (xs: (number | null)[]) => {
+    const v = xs.filter((x): x is number => x != null).sort((a, b) => a - b)
+    if (!v.length) return null
+    const m = v.length >> 1
+    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2
+  }
+  const liftLu = med(ps.map((p) => p.lift_lu))
+  const breakDepthLu = med(ps.map((p) => p.break_depth_lu))
+  return liftLu == null && breakDepthLu == null ? null
+    : { liftLu, breakDepthLu, from: ps.length === 1 ? `the reference “${refs!.find((r) => r.profile)!.name}”` : `${ps.length} reference tracks` }
+}
 
 export interface BassOptions {
   /** The MIDI library's basslines: what new basslines are learned from (bassline.ts). */
@@ -402,6 +435,8 @@ export interface Keep {
    * doesn't follow from a changed rule comes out the same.
    */
   replay?: number
+  /** The arc it is scored against (kept with the structure); undefined: from the template or the references. */
+  arc?: Generation['arc']
 }
 
 /** The track's rules (see the rules block in generate()), by name. */
@@ -456,6 +491,8 @@ export interface Generation {
   mix?: MixCheck | null
   /** How it scored, and how many candidates it was the best of (score.ts); absent: made as it came. */
   score?: Score | null
+  /** The arc it was scored against (a reference's, or the references' median); null or absent: none. */
+  arc?: (Arc & { from: string }) | null
 }
 
 // ---------------------------------------------------------------------------
@@ -968,8 +1005,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     : opts.tempo.max > opts.tempo.min ? rng.int(Math.round(opts.tempo.min), Math.round(opts.tempo.max)) : opts.tempo.min
   const minutes = opts.minMinutes + rng.next() * Math.max(0, opts.maxMinutes - opts.minMinutes)
   // Most tracks follow a real track's structure and rules, changed a little; the rest the grammar.
-  const tpl = !keep.structure && opts.templates?.length && rng.chance(TEMPLATE_CHANCE)
-    ? templateFrom(rng.pick(opts.templates), rng, barsFor(opts.minMinutes, bpm), barsFor(opts.maxMinutes, bpm)) : null
+  const readable = (opts.references ?? []).filter((r) => r.profile && readReference(r.profile))
+  const tpl = !keep.structure && (opts.templates?.length || readable.length) && rng.chance(TEMPLATE_CHANCE)
+    ? pickTemplate(rng, opts.templates ?? [], readable, barsFor(opts.minMinutes, bpm), barsFor(opts.maxMinutes, bpm)) : null
   const sections = keep.structure ? structuredClone(keep.structure) : tpl?.sections ?? makeStructure(rng, barsFor(minutes, bpm))
   const total = sections.reduce((n, s) => n + s.bars, 0)
   const key = keep.key !== undefined ? keep.key : chooseKey(rng, samples)
@@ -2525,7 +2563,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (built) choices.push(`${BUILDUP_NOTE[rules.buildup as typeof BUILDUPS[number]]} into drops (${built} bars)`)
   if (crash && rules.buildupCrash !== 'none') choices.push(rules.buildupCrash === 'faster' ? 'crashes coming faster into drops' : 'crashes on the last four counts into drops')
   if (rules.loopGap) choices.push('loops stop before breaks')
-  if (tpl) choices.unshift(`structure after ${tpl.source} (${tpl.changes.join(', ')})`)
+  if (tpl) choices.unshift(`structure after ${tpl.label} (${tpl.changes.join(', ')})`)
   if (lanes.feel && feelSrc) {
     const sw = feelSrc.groove?.swing ?? 0
     choices.push(`feel of ${feelSrc.source_code}'s ${feelSrc.category} loop${Math.abs(sw) >= 0.05 ? ` (${Math.round(50 + sw * 50)} % swing)` : ''}`)
@@ -2604,7 +2642,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
 
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
-  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null, mix: balance.mix }
+  const arc = keep.arc !== undefined ? keep.arc : arcOf(opts.references, tpl)
+  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null, mix: balance.mix, arc }
 }
 
 /** Places an event whose main sound ends on `endBeat` (generate's endOn). */
@@ -2832,7 +2871,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
   const bpm = g.project.bpm
   for (let i = 0; i < 12; i++) {
     const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: role === 'bass' ? opts.bass : null }, seed + i * 7919, {
-      structure: g.sections, key: g.key, picks, rules, avoid: g.project.clips.map((c) => c.sample.relPath),
+      structure: g.sections, arc: g.arc ?? null, key: g.key, picks, rules, avoid: g.project.clips.map((c) => c.sample.relPath),
     })
     const rl = r.project.lanes.find((l) => l.name === lane.name)
     const clips = rl ? r.project.clips.filter((c) => c.laneId === rl.id) : []
@@ -3034,7 +3073,7 @@ function rerollGroup(all: SampleListItem[], opts: GenerateOptions, g: Generation
   const bpm = g.project.bpm
   for (let i = 0; i < 12; i++) {
     const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: null }, seed + i * 7919, {
-      structure: g.sections, key: g.key, picks, rules, avoid: groupClips(g.project, roles).map((c) => c.sample.relPath),
+      structure: g.sections, arc: g.arc ?? null, key: g.key, picks, rules, avoid: groupClips(g.project, roles).map((c) => c.sample.relPath),
     })
     if (!groupClips(r.project, roles).length || sig(r.project) === sig(g.project)) continue
     return swapGroup(g, r, roles, own, picks, choice)
@@ -3089,7 +3128,7 @@ export function setStabRhythm(all: SampleListItem[], opts: GenerateOptions, g: G
   if (!g.rules.stabs) return null
   const bpm = g.project.bpm
   const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: null }, g.seed, {
-    structure: g.sections, key: g.key, picks: g.picks, rules: { ...rulesOf(g), stabRhythm: rhythm },
+    structure: g.sections, arc: g.arc ?? null, key: g.key, picks: g.picks, rules: { ...rulesOf(g), stabRhythm: rhythm },
   })
   return swapGroup(g, r, roles, new Set(['stabRhythm']), g.picks, 'chord stab')
 }
@@ -3134,7 +3173,7 @@ function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generati
   const bpm = g.project.bpm
   const rules = { ...rulesOf(g), ...values }
   const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, locks: { ...opts.locks, ...values } }, g.seed, {
-    structure: g.sections, key: g.key, picks, rules, replay: g.rngAt, avoid,
+    structure: g.sections, arc: g.arc ?? null, key: g.key, picks, rules, replay: g.rngAt, avoid,
   })
   // A part the remake can't play again (its module off since, its samples gone) stays as it is.
   const gone = (role: Role) => (role === 'bass' && g.bass && !r.bass)

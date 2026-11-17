@@ -1,7 +1,7 @@
 // Cleaning up renders (Settings → Storage): every bass and strings part (and older tracks' keys,
 // stab and drone parts) and every FX stretched to a tempo is kept on disk, also for generations
-// prepared and never played. What no saved project, shortlisted track or generation of this
-// session plays can go; it's rendered again whenever it's needed.
+// prepared and never played. What no saved track or track of this session plays can go; it's
+// rendered again whenever it's needed.
 
 import { api } from '../api'
 import { forgetRenders } from '../audio/tempo'
@@ -12,15 +12,15 @@ import type { Project } from '../types/project'
 import { useGenerate } from './generate'
 import { useProject } from './project'
 
-/** The renders (library-relative) the saved projects, the open one, the shortlist and this session's generations play. */
+/** The renders (library-relative) the saved tracks, the open one and this session's tracks play. */
 export async function rendersInUse(): Promise<string[]> {
   const projects: Project[] = [useProject.getState().project]
   for (const p of await api.listProjects()) {
     // A project that doesn't read keeps nothing: the cleanup gives up rather than guess (see below).
     projects.push(parseProject(await api.readProject(p.file)))
   }
-  const { history, pending, shortlist } = useGenerate.getState()
-  for (const g of [...history, pending, ...shortlist.map((s) => s.g)]) if (g) projects.push(g.project)
+  const { history, pending } = useGenerate.getState()
+  for (const g of [...history, pending]) if (g) projects.push(g.project)
   const used = new Set<string>()
   for (const p of projects) {
     for (const c of p.clips) {

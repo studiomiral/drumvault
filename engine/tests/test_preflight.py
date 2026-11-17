@@ -113,6 +113,25 @@ def test_finds_the_drops_without_sections(base, th):
     assert p["full_bars"] == 32
 
 
+def test_reads_kick_and_drops_bar_by_bar(base, th):
+    """What the generator reads a reference's structure from: a kick in the intro, the drops and
+    the outro, none in the breakdowns; full bars in the drops only."""
+    p = mixprofile.measure(base, SR, 124.0, 0.0, th)
+    assert len(p["bar_kick"]) == len(p["bar_full"]) == len(p["bar_low_db"]) == p["bars"] == 80
+    start = 0
+    for kind, bars in SECTIONS:
+        inner = range(start + 1, start + bars - 1)  # the edges may blur by a bar
+        kicks = [p["bar_kick"][b] for b in inner]
+        full = [p["bar_full"][b] for b in inner]
+        if kind == "break":
+            assert not any(kicks) and not any(full), kind
+        else:
+            assert all(kicks), kind
+        if kind == "drop":
+            assert all(full)
+        start += bars
+
+
 def test_true_peak_is_over_the_samples_between_them(th):
     # A sine at a quarter of the sample rate, sampled 45° off its crests: the samples reach 0.707 of it.
     n = np.arange(SR)
@@ -210,6 +229,22 @@ def test_references_follow_the_folder(lib: Settings):
     assert r["summary"]["tracks"] == 3             # it doesn't count
     (root / "short.wav").unlink()
     assert "short" not in [t["name"] for t in references.scan(lib, analyze=True)["tracks"]]
+
+
+def test_references_from_before_are_measured_again(lib: Settings):
+    """A profile measured before it kept the bar-by-bar kick still counts, and is pending."""
+    import json
+    from drumvault_engine.db import LibraryDB
+    references.scan(lib, analyze=True)
+    with LibraryDB(lib.library_path) as db:
+        r = next(r for r in db.list_references() if r["profile"])
+        old = {k: v for k, v in json.loads(r["profile"]).items() if k not in ("bar_kick", "bar_full", "bar_low_db")}
+        db.set_reference(r["rel_path"], **{k: r[k] for k in r.keys() if k not in ("rel_path", "analyzed_at", "profile")},
+                         profile=json.dumps(old))
+    before = references.scan(lib)
+    assert before["pending"] == 1 and before["summary"]["tracks"] == 3
+    after = references.scan(lib, analyze=True)
+    assert after["pending"] == 0 and all("bar_kick" in t["profile"] for t in after["tracks"] if t["profile"])
 
 
 def test_preflight_of_an_export_against_the_references(lib: Settings, base, tmp_path: Path):

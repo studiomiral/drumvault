@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import { api } from '../api'
 import { audition } from '../audio/audition'
 import { IconDrop, IconPlay, IconStop, IconX } from '../components/icons'
-import { Button, cx, Empty, inputClass, PageTitle } from '../components/ui'
+import { Button, cx, Empty, inputClass } from '../components/ui'
+import { PageTabs } from '../components/PageTabs'
 import { hitSampleId } from '../generate/disco'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -20,14 +21,14 @@ const TEXT = {
     drop: 'Drop disco hits: audio files, folders or zips',
     about: 'Stabs, brass hits, orchestra hits: one hit per file, trimmed and copied into the library. The key comes from the '
       + 'file name ("Brass Stab Cm", "Hit_F#_maj"), else from the sound. Generate moves each hit into the track key; if it '
-      + 'sounds off, fix the key here or the pitch in Generate.',
+      + 'sounds off, fix the key here or the pitch in Create.',
   },
   stab: {
     title: 'Chord Stabs', one: 'chord stab', many: 'chord stabs', empty: 'Drop your chord stabs here: organ, piano, synth and string stabs.',
     drop: 'Drop chord stabs: audio files, folders or zips',
     about: 'One chord per file, trimmed and copied into the library. The key comes from the file name ("Organ Stab Cm7", '
       + '"Stab_F#_maj"), else from the sound. Every generated track plays one of them in a funky rhythm, moved into '
-      + 'the track key; if one sounds off, fix the key here or the pitch in Generate.',
+      + 'the track key; if one sounds off, fix the key here or the pitch in Create.',
   },
   bass: {
     title: 'Bass Samples', one: 'bass sample', many: 'bass samples', empty: 'Drop your bass one-shots here: one note per file.',
@@ -59,8 +60,11 @@ const TEXT = {
  * Stabs (§6.9) is the same page for the chord stabs every track plays, Samples → Strings (§6.10)
  * for long string samples.
  */
+/** The Sounds page's tab of each kind. */
+const VIEW_OF = { disco: 'hits', stab: 'stabs', strings: 'strings', bass: 'basses', ambience: 'ambience' } as const
+
 export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) {
-  const { libraryVersion, engine, toast } = useApp()
+  const { libraryVersion, engine, toast, setView } = useApp()
   const all = useHits((s) => s.hits)
   const loaded = useHits((s) => s.loaded)
   const hits = all.filter((h) => h.kind === kind)
@@ -123,11 +127,12 @@ export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) 
          onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)}
          onDrop={(e) => void onDrop(e)}>
       <header className="app-drag topbar-art h-14 shrink-0 flex items-center gap-4 px-6 border-b border-line">
-        <PageTitle className="mr-3">{t.title}</PageTitle>
+        <PageTabs view={VIEW_OF[kind]} />
         <span className="text-faint text-[12px] tabular-nums">{loaded ? `${hits.length} ${hits.length === 1 ? t.one : t.many}` : ''}</span>
         <input className={cx(inputClass, 'w-56')} placeholder={`Search ${t.many}`} value={search}
                onChange={(e) => setSearch(e.target.value)} />
         <div className="flex-1" />
+        <Button variant="ghost" onClick={() => setView('splice')} title="Sounds in your Splice folder that could go on these pages">From Splice…</Button>
         <Button variant="primary" disabled={!ready || busy} onClick={() => void api.chooseHits(`Add ${t.many}`).then(add)}>Add {t.many}…</Button>
       </header>
 
