@@ -6,7 +6,7 @@ import { api } from '../api'
 import { playedNotes } from '../generate/bassline'
 import type { BassRender, Project } from '../types/project'
 import { buffers } from './context'
-import { bassPath, soundPath, tempoMode, tempoPath } from './schedule'
+import { bassPath, clipSounds, tempoMode, tempoPath } from './schedule'
 
 /** `${bpm}|${relPath}` known to exist. */
 const ready = new Set<string>()
@@ -86,7 +86,7 @@ export async function ensureStretched(project: Project): Promise<void> {
 
 /** Every file the project plays at its tempo. */
 export function projectSounds(project: Project): string[] {
-  return [...new Set(project.clips.map((c) => soundPath(c, project.bpm)))]
+  return [...new Set(project.clips.flatMap((c) => clipSounds(c, project.bpm)))]
 }
 
 /** Renders were cleaned up: whatever is gone is rendered (or stretched) again when it's needed. */

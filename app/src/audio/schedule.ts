@@ -71,7 +71,7 @@ export function tempoMode(clip: Clip, bpm: number): TempoMode {
   const same = sb == null || Math.abs(sb - bpm) < 1e-6
   if (STRETCHED_CATEGORIES.has(clip.sample.category)) return same ? 'native' : 'stretched'
   // A pitched loop plays faster or slower: as slices on the grid, so it stays in time.
-  return same && !clip.pitch ? 'native' : 'sliced'
+  return same && !clip.pitch && !clip.chop && !clip.remix ? 'native' : 'sliced'
 }
 
 /** Library-relative path of a sample stretched to `bpm` (the engine's naming.tempo_rel_path). */
@@ -112,6 +112,12 @@ export function bassPath(b: BassRender, bpm: number): string {
 }
 
 /** The file a clip plays at the project tempo. */
+/** Every file a clip plays: its sound, and the fills a remixed fill takes beats from. */
+export function clipSounds(clip: Clip, bpm: number): string[] {
+  const own = soundPath(clip, bpm)
+  return clip.type === 'audio' && clip.remix ? [own, ...clip.remix.from.map((s) => s.relPath)] : [own]
+}
+
 export function soundPath(clip: Clip, bpm: number): string {
   if (clip.type === 'audio' && clip.bass) return bassPath(clip.bass, bpm)
   return tempoMode(clip, bpm) === 'stretched' ? tempoPath(clip.sample.relPath, bpm) : clip.sample.relPath
@@ -284,9 +290,16 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
       for (let j = first; s + j * SLICE < e - EPS; j++) {
         const at = s + j * SLICE
         if (at >= toBeat + EPS) break
+        // A gate closed on this 16th of the bar: silent.
+        if (clip.chop && !clip.chop[((Math.round(at / SLICE) % STEPS_PER_BAR) + STEPS_PER_BAR) % STEPS_PER_BAR]) continue
         const slot = beatToSec(Math.min(SLICE, e - at), bpm)
         const dur = Math.min(sliceOut, slot)
-        push(out, clip, bpm, beatToSec(at, bpm), ((off + j * SLICE) * 60) / srcBpm, dur, gain, from, to, ongoing, dur, rel,
+        // A remixed fill: this 16th from the fill and the slice its map says.
+        const pos = Math.round((off + j * SLICE) / SLICE)
+        const m = clip.remix?.slices.length ? clip.remix.slices[pos % clip.remix.slices.length] : null
+        const src = m && m[0] > 0 ? clip.remix!.from[m[0] - 1] : null
+        const offset = m ? (m[1] * SLICE * 60) / (src ? sampleBpm(src) ?? srcBpm : srcBpm) : ((off + j * SLICE) * 60) / srcBpm
+        push(out, clip, bpm, beatToSec(at, bpm), offset, dur, gain, from, to, ongoing, dur, src ? src.relPath : rel,
           { declick: true, rate })
       }
       continue

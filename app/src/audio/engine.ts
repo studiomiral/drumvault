@@ -8,7 +8,7 @@ import type { Lane, Project } from '../types/project'
 import type { SampleKind } from '../types/engine'
 import { audioContext, buffers } from './context'
 import { applyLane, createBusDetector, createLaneNodes, dropVerb, duckAt, laneAudible, laneVerb, loadComp, onBus, playEvent, resetDuck, setBusDetector, setLaneBus, setLaneMono, type LaneNodes } from './graph'
-import { duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
+import { clipSounds, duckRelease, eventsInRange, kickHits, metronomeTicks, soundPath } from './schedule'
 import { ensureStretched, ensureTempo, projectSounds } from './tempo'
 
 const TICK_MS = 25
@@ -137,7 +137,7 @@ class PlaybackEngine {
     // Bass renders through Serum can take a while (the first one loads the plugin), so play
     // doesn't wait for them: the bass comes in, from the playhead, once it's rendered.
     const isBass = (c: Project['clips'][number]) => c.type === 'audio' && !!c.bass
-    const sounds = [...new Set(project.clips.filter((c) => !isBass(c)).map((c) => soundPath(c, project.bpm)))]
+    const sounds = [...new Set(project.clips.filter((c) => !isBass(c)).flatMap((c) => clipSounds(c, project.bpm)))]
     if (sounds.some((p) => !buffers.get(p))) {
       this.loading = true
       this.emit()

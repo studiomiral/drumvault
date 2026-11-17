@@ -31,11 +31,25 @@ describe.runIf(!!LIB)('phrasing', () => {
     const lengths = new Map<string, Map<number, number>>()
     const changes = new Map<string, number>()
     let kickAlone = 0
+    let gatedIntros = 0
+    const fillsSeen = { all: 0, asRecorded: 0, spliced: 0, reworked: 0 }
+    const variants = new Set<string>()
+    const fillSources = new Set<string>()
     const alone: string[] = []
     const N = 200
     for (let i = 0; i < N; i++) {
       const g: Generation = refine(samples, opts, generate(samples, opts, 9000 + i))
       const roleOf = new Map(g.project.lanes.map((l) => [l.id, laneRole(l.name) ?? '']))
+      if (g.rules.introGate) gatedIntros++
+      for (const c of g.project.clips) {
+        if (c.type !== 'audio' || roleOf.get(c.laneId) !== 'fills' || c.sample.category !== 'fill' || (c.sample.bars ?? 1) > 2) continue
+        fillsSeen.all++
+        if (!c.pitch && !c.remix) fillsSeen.asRecorded++
+        if (c.remix?.from.length) fillsSeen.spliced++
+        else if (c.remix) fillsSeen.reworked++
+        fillSources.add(c.sample.relPath)
+        variants.add(JSON.stringify([c.sample.relPath, c.pitch ?? 0, c.remix ?? null]))
+      }
       for (const s of g.sections) {
         const m = lengths.get(s.kind) ?? new Map()
         m.set(s.bars, (m.get(s.bars) ?? 0) + 1)
@@ -64,6 +78,7 @@ describe.runIf(!!LIB)('phrasing', () => {
       }
     }
     out(`tracks ${N}; intros/outros with a bar of the kick alone: ${kickAlone}`)
+    out(`intros gated: ${gatedIntros} of ${N}; short fills: ${fillsSeen.all}, as recorded ${fillsSeen.asRecorded}, spliced ${fillsSeen.spliced}, reworked alone ${fillsSeen.reworked}; ${fillSources.size} fill samples played as ${variants.size} different fills`)
     for (const a of alone.slice(0, 8)) out(`  ${a}`)
     for (const [k, m] of lengths) out(`${k.padEnd(6)} ${[...m.entries()].sort((a, b) => a[0] - b[0]).map(([b, n]) => `${b}:${n}`).join('  ')}`)
     out('moments in drops off the 16-bar lines (disco hits, groove, vocal, strings coming in or going): how often:')

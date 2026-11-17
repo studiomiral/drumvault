@@ -33,6 +33,8 @@ import {
 import { balanceFrom, dropRanges, evenClips, laneHitDb, levelLanes, punchRefs, STAB_UNDER_KICK_DB, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
 import { busLanes, compLanes } from './comp'
+import { GATE_FAMILIES, GATE_LABEL, gatedPhrases, introGate, type GateFamily } from './gate'
+import { FILL_WORDS, varyFills } from './fills'
 import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
 import type { Score } from './score'
 
@@ -586,6 +588,8 @@ function steps(hits: number[], v: Velocity = 3): Steps {
 const FOUR = [0, 4, 8, 12]
 const TWO_FOUR = [4, 12]
 const OFFBEAT = [2, 6, 10, 14]
+/** How many tracks gate their intro's top loops. */
+const INTRO_GATE_CHANCE = 0.7
 /** What doesn't keep the kick company in an intro or outro: the kick with only these is the kick alone. */
 const NOT_ALONGSIDE = new Set<Role>(['kick', 'crash', 'fx', 'fx2', 'fx3', 'hits', 'atmos', 'bed'])
 const EIGHTHS = [0, 2, 4, 6, 8, 10, 12, 14]
@@ -802,6 +806,8 @@ interface Segment {
   trim?: number
   loopBars?: number
   pitch?: number
+  /** A step gate: the 16ths of each bar that play (`AudioClip.chop`). */
+  chop?: number[]
 }
 
 /** What a segment repeats, in beats. */
@@ -814,7 +820,7 @@ function loopLen(s: Segment): number {
 function alike(a: Segment, b: Segment): boolean {
   return a.sample.id === b.sample.id && (a.pitch ?? 0) === (b.pitch ?? 0) && (a.loopBars ?? 0) === (b.loopBars ?? 0)
     && JSON.stringify(a.filter ?? null) === JSON.stringify(b.filter ?? null) && JSON.stringify(a.bass ?? null) === JSON.stringify(b.bass ?? null)
-    && JSON.stringify(a.verb ?? null) === JSON.stringify(b.verb ?? null)
+    && JSON.stringify(a.verb ?? null) === JSON.stringify(b.verb ?? null) && JSON.stringify(a.chop ?? null) === JSON.stringify(b.chop ?? null)
     && (a.gainDb ?? 0) === (b.gainDb ?? 0) && a.gainTo === b.gainTo && !a.fadeIn && !a.fadeOut && !b.fadeIn && !b.fadeOut
 }
 
@@ -1073,6 +1079,7 @@ class Lanes {
         if (s.bass) c.bass = { ...s.bass }
         if (s.pitch) c.pitch = s.pitch
         if (s.loopBars && s.loopBars < (s.sample.bars ?? 1)) c.loopBars = s.loopBars
+        if (s.chop?.some((v) => !v)) c.chop = [...s.chop]
         // (Fades never meet: each at most half the clip.)
         if (s.fadeIn) c.fadeIn = Math.min(s.fadeIn, s.length / 2)
         if (s.fadeOut) c.fadeOut = Math.min(s.fadeOut, s.length / 2)
@@ -1147,6 +1154,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // them) from before a rule existed keeps going without it: nothing else in it changes.
   const madeBefore = (rule: string) => !!keep.rules && 'dropGaps' in keep.rules && !(rule in keep.rules)
   const xrng = new Rng(seed ^ 0x47455354)
+  const gaterng = new Rng(seed ^ 0x47415445)
   const drawnCharacter = crng.pick(CHARACTERS)
   // (A track made again carries its own, also when it has none: one made before characters.)
   const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
@@ -1500,6 +1508,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     pitchPerc2: perc2 && rng.chance(0.25) ? rng.weighted(PITCHES) : null,
     pitchHats2: hats2 && rng.chance(0.2) ? rng.weighted(PITCHES) : null,
     ioShort: rng.chance(0.4) ? rng.weighted([[1, 1], [2, 2]] as const) as number : null,
+    // The intro's top loops gated, the gate opening up phrase by phrase (an RNG of its own).
+    // Every short fill made anew: pitched, spliced, reworked (an RNG of its own); not in tracks made before.
+    fillVariants: !madeBefore('fillVariants'),
+    introGate: madeBefore('introGate') || !tops.length ? null : gaterng.chance(INTRO_GATE_CHANCE) ? gaterng.pick(GATE_FAMILIES) : null,
     // Chord stabs and their 2-bar rhythm; in drops only, or also low-passed in breakdowns and
     // builds ('keys': where keys parts played before stabs replaced them).
     stabs: useStabs,
@@ -2637,6 +2649,21 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
   }
 
+  // ---- the intro's top loops gated, the gate opening up: a few 16ths at first, more every 8 bars,
+  // the plain loop in its last phrase (each top lane in its own pattern, so they interlock) ----
+  if (rules.introGate) {
+    for (const sec of sections) {
+      if (sec.kind !== 'intro') continue
+      const gated = gatedPhrases(sec.bars, PHRASE)
+      TOP_ROLES.forEach((role, j) => {
+        for (let k = 0; k < gated; k++) {
+          const a = (sec.start + k * PHRASE) * BEATS_PER_BAR
+          lanes.vary(role, a, a + PHRASE * BEATS_PER_BAR, { chop: introGate(rules.introGate as GateFamily, j, k, gated) })
+        }
+      })
+    }
+  }
+
   // ---- the arc (SCOPE.md §6.6): one element held back for the last drop, so the peak has something
   // the track hasn't played yet. It must play there and somewhere before it, else the next one the
   // character leans to is held; none when nothing qualifies ----
@@ -2977,6 +3004,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (bedLane) bedLane.duck = BED_DUCK
   const laneIds = new Map(LANES.map((l, i) => [l.role, project.lanes[i].id]))
   project.clips = lanes.clips(laneIds)
+  // ---- the fills made anew: a short fill never as it was recorded ----
+  const fillWords = rules.fillVariants
+    ? varyFills(project.clips, project.lanes.find((l) => l.name === 'Fills')?.id, new Map(all.map((s) => [s.rel_path, s])), fills, new Rng(seed ^ 0x46494c4c))
+    : null
   const used = new Set(project.clips.map((c) => c.laneId))
   project.lanes = project.lanes.filter((l) => used.has(l.id))
   project.markers = sections.map((s) => makeMarker(s.label, s.start * 4, (s.start + s.bars) * 4))
@@ -3036,6 +3067,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (liftOf(sections[0]).length || liftOf(sections[sections.length - 1]).length) choices.push('the intro fills up into the drop, the outro thins out')
   if (rules.firstDrop === 'lean' && sections[1]?.kind === 'drop') choices.push('drop 1 starts leaner')
   if (rules.ioShort) choices.push(`intro loops on their first ${rules.ioShort === 1 ? 'bar' : '2 bars'} at first`)
+  if (rules.introGate) choices.push(`intro tops gated, opening up (${GATE_LABEL[rules.introGate as GateFamily]})`)
+  if (fillWords) choices.push(fillWords)
   if (varied) {
     const g = rules.gestures as Gestures | null
     choices.push(g ? `${varied} variations of its own: ${g.small.map((t) => TWEAK_LABEL[t]).join(' or ')} every 8 bars, ${TWEAK_LABEL[g.medium]} at 16, ${TWEAK_LABEL[g.big]} at 32`
@@ -3753,10 +3786,22 @@ export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Ge
     return c.type === 'audio' && s.kind === 'event' && !looped ? { ...next, length: Math.min(c.length, (x.bars ?? 1) * BEATS_PER_BAR) } : next
   })
   if (!swapped) return null
+  // New fills are made anew too (the old variant was the old fill's).
+  let choices = g.choices
+  if (role === 'fills' && rulesOf(g).fillVariants) {
+    for (const c of project.clips) {
+      if (c.laneId === laneId && c.type === 'audio') {
+        delete c.remix
+        delete c.pitch
+      }
+    }
+    const words = varyFills(project.clips, laneId, byPath, samples.filter((x) => x.kind === 'event' && x.category === 'fill'), new Rng(seed ^ 0x46494c4c))
+    choices = [...g.choices.filter((c) => !c.startsWith(FILL_WORDS)), ...(words ? [words] : [])]
+  }
   balanceLanes(project, all, opts, g.sections, new Set([laneId]), (g.rules.lead as Lead | null | undefined) ?? null)
   const picks = { ...g.picks }
   const was = picks[role] && swaps.get(picks[role]!.rel_path)
   if (was) picks[role] = was
   const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((z): z is string => !!z && z !== 'Serum'))].sort()
-  return { ...g, project, picks, zips }
+  return { ...g, project, picks, zips, choices }
 }

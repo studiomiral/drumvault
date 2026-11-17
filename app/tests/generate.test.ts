@@ -21,6 +21,7 @@ import { Rng } from '../src/generate/rng'
 import { expandCompatible } from '../src/lib/camelot'
 import { bassy } from '../src/generate/eq'
 import { halfwayBars } from '../src/generate/structure'
+import { fillSlices } from '../src/generate/fills'
 import type { SampleListItem } from '../src/types/api'
 import type { Category, SampleKind } from '../src/types/engine'
 import type { AudioClip, Clip, PatternClip, Velocity } from '../src/types/project'
@@ -831,7 +832,8 @@ describe('generator: feel, loop variations and a change every 8 bars', () => {
     expect(pitched.length).toBeGreaterThan(20)
     for (const c of pitched) {
       expect(Math.abs(c.pitch!)).toBeLessThanOrEqual(2)
-      expect(['top', 'perc', 'hat', 'groove']).toContain(c.sample.category)
+      // (Fills too: a short fill is never played as recorded.)
+      expect(['top', 'perc', 'hat', 'groove', 'fill']).toContain(c.sample.category)
     }
     const short = audio.filter((c) => c.loopBars)
     expect(short.length).toBeGreaterThan(20)
@@ -2695,5 +2697,65 @@ describe('generator: phrasing and the kick never alone', () => {
         }
       }
     }
+  })
+})
+
+describe('generator: intros gated, fills made anew', () => {
+  it('maps a fill\'s 16ths: spliced by halves, beat by beat or the last beat, reworked in its last bar, its silence its own', () => {
+    const halves = fillSlices(1, 'halves', null)
+    expect(halves.slice(0, 8).every(([s]) => s === 0) && halves.slice(8).every(([s]) => s === 1)).toBe(true)
+    expect(halves.map(([, i]) => i)).toEqual(Array.from({ length: 16 }, (_, i) => i))
+    expect(fillSlices(1, 'alternate', null).map(([s]) => s)).toEqual([0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1])
+    expect(fillSlices(1, null, 'repeatFirst').map(([, i]) => i).slice(4, 8)).toEqual([0, 1, 2, 3])
+    expect(fillSlices(1, null, 'swap').map(([, i]) => i).slice(4, 12)).toEqual([8, 9, 10, 11, 4, 5, 6, 7])
+    expect(fillSlices(1, null, 'stutter8').map(([, i]) => i).slice(12)).toEqual([12, 13, 12, 13])
+    expect(fillSlices(1, null, 'stutter16').map(([, i]) => i).slice(12)).toEqual([12, 12, 12, 12])
+    // A 2-bar fill: the splice through both bars, the rework only in the last.
+    const two = fillSlices(2, 'last', 'stutter16')
+    expect(two[12][0]).toBe(1)
+    expect(two.map(([, i]) => i).slice(12, 16)).toEqual([12, 13, 14, 15])
+    expect(two.map(([, i]) => i).slice(28)).toEqual([28, 28, 28, 28])
+    // Its silence before the line stays its own.
+    expect(fillSlices(1, 'halves', 'stutter16', 2).slice(14)).toEqual([[0, 14], [0, 15]])
+  })
+
+  it('never plays a short fill as it was recorded: each fill of a track its own variant, the same each time', () => {
+    let seen = 0
+    for (const g of gens) {
+      const fills = clipsOn(g, 'Fills').filter((c): c is AudioClip => c.type === 'audio' && c.sample.category === 'fill' && (c.sample.bars ?? 1) <= 2)
+      const by = new Map<string, string>()
+      for (const c of fills) {
+        expect([-2, -1, 1, 2]).toContain(c.pitch)
+        const v = JSON.stringify([c.pitch, c.remix ?? null])
+        if (by.has(c.sample.relPath)) expect(v).toBe(by.get(c.sample.relPath))
+        by.set(c.sample.relPath, v)
+        seen++
+      }
+      if (fills.length) expect(g.choices.some((x) => x.startsWith('fills made anew'))).toBe(true)
+    }
+    expect(seen).toBeGreaterThan(20)
+  })
+
+  it('gates the intro\'s top loops, opening up every 8 bars, the plain loop in its last phrase', () => {
+    let gated = 0
+    for (const g of gens.filter((x) => x.rules.introGate)) {
+      const intro = g.sections[0]
+      const phrases = Math.floor(intro.bars / 8)
+      const ids = new Set(g.project.lanes.filter((l) => /^Tops/.test(l.name)).map((l) => l.id))
+      const at = (bar: number) => g.project.clips.find((c) => ids.has(c.laneId) && c.start <= bar * 4 && c.start + c.length > bar * 4) as AudioClip | undefined
+      const open = (bar: number) => { const c = at(bar); return c ? (c.chop ? c.chop.filter(Boolean).length : 16) : null }
+      const counts = Array.from({ length: phrases }, (_, k) => open(intro.start + k * 8)).filter((n): n is number => n != null)
+      if (counts.length < 2) continue
+      gated++
+      for (let k = 1; k < counts.length; k++) expect(counts[k]).toBeGreaterThanOrEqual(counts[k - 1])
+      expect(counts[0]).toBeLessThan(16)
+      // (Its last phrase plain: checked where it starts; its last bar may be the breath before a drop.)
+      const last = open(intro.start + (phrases - 1) * 8)
+      if (last != null) expect(last).toBe(16)
+      // Never past the intro.
+      expect(g.project.clips.some((c) => c.type === 'audio' && c.chop && c.start >= (intro.start + intro.bars) * 4)).toBe(false)
+    }
+    expect(gated).toBeGreaterThan(10)
+    expect(gens.filter((x) => x.rules.introGate).length).toBeGreaterThan(gens.length * 0.4)
   })
 })

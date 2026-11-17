@@ -176,6 +176,17 @@ export interface AudioClip extends ClipBase {
   bass?: BassRender
   /** Repeat only the loop's first bars (1 or 2 of a 4-bar loop, …); the whole loop when unset. */
   loopBars?: number
+  /**
+   * A step gate (SCOPE.md §6.6): which 16ths of every bar play (1) and which don't (0), 16 of
+   * them, on the project's bar lines. A gated loop plays as 16th slices on the grid, each declicked.
+   */
+  chop?: number[]
+  /**
+   * A fill made anew (SCOPE.md §6.6): for each 16th of the sound (from its start, repeating with
+   * it), which fill plays (0: the clip's own sample, 1…: `from`) and which of its 16ths. Played as
+   * 16th slices on the grid, so beats of two fills, a beat twice or a stutter make a new fill.
+   */
+  remix?: { from: SampleRef[]; slices: [number, number][] }
 }
 
 /** 0 = off, 1 = soft, 2 = medium, 3 = full. */

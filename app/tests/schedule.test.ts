@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bassPath, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath, verbSend } from '../src/audio/schedule'
+import { bassPath, clipSounds, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath, verbSend } from '../src/audio/schedule'
 import { bassNotes, notesMidi } from '../src/lib/midi'
 import { newProject, splitClip } from '../src/lib/project'
 import type { AudioClip, PatternClip, Project, SampleRef, Velocity } from '../src/types/project'
@@ -358,5 +358,44 @@ describe('volume rides', () => {
     const [a, b] = splitClip(c, 8)!
     expect([a.gainDb, a.gainTo, b.gainDb, b.gainTo]).toEqual([-12, -6, -6, 0])
     expect(eventsInRange(project([audio(0, 16)]), 0, 1000).every((e) => e.gainEnd == null)).toBe(true)
+  })
+})
+
+describe('gated loops and fills made anew', () => {
+  const fillA: SampleRef = { relPath: 'Fills/a.wav', id: 3, name: 'a', kind: 'event', category: 'fill', bars: 1, durationS: 4 * BEAT, bpm: BPM }
+  const fillB: SampleRef = { relPath: 'Fills/b.wav', id: 4, name: 'b', kind: 'event', category: 'fill', bars: 1, durationS: 4 * BEAT, bpm: BPM }
+
+  it('plays a gated loop as 16th slices, only on the 16ths its gate lets through, on the bar grid', () => {
+    const p = project([])
+    const chop = new Array(16).fill(0)
+    for (const i of [2, 6, 10, 14]) chop[i] = 1
+    p.clips = [{ ...audio(0, 8), chop }]
+    expect(tempoMode(p.clips[0], BPM)).toBe('sliced')
+    const evs = eventsInRange(p, 0, 8 * BEAT)   // two bars
+    expect(evs.map((e) => Math.round(e.start / (BEAT / 4)))).toEqual([2, 6, 10, 14, 18, 22, 26, 30])
+    // Each slice is the loop's own 16th there, declicked.
+    expect(evs[1].offset).toBeCloseTo(6 * BEAT / 4, 6)
+    expect(evs.every((e) => e.declick)).toBe(true)
+    // An open gate is the plain loop.
+    p.clips = [{ ...audio(0, 8), chop: new Array(16).fill(1) }]
+    expect(eventsInRange(p, 0, 4 * BEAT - 1e-6)).toHaveLength(16)
+  })
+
+  it('plays a remixed fill slice by slice from the fill and 16th its map names, pitched', () => {
+    const p = project([])
+    // Beats 1–2 from the fill, 3–4 from the other one, the last beat's first 16th four times.
+    const slices: [number, number][] = Array.from({ length: 16 }, (_, i) => (i < 8 ? [0, i] : i < 12 ? [1, i] : [1, 12]))
+    p.clips = [{ id: 'f', laneId: 'L', type: 'audio', start: 0, length: 4, trimBeats: 0, gainDb: 0, sample: fillA, pitch: 1,
+      remix: { from: [fillB], slices } }]
+    expect(clipSounds(p.clips[0], BPM)).toEqual(['Fills/a.wav', 'Fills/b.wav'])
+    const evs = eventsInRange(p, 0, 4 * BEAT - 1e-6)
+    expect(evs).toHaveLength(16)
+    expect(evs.slice(0, 8).every((e) => e.relPath === 'Fills/a.wav')).toBe(true)
+    expect(evs.slice(8).every((e) => e.relPath === 'Fills/b.wav')).toBe(true)
+    expect(evs[9].offset).toBeCloseTo(9 * BEAT / 4, 6)
+    for (const e of evs.slice(12)) expect(e.offset).toBeCloseTo(12 * BEAT / 4, 6)
+    // On the grid, a semitone up.
+    expect(evs.map((e) => Math.round(e.start / (BEAT / 4)))).toEqual(Array.from({ length: 16 }, (_, i) => i))
+    expect(evs[0].rate).toBeCloseTo(2 ** (1 / 12), 6)
   })
 })

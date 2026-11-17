@@ -245,7 +245,9 @@ function drawClip(g: CanvasRenderingContext2D, c: Clip, box: LaneBox | undefined
     const verb = c.verb ? ` · verb${c.verb.to > c.verb.from ? ' build' : ''}` : ''
     const ride = c.gainTo != null && c.gainTo !== c.gainDb ? ` · ride ${c.gainTo > c.gainDb ? 'up' : 'down'}` : ''
     const part = c.type === 'audio' && c.loopBars ? ` · ${c.loopBars === 1 ? 'bar 1' : `bars 1–${c.loopBars}`}` : ''
-    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name) + filt + verb + ride + pitch + part
+    const gate = c.type === 'audio' && c.chop ? ` · gated ${c.chop.filter(Boolean).length}/16` : ''
+    const remix = c.type === 'audio' && c.remix ? (c.remix.from.length ? ' · spliced' : ' · reworked') : ''
+    const label = (missing ? '⚠ missing: ' : '') + shortName(c.sample.name) + filt + verb + ride + pitch + part + gate + remix
     g.fillText(label, Math.max(x0 + 6, 4), y + 3)
   }
   if (d.editing === c.id) {
