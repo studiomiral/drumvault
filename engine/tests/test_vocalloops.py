@@ -77,11 +77,12 @@ def test_a_loop_becomes_a_take_with_splice_s_record_and_its_link(lab):
     s = settings_for(tmp, db)
     r = vocalloop.import_loops(s, [str(src)])
     [got] = r["imported"]
-    assert (got["key"], got["bpm"], got["bars"]) == ("Am", 120, 4) and got["chops"] > 0
+    assert (got["key"], got["bpm"], got["bars"]) == ("Am", 120, 4) and "chops" not in got
     assert got["url"] == "https://splice.com/sounds/packs/toolroom-records/toolroom-vocal-all-stars/samples"
     d = Path(s.library_path) / "Vocals" / got["id"]
     meta = json.loads((d / "meta.json").read_text())
     assert meta["source"] == "splice" and meta["usedIn"] == [] and meta["vocal"] == f"Vocals/{got['id']}/vocal.wav"
+    assert meta["analysis"]["chops"] == [] and not (d / "chops").exists()   # chops are out
     assert {k: meta["splice"][k] for k in ("file", "pack", "label", "bpm", "loop", "key_source")} == {
         "file": f.name, "pack": "Vocal Allstars", "label": "Toolroom", "bpm": 120, "loop": True, "key_source": "name"}
     # Its phrase loop: its 4 bars stretched to the library tempo, exactly.

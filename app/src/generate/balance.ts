@@ -61,7 +61,7 @@ export function balanceFrom(arrangements: TrackArrangement[]): Balance {
     const rel = refs.map((a) => a.levels!.parts[part]).flatMap((v, i) => (v == null ? [] : [v - refs[i].levels!.parts.kick]))
     if (rel.length >= MIN_REFERENCES) db[part] = Math.round(median(rel) * 2) / 2
   }
-  // The vocal (its stems, measured apart from the parts): its chops as far under it as by default.
+  // The vocal (its stems, measured apart from the parts); chops of tracks from before as far under it as by default.
   const sung = refs.flatMap((a) => (a.levels!.vocal?.lufs == null ? [] : [a.levels!.vocal.lufs - a.levels!.parts.kick]))
   if (sung.length >= MIN_REFERENCES) {
     db.vocal = Math.round(median(sung) * 2) / 2

@@ -14,7 +14,7 @@ const playId = (i: number) => -1_700_000_000 - i
 
 /**
  * Sounds → Vocal Loops (SCOPE.md §6.11a): vocal loops and phrases from Splice, made into takes
- * Generate can sing (their phrase loop and chops). The Vocal Loops module in Create gives some new
+ * Generate can sing (their phrase loop). The Vocal Loops module in Create gives some new
  * tracks one that fits their key and tempo; once a track with it is exported it is used and never
  * offered again (House of Tracks takes each vocal once), unless set free here.
  */
@@ -111,7 +111,7 @@ export function VocalLoopsView() {
           <span>
             <span className="block text-text font-medium">{busy ? 'Importing… (each loop is analysed: a few seconds)' : 'Drop vocal loops and phrases: audio files or folders'}</span>
             <span className="block mt-1 text-[12px] text-muted">
-              Vocal loops and phrases from Splice, made into a phrase loop and chops like a made vocal. With the Vocal Loops module on,
+              Vocal loops and phrases from Splice, made into a phrase loop like a made vocal. With the Vocal Loops module on,
               some new tracks sing one within {LOOP_MAX_SHIFT} semitones of their key and {LOOP_MAX_BPM} BPM of their tempo, where and as loud
               as your own tracks sing. Once a track with it is exported, it's used: never offered again. Its pack and link go into the export's info.txt.
             </span>
@@ -137,7 +137,7 @@ export function VocalLoopsView() {
                     <div className="truncate font-medium">{takeName(v)}</div>
                     <div className="text-[11px] text-faint truncate">
                       {key ?? 'no key'} · {v.splice?.bpm ? `${v.splice.bpm} BPM` : 'a phrase, no tempo'}
-                      {phrase ? ` · ${phrase.bars}-bar phrase` : ' · no phrase loop'} · {v.analysis?.chops.length ?? 0} chops
+                      {phrase ? ` · ${phrase.bars}-bar phrase` : ' · no phrase loop: not used'}
                       {' · '}{v.splice?.pack ?? 'not in Splice\'s records'}{v.splice?.label ? ` (${v.splice.label})` : ''}
                     </div>
                     {editing === v.id ? (

@@ -111,7 +111,7 @@ export interface HitItem {
 
 /** What an import of Splice vocal loops did (vocalloop.import_loops). */
 export interface VocalLoopImport {
-  imported: { id: string; name: string; key: string | null; bpm: number | null; bars: number | null; chops: number; url: string | null }[]
+  imported: { id: string; name: string; key: string | null; bpm: number | null; bars: number | null; url: string | null }[]
   skipped: number
   failed: string[]
 }
@@ -533,7 +533,7 @@ export interface DrumvaultAPI {
   listVocals(): Promise<VocalMeta[]>
   /** Remove a vocal take and its folder. */
   deleteVocal(id: string): Promise<void>
-  /** Find a take's phrase loops, chops and key (takes made before the engine did). */
+  /** Find a take's phrase loops and key (takes made before the engine did). */
   analyzeVocal(id: string): Promise<VocalMeta>
   /** These takes were exported in `track` (House of Tracks takes each vocal once). */
   markVocalsUsed(ids: string[], track: string): Promise<void>

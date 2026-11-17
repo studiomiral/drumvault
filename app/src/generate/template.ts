@@ -222,13 +222,12 @@ function shape(read: Read[] | null): Part[] | null {
   return merged
 }
 
-/** Where a vocal sings in a track (the generator's `vocalAt`, `chopsAt`). */
-export interface VocalRule { vocalAt: 'drops' | 'halves' | 'drops_breaks' | 'breaks'; chopsAt: 'drops' | 'drops_builds' }
+/** Where a vocal sings in a track (the generator's `vocalAt`). */
+export interface VocalRule { vocalAt: 'drops' | 'halves' | 'drops_breaks' | 'breaks' }
 
 /**
  * Where the track's vocal sings, read from its vocal stems over its sections: in the breakdowns
- * (and the drops), in the drops' second halves only, or in the drops; into the drops too when it
- * sings over the builds' last bars. Null when it doesn't sing (in a quarter of its drops and
+ * (and the drops), in the drops' second halves only, or in the drops. Null when it doesn't sing (in a quarter of its drops and
  * breakdowns at least), or wasn't measured.
  */
 function vocalRuleIn(a: TrackArrangement, s: Part[]): VocalRule | null {
@@ -252,8 +251,7 @@ function vocalRuleIn(a: TrackArrangement, s: Part[]): VocalRule | null {
   const first = across(drops.map((d) => ({ from: d.from, to: mid(d) })))
   const second = across(drops.map((d) => ({ from: mid(d), to: d.to })))
   const vocalAt = inBreaks >= PLAYS ? (inDrops >= PLAYS ? 'drops_breaks' : 'breaks') : second >= PLAYS && first < 0.3 ? 'halves' : 'drops'
-  const builds = s.filter((x) => x.kind === 'build').map((b) => ({ from: Math.max(b.from, b.to - 8), to: b.to }))
-  return { vocalAt, chopsAt: builds.length && across(builds) >= PLAYS ? 'drops_builds' : 'drops' }
+  return { vocalAt }
 }
 
 /** Where a track sings (vocalRuleIn), from its arrangement as measured; null: no vocal there. */

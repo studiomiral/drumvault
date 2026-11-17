@@ -169,7 +169,7 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
         </button>
       )}
       <button className={btn} onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${laneName}.`)}
-              title={sung ? 'Sing the same vocal another way: its phrase, chops or both, and where (no credits; your edits on these lanes are replaced; ⌘Z undoes)'
+              title={sung ? 'Sing the same vocal another way: the long or the short phrase, and where (no credits; your edits on these lanes are replaced; ⌘Z undoes)'
                 : 'Write the lane again: a new sound and where it plays; the rest stays (your edits on this lane are replaced; ⌘Z undoes)'}>
         <IconSparkle className="w-3.5 h-3.5 text-accent" />Remake
       </button>

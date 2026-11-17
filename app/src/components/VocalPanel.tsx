@@ -23,7 +23,7 @@ const drawVocal = (bpm: number, keys: string[]) => randomVocal(bpm, keys, (n, ph
 /**
  * Vocals (SCOPE.md §6.11): made for one track at a time, in Create. ElevenLabs sings a take in the
  * track's key (lines drawn, or the ones typed in), and it's placed as Generate would: its phrase,
- * its chops or both, and where. A new track (G) sings none.
+ * and where. A new track (G) sings none.
  */
 export function VocalPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const bpm = useApp((s) => s.settings?.engine.library_bpm ?? 124)
@@ -46,7 +46,7 @@ export function VocalPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const pick = g.picks.vocal
   const take = pick ? vocals.find((t) => pick.rel_path === `Vocals/${t.id}/vocal.wav`) : undefined
   const lanes = (name: string) => g.project.clips.some((c) => c.laneId === g.project.lanes.find((l) => l.name === name)?.id)
-  const how = [lanes('Vocal') && `the phrase ${WHERE[String(g.rules.vocalAt)] ?? ''}`, lanes('Vocal Chops') && 'chops in the drops'].filter(Boolean).join(', ')
+  const how = [lanes('Vocal') && `the phrase ${WHERE[String(g.rules.vocalAt)] ?? ''}`, lanes('Vocal Chops') && 'chops in the drops (from before: making it again drops them)'].filter(Boolean).join(', ')
   // Sung in the track's key, so the phrase only moves to the track's tempo.
   const key = g.key
   const left = eleven?.credits ? eleven.credits.limit - eleven.credits.used : null

@@ -62,7 +62,7 @@ def sung_take(path: Path, bpm: float = 124.0, reps: int = 6, sr: int = 44100) ->
     sf.write(str(path), np.stack([y, y], axis=1), sr, subtype="PCM_24")
 
 
-def test_finds_the_phrase_loop_chops_and_key_of_a_take(tmp_path: Path):
+def test_finds_the_phrase_loop_and_key_of_a_take(tmp_path: Path):
     from drumvault_engine.vocal import analyze
     sung_take(tmp_path / "Vocals" / "t" / "vocal.wav")
     r = analyze(Settings(library_path=str(tmp_path), library_bpm=124.0), "Vocals/t")
@@ -72,7 +72,7 @@ def test_finds_the_phrase_loop_chops_and_key_of_a_take(tmp_path: Path):
     assert all(p["bars"] in (2, 4, 8) for p in r["phrases"])
     y, sr = sf.read(str(tmp_path / two["path"]), always_2d=True)
     assert len(y) == round(2 * 4 * 60 / 124 * sr)  # exactly 2 bars at the library tempo
-    assert r["chops"] and all(round(c["note"]) in (69, 71, 72, 76) for c in r["chops"])
+    assert r["chops"] == [] and not (tmp_path / "Vocals" / "t" / "chops").exists()  # chops are out
     assert (tmp_path / "Vocals" / "t" / "analysis.json").exists()
 
 

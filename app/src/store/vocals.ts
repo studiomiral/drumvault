@@ -14,9 +14,9 @@ interface VocalsState {
 
 export const useVocals = create<VocalsState>(() => ({ vocals: [], loaded: false, making: false }))
 
-/** The takes a track can sing: analysed, with a phrase loop or chops. */
+/** The takes a track can sing: analysed, with a phrase loop (chops are out). */
 export const playableVocals = (vocals: VocalMeta[]) =>
-  vocals.filter((v) => v.vocal && v.analysis && (v.analysis.phrases.length || v.analysis.chops.length))
+  vocals.filter((v) => v.vocal && v.analysis && v.analysis.phrases.length)
 
 /** (Re)load the takes. */
 export async function loadVocals(): Promise<void> {

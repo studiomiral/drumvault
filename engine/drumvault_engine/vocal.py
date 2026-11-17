@@ -6,12 +6,11 @@ self-similarity of its pitch and level, `vocal_period_*`) is its **phrase loop**
 of a line after a rest and stretched to a whole number of bars at the library tempo (1, 2, 4 or 8:
 the nearest, within `vocal_max_stretch`), so it loops on the grid with its own phrasing inside. A
 take may have several (a line sung again every 2 bars, both its lines every 8): one loop for each.
-**Chops** are its syllables: from an onset to the next (at most `vocal_chop_max_s`), each with the
-note it's sung on (pYIN), the clearest and loudest kept. Its **key** is read from the notes sung
+(Chops, its syllables cut one by one, are out: none are cut.) Its **key** is read from the notes sung
 (pitch classes weighted by how long and loud they're held, against major and minor profiles).
 
 A phrase plays in a track moved into the track key by Rubber Band with its formants kept (the
-voice stays natural) and stretched to the track tempo; chops play like a sampler.
+voice stays natural) and stretched to the track tempo.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from . import normalize
-from .audioutil import k_energy_db, load, resample, write_wav
+from .audioutil import load, resample, write_wav
 from .config import Settings, Thresholds
 
 PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -104,8 +103,8 @@ def fit_bars(seconds: float, bpm: float, th: Thresholds) -> int | None:
 
 
 def analyze(settings: Settings, folder: str) -> dict:
-    """Phrase loop, chops and key of a take (its vocal.wav), written into its folder (phrases/,
-    chops/, analysis.json). Returns the analysis (paths library-relative)."""
+    """Phrase loop and key of a take (its vocal.wav), written into its folder (phrases/,
+    analysis.json). Returns the analysis (paths library-relative; `chops` always empty)."""
     from . import stretch
     lib = Path(settings.library_path)
     d = lib / folder
@@ -142,45 +141,8 @@ def analyze(settings: Settings, folder: str) -> dict:
         write_wav(lib / rel, y, sr, "pcm24")
         out["phrases"].append({"path": rel, "bars": bars, "period_s": round(period, 3), "stretch": round(target / len(seg), 3)})
 
-    out["chops"] = chops(settings, folder, x, sr, notes)
+    # (No chops: they are out. The field stays for the app, always empty.)
     (d / "analysis.json").write_text(json.dumps(out, indent=2))
-    return out
-
-
-def chops(settings: Settings, folder: str, x: np.ndarray, sr: int, notes: np.ndarray) -> list[dict]:
-    """A take's chops (`x` (n, 2) at `sr`, `notes` from sung_pitch): syllables with a
-    clear note, the clearest and loudest `vocal_chops`, written to <folder>/chops/."""
-    import librosa
-    lib = Path(settings.library_path)
-    th = settings.thresholds
-    mono = x.mean(axis=1)
-    frame_s = th.vocal_hop / 22050
-    out: list[dict] = []
-    onsets = librosa.onset.onset_detect(y=mono, sr=sr, units="samples", backtrack=True, delta=th.vocal_onset_delta)
-    cands = []
-    for i, s in enumerate(onsets):
-        e = min(onsets[i + 1] if i + 1 < len(onsets) else len(mono), s + int(th.vocal_chop_max_s * sr))
-        if e - s < int(th.vocal_chop_min_s * sr):
-            continue
-        fr = slice(int(s / sr / frame_s), max(int(s / sr / frame_s) + 1, int(e / sr / frame_s)))
-        ns = notes[fr]
-        voiced = ns[~np.isnan(ns)]
-        if len(voiced) < max(3, 0.5 * len(ns)):
-            continue
-        note = float(np.median(voiced))
-        steady = float(np.std(voiced))
-        loud = float(np.sqrt(np.mean(mono[s:e] ** 2)))
-        cands.append((loud / (1 + steady), int(s), int(e), note))
-    cands.sort(reverse=True)
-    for k, (_, s, e, note) in enumerate(sorted(cands[:th.vocal_chops], key=lambda c: c[1])):
-        y = x[s:e].copy()
-        fi, fo = int(0.004 * sr), min(int(th.vocal_fade_ms * sr / 1000) * 2, (e - s) // 3)
-        y[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)[:, None]
-        y[-fo:] *= np.linspace(1, 0, fo, dtype=np.float32)[:, None]
-        y, _, _ = normalize.peak_normalize(y, th.hit_peak_dbfs)
-        rel = f"{folder}/chops/chop-{k + 1:02d}.wav"
-        write_wav(lib / rel, y, sr, "pcm24")
-        out.append({"path": rel, "note": round(note, 2), "seconds": round((e - s) / sr, 3), "energy_db": k_energy_db(y, sr)})
     return out
 
 

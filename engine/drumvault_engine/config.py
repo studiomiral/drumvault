@@ -300,7 +300,7 @@ class Thresholds:
     strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)
     strings_peak_dbfs: float = -1.0
 
-    # ---- vocals (vocal.py): a take's phrase loop, chops and key ------------------
+    # ---- vocals (vocal.py): a take's phrase loop and key ----------------------------
     vocal_hop: int = 256                    # pYIN / level frame hop at 22.05 kHz (≈ 11.6 ms)
     vocal_fmin_hz: float = 70.0
     vocal_fmax_hz: float = 1100.0
@@ -318,10 +318,6 @@ class Thresholds:
     vocal_loop_max_s: float = 240.0          # (a pack's whole hook: its best 8 bars are the phrase)
     splice_link_timeout_s: float = 6.0
     vocal_loop_suggest_bpm: float = 8.0     # the Splice page suggests vocal loops this close to the library tempo
-    vocal_onset_delta: float = 0.12         # onset detection threshold for chops
-    vocal_chop_min_s: float = 0.08
-    vocal_chop_max_s: float = 0.6
-    vocal_chops: int = 8                    # chops kept per take: the clearest and loudest
 
     # ---- mastering (master.py): the mixdown through Ozone 11 into mastered.wav -----
     master_target_lufs: float = -6.5        # integrated loudness of mastered.wav (House of Tracks: -9 … -5)

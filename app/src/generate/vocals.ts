@@ -1,6 +1,6 @@
 // Vocals in a generated track (SCOPE.md §6.11): one take per track, its phrase loop moved into the
-// track key (Rubber Band, formants kept: a render like the bass) and its chops played like a sampler
-// on the key's chord tones, in a rhythm.
+// track key (Rubber Band, formants kept: a render like the bass). (Chops are out: tracks from before
+// keep theirs, played like a sampler on the key's chord tones.)
 
 import { bassPath } from '../audio/schedule'
 import { BEATS_PER_BAR } from '../lib/project'
@@ -60,14 +60,6 @@ export function phraseRender(t: VocalTake, phrase: VocalAnalysis['phrases'][numb
 export function phraseSample(t: VocalTake, render: BassRender, bpm: number): SampleListItem {
   const bars = render.bars ?? 1
   return { ...vocalItem(t), rel_path: bassPath(render, bpm), bpm, bars, duration_s: (bars * BEATS_PER_BAR * 60) / bpm, key_label: render.keyLabel ?? null }
-}
-
-/** A chop as a one-shot sample. */
-export function chopSample(t: VocalTake, chop: VocalAnalysis['chops'][number]): SampleListItem {
-  return {
-    ...vocalItem(t), id: -1_600_000_000 - hash(chop.path), rel_path: chop.path, name: `${t.source === 'splice' ? takeName(t) : t.lines[0]} chop`, kind: 'oneshot', bars: null,
-    duration_s: chop.seconds, energy_db: chop.energy_db,
-  }
 }
 
 /** Semitones that put a chop sung on `note` (MIDI) on the nearest root, third or fifth of `key` (within a tritone). */

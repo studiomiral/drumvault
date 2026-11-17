@@ -862,7 +862,7 @@ function projectTake(project: Project): VocalTake | null {
 
 /**
  * A vocal made for the track on screen (the Vocals module, SCOPE.md §6.11): a new take from
- * ElevenLabs, sung in the track's key, then placed as Generate would (its phrase, chops or both,
+ * ElevenLabs, sung in the track's key, then placed as Generate would (its phrase loop,
  * and where). An edit of the project (⌘Z); the take it replaces is never offered again.
  */
 export async function makeVocal(req: VocalRequest): Promise<void> {
@@ -882,7 +882,7 @@ export async function makeVocal(req: VocalRequest): Promise<void> {
     const g = current()
     if (!g || !samples) return
     if (!playableVocals([take]).length) {
-      toast('error', `The vocal ${sung} came out without a phrase loop or chops to use: make another.`)
+      toast('error', `The vocal ${sung} came out without a phrase loop to use: make another.`)
       return
     }
     const next = rerollVocal(samples, { ...options(), vocals: { takes: [take as VocalTake] } }, g, randomSeed())

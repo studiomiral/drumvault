@@ -11,7 +11,6 @@ import { dropRanges, KICK_LEVEL_DB, laneLoudness } from '../src/generate/balance
 import { bassPath } from '../src/audio/schedule'
 import type { EventShape, HitItem, LoopGroove, MidiItem, SerumPreset, TrackArrangement } from '../src/types/api'
 import { hitPitch } from '../src/generate/disco'
-import { parseKey } from '../src/generate/bassline'
 import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
 import { mainBuildOf, mainBuilds, readReference, readSections, templateFrom, templateFromReference } from '../src/generate/template'
@@ -2169,50 +2168,45 @@ describe('generator: vocals', () => {
     for (const g of gs) expect(g.picks.vocal!.rel_path).not.toBe('Vocals/c/vocal.wav')
   })
 
-  it('moves the phrase into the track key and the chops onto its chord tones, never in the intro or outro', () => {
-    const uses = new Set<string>()
+  it('sings only the phrase (no chops), moved into the track key, never in the intro or outro', () => {
+    const where = new Set<string>()
     for (const g of gs) {
-      uses.add(String(g.rules.vocalUse))
+      where.add(String(g.rules.vocalAt))
+      expect(on(g, 'Vocal Chops')).toEqual([])
+      expect(g.project.lanes.some((l) => l.name === 'Vocal Chops')).toBe(false)
+      expect(on(g, 'Vocal').length).toBeGreaterThan(0)
       const intro = g.sections[0]
       const outro = g.sections.at(-1)!
-      for (const c of [...on(g, 'Vocal'), ...on(g, 'Vocal Chops')]) {
+      for (const c of on(g, 'Vocal') as AudioClip[]) {
         expect(c.start).toBeGreaterThanOrEqual((intro.start + intro.bars) * 4)
         expect(c.start).toBeLessThan(outro.start * 4)
-      }
-      for (const c of on(g, 'Vocal') as AudioClip[]) {
         const t = TAKES.find((x) => x.id === c.bass!.vocal!.take)!
         expect(c.bass!.role).toBe('vocal')
         expect(c.bass!.transpose).toBe(Math.max(-12, Math.min(12, transposeTo(t.analysis.key, g.key))))
         expect(c.sample.relPath).toBe(bassPath(c.bass!, g.project.bpm))
         expect([2, 8]).toContain(c.bass!.bars)
       }
-      const k = parseKey(g.key)!
-      const tones = [0, k.minor ? 3 : 4, 7].map((iv) => (k.root + iv) % 12)
-      for (const c of on(g, 'Vocal Chops') as PatternClip[]) {
-        const chop = TAKES.flatMap((t) => t.analysis.chops).find((x) => x.path === c.sample.relPath)!
-        expect(tones).toContain((((Math.round(chop.note) + (c.pitch ?? 0)) % 12) + 12) % 12)
-      }
-      // Phrase and chops together: the chops take each drop's first half, the phrase its second.
-      if (g.rules.vocalUse === 'both' && g.rules.vocalAt !== 'breaks') {
+      // In the second halves only: each drop's phrase starts halfway.
+      if (g.rules.vocalAt === 'halves') {
         for (const d of g.sections.filter((x) => x.kind === 'drop' && x.bars >= 16)) {
-          const half = d.start + Math.floor(d.bars / 2 / 8) * 8
-          expect(on(g, 'Vocal').some((c) => c.start === half * 4)).toBe(true)
-          expect(on(g, 'Vocal Chops').every((c) => c.start + c.length <= half * 4 || c.start >= (d.start + d.bars) * 4 || c.start < d.start * 4)).toBe(true)
+          expect(on(g, 'Vocal').some((c) => c.start === (d.start + Math.floor(d.bars / 2 / 8) * 8) * 4)).toBe(true)
         }
       }
+      expect(g.rules.vocalUse).toBeUndefined()
     }
-    expect([...uses].sort()).toEqual(['both', 'chops', 'phrase'])
+    expect([...where].sort()).toEqual(['breaks', 'drops', 'drops_breaks', 'halves'])
   })
 
   it('moves the vocal into another key, and makes a new vocal with the rest as it is', () => {
-    const g = gs.find((x) => on(x, 'Vocal').length && on(x, 'Vocal Chops').length)!
+    const g = gs.find((x) => on(x, 'Vocal').length)!
     const to = g.key === 'Dm' ? 'F' : 'Dm'
     const r = changeKey(LIB, opts, g, to, 3)
     for (const c of on(r, 'Vocal') as AudioClip[]) expect(c.bass!.transpose).toBe(Math.max(-12, Math.min(12, transposeTo(c.bass!.vocal!.key, to))))
     const n = rerollVocal(LIB, opts, g, 4)!
     const rest = (x: Generation) => JSON.stringify(x.project.clips.filter((c) => !c.sample.relPath.startsWith('Vocals/') && !c.sample.relPath.startsWith('.drumvault/vocals/')).map(({ id: _i, laneId: _l, ...c }) => c))
     expect(rest(n)).toBe(rest(g))
-    expect(on(n, 'Vocal').length + on(n, 'Vocal Chops').length).toBeGreaterThan(0)
+    expect(on(n, 'Vocal').length).toBeGreaterThan(0)
+    expect(on(n, 'Vocal Chops')).toEqual([])
   })
 
   it('sings the take made for a track in Arrange, the rest as it is, even once it is exported', () => {
@@ -2222,7 +2216,7 @@ describe('generator: vocals', () => {
       const bare = generate(LIB, OPTS, 8900)
       const n = rerollVocal(LIB, { ...OPTS, vocals: { takes: [made] } }, bare, 5)!
       expect(n.picks.vocal!.rel_path).toBe(`Vocals/${made.id}/vocal.wav`)
-      expect(on(n, 'Vocal').length + on(n, 'Vocal Chops').length).toBeGreaterThan(0)
+      expect(on(n, 'Vocal').length).toBeGreaterThan(0)
       expect(rest(n)).toBe(rest(bare))
     }
   })

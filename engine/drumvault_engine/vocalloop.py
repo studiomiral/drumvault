@@ -1,12 +1,11 @@
 """Splice vocal loops and phrases (SCOPE.md §6.11a): a vocal from the Splice folder made into a take
-Generate can sing, like an ElevenLabs one (<Library>/Vocals/<id>/: vocal.wav, phrases/, chops/,
+Generate can sing, like an ElevenLabs one (<Library>/Vocals/<id>/: vocal.wav, phrases/,
 analysis.json, meta.json), so it is placed, rendered, chopped and marked used the same way.
 
 A **loop** has a tempo (Splice's own record of it, else the name's): it is its own phrase loop, its
 whole bars (1, 2, 4 or 8; of a longer loop the 8 bars on a 4-bar line it sings most in) stretched to the library tempo, as an
 ElevenLabs phrase is cut. A **phrase** without a tempo is laid on the fewest bars that hold it
-(1, 2, 4 or 8 at the library tempo), not stretched, silence after it. Either way its chops are cut
-as a take's. Its **key**: the name's, else Splice's (its root and scale; a root alone takes the
+(1, 2, 4 or 8 at the library tempo), not stretched, silence after it. (No chops: they are out.) Its **key**: the name's, else Splice's (its root and scale; a root alone takes the
 scale sung on it), else the one sung.
 
 Splice's metadata comes from the desktop app's own database (`sounds.db`, read only): the pack, its
@@ -211,7 +210,7 @@ def import_one(settings: Settings, path: Path, taken: dict[str, str]) -> dict:
         write_wav(lib / rel, y, sr, "pcm24")
         phrases.append({"path": rel, "bars": bars, "period_s": round(len(seg) / sr, 3),
                         "stretch": round(target / len(seg), 3) if looped else 1.0})  # (a phrase is padded, not stretched)
-    analysis = {"key": key, "phrases": phrases, "chops": vocalmod.chops(settings, folder, x, sr, notes), "bpm": bpm}
+    analysis = {"key": key, "phrases": phrases, "chops": [], "bpm": bpm}  # (no chops: they are out)
     (d / "analysis.json").write_text(json.dumps(analysis, indent=2))
     link = pack_link(settings, (info or {}).get("label"), (info or {}).get("permalink"))
     meta = {
@@ -227,7 +226,7 @@ def import_one(settings: Settings, path: Path, taken: dict[str, str]) -> dict:
     (d / "meta.json").write_text(json.dumps(meta, indent=2))
     taken[sha] = tid
     return {"id": tid, "name": path.name, "status": "imported", "key": key, "bpm": tempo, "bars": phrases[0]["bars"] if phrases else None,
-            "chops": len(analysis["chops"]), "url": link}
+            "url": link}
 
 
 def import_loops(settings: Settings, paths: list[str]) -> dict:

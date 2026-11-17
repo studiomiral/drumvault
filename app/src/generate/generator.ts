@@ -18,7 +18,7 @@ import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bedShift } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { takeAbout } from '../vocals/plan'
-import { chopPitch, chopSample, loopFits, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
+import { chopPitch, loopFits, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
 import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perBarFor, rollBar, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabJob, type StabLayout, type StabRoll, type StabTurn, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
@@ -1278,7 +1278,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // Splice vocal loops (the Vocal Loops module): some tracks sing one that fits the key and tempo
   // and has never gone out in an export. A take made for this track (ElevenLabs) always sings.
   const loopPool = opts.vocals?.pool
-  const takes = (opts.vocals?.takes ?? []).filter((t) => !loopPool || loopFits(t, key, bpm))
+  const takes = (opts.vocals?.takes ?? []).filter((t) => t.analysis.phrases.length && (!loopPool || loopFits(t, key, bpm)))
   const vocalWeights = vocalAtWeights(opts.templates ?? [])
   const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
 
@@ -1451,16 +1451,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // (A supporting layer: from the second drop, in the second half of every drop, or in the
     // breakdowns for tension. Tracks made before: in the drops, all through, or all but intro and outro.)
     stringsAt: trng.weighted([['later', 3], ['halves', 3], ['breaks', 2]] as const) as 'later' | 'halves' | 'breaks' | 'drops' | 'all' | 'inner',
-    // A vocal in every track: its phrase loop, its chops, or both; the long or the short loop; the
-    // phrase in the drops, in their second halves, in drops and breakdowns, or in breakdowns (a
-    // reverb build on it there); the chops in the drops (where the phrase isn't), also into them.
+    // A vocal where a take is given: its phrase loop (the long or the short one), in the drops, in
+    // their second halves, in drops and breakdowns, or in breakdowns (a reverb build on it there).
     vocalIn: takes.length > 0 && (!loopPool || new Rng(seed ^ 0x564c4f50).chance(loopPool.chance)),
-    vocalUse: vrng.weighted([['phrase', 3], ['chops', 2], ['both', 4]] as const) as 'phrase' | 'chops' | 'both',
     vocalLoop: vrng.weighted([['long', 1], ['short', 1]] as const) as 'long' | 'short',
     // (Where the user's tracks sing, when their vocal stems were measured; else the house weights.)
     vocalAt: vrng.weighted(vocalWeights ?? [['drops', 3], ['halves', 2], ['drops_breaks', 3], ['breaks', 1]]) as 'drops' | 'halves' | 'drops_breaks' | 'breaks',
-    chopsAt: vrng.weighted([['drops', 3], ['drops_builds', 1]] as const) as 'drops' | 'drops_builds',
-    chopRhythm: stabRhythm(vrng),
     // The groove carries through breakdowns (SCOPE.md §6.6, "One groove"): the drop's own drums
     // play on there in a darker state instead of each break drawing its own content. The perc
     // through it low-passed or fading out; how dark (Hz) and how far down (dB) what stays sits;
@@ -2765,12 +2761,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
 
   // ---- a vocal (after the 8-bar variations, like the strings): one take, its phrase loop where the
-  // track's rule says, its chops on the key's chord tones in a rhythm ----
+  // track's rule says (no chops: they're out) ----
   const keptTake = keep.picks?.vocal ? takes.find((t) => vocalItem(t).id === keep.picks!.vocal!.id) ?? null : null
   let take: VocalTake | null = keptTake
   if (!take && rules.vocalIn && takes.length) {
     const avoid = new Set(keep.avoid ?? [])
-    const fresh = takes.filter((t) => !t.usedIn.length && !t.analysis.phrases.some((p) => avoid.has(p.path)) && !t.analysis.chops.some((c) => avoid.has(c.path))
+    const fresh = takes.filter((t) => !t.usedIn.length && !t.analysis.phrases.some((p) => avoid.has(p.path))
       && !(keep.avoid ?? []).some((a) => a.startsWith('.drumvault/vocals/') && a.includes(t.id)))
     const unused = takes.filter((t) => !t.usedIn.length)
     take = vrng.pick(fresh.length ? fresh : unused.length ? unused : takes)
@@ -2778,45 +2774,23 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   let vocalNote = ''
   if (take) {
     const phrases = [...take.analysis.phrases].sort((a, b) => a.bars - b.bars)
-    const chops = [...take.analysis.chops].sort((a, b) => (b.energy_db ?? -99) - (a.energy_db ?? -99))
-    const use = !phrases.length ? 'chops' : !chops.length ? 'phrase' : rules.vocalUse as string
     const drops = sections.filter((x) => x.kind === 'drop')
     const breaks = sections.filter((x) => x.kind === 'break')
     const at = rules.vocalAt === 'breaks' && !breaks.length ? 'drops' : rules.vocalAt as string
     const halfOf = (x: Section) => x.start + (x.bars >= 2 * PHRASE ? Math.floor(x.bars / 2 / PHRASE) * PHRASE : 0)
-    if (use !== 'chops') {
-      const phrase = rules.vocalLoop === 'long' ? phrases[phrases.length - 1] : phrases[0]
-      const render = phraseRender(take, phrase, key)
-      const sample = phraseSample(take, render, bpm)
-      const add = (a: number, z: number, verb?: ClipReverb) => {
-        if (z > a) lanes.add('vocal', { sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render, ...(verb ? { verb } : {}) })
-      }
-      // With chops too, the phrase takes each drop's second half (the chops its first).
-      for (const d of drops) {
-        if (at === 'halves' || (use === 'both' && at !== 'breaks')) add(halfOf(d), d.start + d.bars)
-        else if (at === 'drops' || at === 'drops_breaks') add(d.start, d.start + d.bars)
-      }
-      // In the last drop too when it's only in the breakdowns: the vocal comes back for the end.
-      if (at === 'breaks' && drops.length) add(halfOf(drops[drops.length - 1]), drops[drops.length - 1].start + drops[drops.length - 1].bars)
-      if (at === 'drops_breaks' || at === 'breaks') for (const b of breaks) add(b.start, b.start + b.bars, { from: 0.15, to: 0.6 })
+    const phrase = rules.vocalLoop === 'long' ? phrases[phrases.length - 1] : phrases[0]
+    const render = phraseRender(take, phrase, key)
+    const sample = phraseSample(take, render, bpm)
+    const add = (a: number, z: number, verb?: ClipReverb) => {
+      if (z > a) lanes.add('vocal', { sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render, ...(verb ? { verb } : {}) })
     }
-    if (use !== 'phrase') {
-      const rhythm = rules.chopRhythm as Velocity[][]
-      const two = chops.slice(0, 2)
-      const bar = (b: number, i: number) => {
-        const c = two[i % two.length]
-        const pitch = chopPitch(c.note, key)
-        lanes.setBar('vchop', b, { sample: chopSample(take!, c), steps: [...rhythm[i % rhythm.length]] as Steps, ...(pitch ? { pitch } : {}) })
-      }
-      // Where the phrase isn't: each drop's first half when the phrase takes the second, else all of it.
-      for (const d of drops) {
-        const z = use === 'both' && at !== 'breaks' ? halfOf(d) : d.start + d.bars
-        for (let b = d.start; b < z; b++) bar(b, b - d.start)
-      }
-      if (rules.chopsAt === 'drops_builds') {
-        for (const x of sections.filter((y) => y.kind === 'build')) for (let b = Math.max(x.start, x.start + x.bars - PHRASE); b < x.start + x.bars; b++) bar(b, b)
-      }
+    for (const d of drops) {
+      if (at === 'halves') add(halfOf(d), d.start + d.bars)
+      else if (at === 'drops' || at === 'drops_breaks') add(d.start, d.start + d.bars)
     }
+    // In the last drop too when it's only in the breakdowns: the vocal comes back for the end.
+    if (at === 'breaks' && drops.length) add(halfOf(drops[drops.length - 1]), drops[drops.length - 1].start + drops[drops.length - 1].bars)
+    if (at === 'drops_breaks' || at === 'breaks') for (const b of breaks) add(b.start, b.start + b.bars, { from: 0.15, to: 0.6 })
     picks.vocal = vocalItem(take)
     // The stabs step back where the phrase is sung: no hit at full strength under it.
     if (stabFit) {
@@ -2829,7 +2803,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         }
       }
     }
-    vocalNote = `vocal ${vocalItem(take).name} (${takeAbout(take)}): ${use === 'both' ? 'phrase and chops' : use === 'phrase' ? 'phrase' : 'chops'}`
+    vocalNote = `vocal ${vocalItem(take).name} (${takeAbout(take)}): its ${phrase.bars}-bar phrase`
   }
 
   // ---- the big builds into the drops after the long breakdown (over what the groove through
@@ -3310,7 +3284,7 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   // The Ambience lane made again: another texture.
   bed: [],
   // The vocal lanes made again: another take, and how and where it's sung (it stays a vocal).
-  vocal: ['vocalUse', 'vocalLoop', 'vocalAt', 'chopsAt', 'chopRhythm'],
+  vocal: ['vocalLoop', 'vocalAt'],
   // A stab lane made again: another sample in the same rhythm (the others play their turns in it).
   stab: [],
 }

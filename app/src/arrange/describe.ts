@@ -72,8 +72,7 @@ export function describeTrack(project: Project, sung: VocalMeta[], bars: number)
   const vocal = sung[0]
   if (vocal && (has('Vocal') || has('Vocal Chops'))) {
     const what = vocal.source === 'splice' ? 'a vocal hook' : `a ${vocal.mood ?? ''} ${vocal.voice ?? ''} vocal`.replace(/\s+/g, ' ')
-    const how = has('Vocal') && has('Vocal Chops') ? ', phrased and chopped' : has('Vocal Chops') ? ' in chops' : ''
-    parts.push(`${what}${how} ${WHERE[String(g?.rules?.vocalAt)] ?? 'in the drops'}`)
+    parts.push(`${what}${has('Vocal') ? '' : ' in chops'} ${WHERE[String(g?.rules?.vocalAt)] ?? 'in the drops'}`)
   }
   const first = `${kind} at ${Math.round(project.bpm)} BPM${key ? ` in ${keyWords(key)}` : ''}${lead && LEAD_LABEL[lead] ? `, built around ${LEAD_LABEL[lead]}` : ''}`
   const lines = [`${first}: ${list(parts)}.`]
