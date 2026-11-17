@@ -28,7 +28,7 @@ const MIN_REFERENCES = 3
 export const PART: Partial<Record<Role, string>> = {
   kick: 'kick', clap: 'clap', clap2: 'clap', clap3: 'clap', hats: 'hats', hats2: 'hats', ride: 'ride',
   perc: 'perc', perc2: 'perc', top: 'top', top2: 'top', top3: 'top', top4: 'top', groove: 'top',
-  bass: 'bass', stab: 'music', stab2: 'music', stab3: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx',
+  bass: 'bass', stab: 'music', stab2: 'music', stab3: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx', fx3: 'fx',
 }
 
 /** House defaults (dB against the kick, all of a part's lanes together). */
@@ -40,7 +40,7 @@ const DEFAULT_DB: Record<string, number> = {
 /** The lanes that sound together as one part: their sum sits where the part does. */
 export const GROUP: Partial<Record<Role, Role>> = {
   clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', groove: 'top',
-  fx2: 'fx', disco2: 'disco',
+  fx2: 'fx', fx3: 'fx', disco2: 'disco',
 }
 
 /** A balance: dB against the kick per part, and how many of the user's tracks it comes from. */
@@ -260,10 +260,10 @@ export const FILL_UNDER_KICK_DB = 1
  */
 export const HIT_DB: Partial<Record<Role, number>> = {
   stab: STAB_VS_CLAP_DB, stab2: STAB_VS_CLAP_DB, stab3: STAB_VS_CLAP_DB,
-  disco: -1, disco2: -1, fills: -1, hits: -2, crash: -6, fx: -5, fx2: -7,
+  disco: -1, disco2: -1, fills: -1, hits: -2, crash: -6, fx: -5, fx2: -7, fx3: -8,
 }
 /** The lanes whose clips play different samples, each trimmed to the lane's main one (dB at most). */
-const TRIMMED = new Set<Role>(['fills', 'hits', 'fx', 'fx2'])
+const TRIMMED = new Set<Role>(['fills', 'hits', 'fx', 'fx2', 'fx3'])
 const MAX_TRIM_DB = 9
 
 /**

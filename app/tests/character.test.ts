@@ -79,8 +79,14 @@ describe('a track\'s character and its lead', () => {
       for (const s of g.sections.filter((x) => x.kind === 'break')) {
         const from = breakShape(s.start, s.bars).lead
         // (A stab loop announces the drop over the breakdown's last bars: low-passed and opening.)
-        const ann = g.rules.lead === 'stab' && g.rules.stabLoop ? Math.min(Number(g.rules.stabAnnounce), Math.max(2, Math.floor(s.bars / 2))) : 0
-        const to = s.start + s.bars - Math.max(1, ann)
+        // (Into the drop after the long breakdown, with the stabs in the big build's effects: over the whole build.)
+        const big = g.rules.bigBuild === 'big' && s.long && ['stabs', 'drums+stabs', 'all'].includes(String(g.rules.bigVerb))
+          && g.sections[g.sections.indexOf(s) + 1]?.kind === 'drop'
+        const ann = g.rules.lead === 'stab' && g.rules.stabLoop
+          ? big ? Math.min(Number(g.rules.bigBars), s.bars) : Math.min(Number(g.rules.stabAnnounce), Math.max(2, Math.floor(s.bars / 2))) : 0
+        // (The big build's mix high-pass may ride the breakdown's last bars.)
+        const hp = big || (g.rules.bigBuild === 'big' && s.long) ? Number(g.rules.bigHp ?? 0) : 0
+        const to = s.start + s.bars - Math.max(1, ann, hp)
         if (to <= from) continue
         const at = (name: string) => g.project.clips.filter((c) => laneOf(g, name)?.id === c.laneId && c.start >= from * 4 && c.start < to * 4)
         if (g.rules.lead === 'bass') {
@@ -138,7 +144,9 @@ describe('the breakdown layer: a pad or a reese', () => {
         expect(Math.min(...cs.map((c) => c.start))).toBe(breakShape(s.start, s.bars).layer * 4)
         // To the end of the breakdown (less the beat or two of silence before a drop).
         const end = Math.max(...cs.map((c) => c.start + c.length))
-        expect(end).toBeGreaterThanOrEqual((s.start + s.bars) * 4 - 2)
+        // (The track's gap before drops may be a bar.)
+        const gap = g.sections[g.sections.indexOf(s) + 1]?.kind === 'drop' && g.rules.dropIn != null && g.rules.dropIn !== 'straight' ? Number(g.rules.dropInBeats) : 2
+        expect(end).toBeGreaterThanOrEqual((s.start + s.bars) * 4 - Math.max(2, gap))
         expect(end).toBeLessThanOrEqual((s.start + s.bars) * 4)
         expect(cs[0].fadeIn).toBeGreaterThan(0)
       }

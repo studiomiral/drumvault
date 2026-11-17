@@ -75,6 +75,50 @@ export function readSections(a: TrackArrangement): Read[] | null {
   return sectionsOf(ph.map((x) => ({ kick: x.kick, drop: x.kick && (x.bass || x.energy >= DROP_ENERGY * top), silent: x.silent })), 0)
 }
 
+/** The build into the drop after the longest breakdown, as a reference track plays it. */
+export interface MainBuild {
+  /** Bars it builds over (4, 8 or 16): its fills (a roll, a fill) running up to the drop, else its FX at full. */
+  bars: number
+  /** The kick back in the build (a quarter of its bars or more), and the claps. */
+  kick: boolean
+  claps: boolean
+}
+
+/**
+ * How a reference track builds into the drop after its longest breakdown, read from its parts bar
+ * by bar: back from the drop while its fills play (a bar without them allowed: the gap before the
+ * drop), else while its FX play at full. Null without a breakdown and a drop after it, or a build
+ * shorter than 3 bars.
+ */
+export function mainBuildOf(a: TrackArrangement): MainBuild | null {
+  const secs = readSections(a)
+  const breaks = secs?.filter((x) => x.kind === 'break') ?? []
+  if (!secs || !breaks.length) return null
+  const long = breaks.reduce((x, y) => (y.to - y.from > x.to - x.from ? y : x))
+  const drop = secs.find((x) => x.kind === 'drop' && x.from >= long.to)
+  if (!drop) return null
+  const D = drop.from
+  const on = (part: string, b: number, level = 1) => Number(a.parts[part]?.[b] ?? 0) >= level
+  const run = (plays: (b: number) => boolean) => {
+    let n = 0
+    let miss = 0
+    for (let b = D - 1; b >= long.from; b--) {
+      if (plays(b)) { n = D - b; miss = 0 } else if (++miss > 1) break
+    }
+    return n
+  }
+  const fills = run((b) => on('fills', b))
+  const raw = fills >= 4 ? fills : run((b) => on('fx', b, 2))
+  if (raw < 3) return null
+  const bars = raw >= 12 ? 16 : raw >= 6 ? 8 : 4
+  return { bars, kick: share(a, 'kick', D - bars, D) >= 0.25, claps: share(a, 'clap', D - bars, D) >= 0.25 }
+}
+
+/** How the user's tracks build into the drop after their longest breakdown: those that show it. */
+export function mainBuilds(arrangements: TrackArrangement[]): MainBuild[] {
+  return arrangements.map(mainBuildOf).filter((x): x is MainBuild => !!x)
+}
+
 /**
  * A reference track's sections, read from its mix bar by bar: phrases on the grid of its first
  * drop (a track's phrases needn't start on its first bar); no kick = breakdown, full = drop. Null

@@ -23,7 +23,7 @@ import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, 
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
 import { barsFor, BUILD_LABEL, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
-import { readReference, templateFrom, templateFromReference, type Arc, type Template } from './template'
+import { mainBuildOf, mainBuilds, readReference, templateFrom, templateFromReference, type Arc, type Template } from './template'
 import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
 import {
   breakShape, CHARACTER_LABEL, characterRules, CHARACTERS, isReese, LEAD_DB, LEAD_LABEL, leadRules, PAD_BARS, PAD_CHANCE, padNotes, pickLead,
@@ -35,7 +35,7 @@ import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from 
 import type { Score } from './score'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
-  | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'crash' | 'hits' | 'atmos'
+  | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'fx3' | 'crash' | 'hits' | 'atmos'
   | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
 
 /** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
@@ -77,12 +77,15 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'fills', name: 'Fills', startDb: -5, color: '#fb923c' },
   { role: 'fx', name: 'FX', startDb: -9, color: '#a78bfa' },
   { role: 'fx2', name: 'FX 2', startDb: -11, color: '#c4b5fd' },
+  { role: 'fx3', name: 'FX 3', startDb: -12, color: '#ddd6fe' },
   { role: 'crash', name: 'Crash', startDb: -8, color: '#fef08a' },
   { role: 'hits', name: 'Hits', startDb: -6, color: '#fde68a' },
   { role: 'atmos', name: 'Atmos', startDb: -11, color: '#94a3b8' },
 ]
 /** Lanes that keep playing in the beat or two of silence before a drop. */
-const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'hits', 'bed'])
+const THROUGH_SILENCE = new Set<Role>(['fills', 'fx', 'fx2', 'fx3', 'hits', 'bed'])
+/** What rings through a track's gap before drops (rule `dropIn` 'gap'): the drum fill alone (and the bed under the track). */
+const GAP_THROUGH = new Set<Role>(['fills', 'hits', 'bed'])
 /** The Strings lane's sidechain depth when Generate doesn't set one. */
 const STRINGS_SIDECHAIN = 0.6
 /** The rules the Strings lane owns, kept with kept strings. */
@@ -112,6 +115,26 @@ const BASS_SWEEP_TO_HZ = 40
  */
 export const BUILDUPS = ['snareRoll', 'snareSteps', 'kickRoll', 'claps'] as const
 export type Buildup = typeof BUILDUPS[number] | 'none'
+/** The way into every drop (rule `dropIn`): straight in, a gap with the drum fill alone in it, a gap with only the FX pulling in. */
+export type DropIn = 'straight' | 'gap' | 'suck'
+export type BigDrums = 'both' | 'claps' | 'snare'
+export type BigKick = 'out' | 'back' | 'roll'
+/** What the big build sends to reverb (and the drums to delay): the build's drums, the stabs, the top loops, all of them (the vocals too). */
+export type BigVerb = 'drums' | 'stabs' | 'drums+stabs' | 'drums+tops' | 'all'
+/** The big build's drums: dB they start at (rising to 0 at the drop), where their low-pass opens from. */
+const BIG_CLAPS_FROM_DB = -9
+const BIG_SNARE_FROM_DB = -12
+const BIG_KICK_FROM_DB = -6
+const BIG_CLAP_LP_FROM_HZ = 1500
+const BIG_OPEN_HZ = 18000
+/** The big build's reverb send where it peaks (on the drop's line), and its delay throws (the last bar of each 4; the build's last). */
+const BIG_VERB_PEAK = 0.85
+const BIG_ECHO = 0.3
+const BIG_ECHO_LAST = 0.5
+/** Crashes into a big build's drop: per bar before it, how often (16ths apart) and how loud (dB). */
+const BIG_CRASH_FASTER: [number, number][] = [[16, -9], [8, -6], [4, -3], [2, 0]]
+/** A sweep this noisy (the event's measured share of noise) is pitchless: any key will do (a riser stays in the key). */
+const BIG_NOISE = 0.5
 /** The snare roll's low-pass opens from … to … Hz, then a high-pass rises from … to … Hz over its last quarter. */
 const ROLL_LP_FROM_HZ = 350
 const ROLL_LP_TO_HZ = 16000
@@ -131,7 +154,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false, bassTurn: 'none' }
+const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false, bassTurn: 'none', dropIn: null, bigBuild: 'usual' }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -427,7 +450,7 @@ const RIDE_ROLES: [RidePart, Role[], string][] = [
   ['bass', ['bass'], 'bass'], ['top', ['top', 'top2', 'top3', 'top4', 'groove'], 'tops'],
 ]
 /** The mix high-pass into drops leaves the moments alone: risers, fills, impacts, crashes, hits. */
-const MIX_HP_ROLES = (r: Role) => !['fills', 'fx', 'fx2', 'hits', 'crash', 'disco', 'disco2', 'bed'].includes(r)
+const MIX_HP_ROLES = (r: Role) => !['fills', 'fx', 'fx2', 'fx3', 'hits', 'crash', 'disco', 'disco2', 'bed'].includes(r)
 
 /**
  * Lanes never low-passed while a drop plays (a sudden low-pass on the top loops takes the drop's
@@ -741,6 +764,8 @@ interface BarPattern {
   gate?: number
   room?: number
   echo?: number
+  /** A reverb build over the bar (the big build's drums): the send at its start and end (0…1). */
+  verb?: ClipReverb
   /** Semitones per step on top of `pitch` (a stab loop's moved hit). */
   bend?: number[]
 }
@@ -782,7 +807,7 @@ function alike(a: Segment, b: Segment): boolean {
 // (Not the chord stabs: they sit straight on the grid, where a patch's arp keeps them anyway.)
 const GROOVED = new Set<Role>(['clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4'])
 
-const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}|${p.gate ?? ''}|${p.room ?? ''}|${p.echo ?? ''}|${p.bend?.join(',') ?? ''}`
+const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}|${p.gate ?? ''}|${p.room ?? ''}|${p.echo ?? ''}|${p.bend?.join(',') ?? ''}|${p.verb ? `${p.verb.from},${p.verb.to}` : ''}`
 
 class Lanes {
   bars = new Map<Role, (BarPattern | null)[]>()
@@ -976,6 +1001,7 @@ class Lanes {
         if (p.pitch) c.pitch = p.pitch
         if (p.gate) c.gate = p.gate
         if (p.room) c.verb = { from: p.room, to: p.room }
+        if (p.verb) c.verb = { ...p.verb }
         if (p.echo) c.echo = p.echo
         // (A moved hit cleared since, by the silence before a drop, takes its move with it.)
         const moves = bend?.map((x, i) => (c.steps[i] ? x : 0))
@@ -1217,6 +1243,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const lrng = new Rng(seed ^ 0x4c494654)
   // The bassline's turns at phrase ends: an RNG of their own too.
   const turnRng = new Rng(seed ^ 0x5455524e)
+  // The way into drops and the big build into the drops after the long breakdown: an RNG of their own too.
+  const bigRng = new Rng(seed ^ 0x42494742)
   // How the groove carries through breakdowns: an RNG of its own too.
   const grng = new Rng(seed ^ 0x474c5545)
   const buildDrawn = {
@@ -1375,6 +1403,27 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // end of each drop, every 16 bars, every 8, or never.
     bassTurn: turnRng.weighted([['drop', 3], ['16', 3], ['8', 2], ['none', 2]] as const) as 'drop' | '16' | '8' | 'none',
     bassTurnKind: turnRng.weighted([['pickup', 3], ['gap', 2], ['octave', 2]] as const) as BassTurn,
+    // The way into every drop, the same all through the track (SCOPE.md §6.6): straight in, a gap
+    // with the drum fill alone in it, or a gap with only the FX pulling into the 1; the gap's beats.
+    dropIn: bigRng.weighted([['straight', 3], ['gap', 3], ['suck', 2]] as const) as DropIn | null,
+    dropInBeats: bigRng.weighted([[1, 2], [2, 3], [4, 1]] as const) as number,
+    // The big build into every drop after the long breakdown (the biggest drops), or the track's
+    // usual build-up there too. Its bars: the track it's built on, else the user's tracks (below).
+    bigBuild: bigRng.weighted([['big', 3], ['usual', 2]] as const) as 'big' | 'usual',
+    bigBars: null as number | null,
+    // Its drums: claps building (on the beat, 8ths, 16ths), a snare (a roll or steps) joining
+    // halfway, or one of them; the kick out, back four on the floor (low-passed, opening) over its
+    // second half, or rolling over its last quarter.
+    bigDrums: bigRng.weighted([['both', 3], ['claps', 1.5], ['snare', 1.5]] as const) as BigDrums,
+    bigSnare: bigRng.weighted([['roll', 3], ['steps', 2]] as const) as 'roll' | 'steps',
+    bigKick: bigRng.weighted([['out', 2], ['back', 2], ['roll', 1.5]] as const) as BigKick,
+    // Risers stacked (a long one over the whole build, a riser over its second half, a short lift
+    // into the 1), reverb and delay rising on some of it, the mix high-passed over its last bars,
+    // crashes coming faster over its last four.
+    bigRisers: bigRng.weighted([[3, 3], [2, 2]] as const) as number,
+    bigVerb: bigRng.weighted([['drums', 1], ['stabs', 1], ['drums+stabs', 2], ['drums+tops', 1.5], ['all', 2]] as const) as BigVerb,
+    bigHp: bigRng.weighted([[0, 2], [4, 2], [8, 1.5]] as const) as number,
+    bigCrash: bigRng.chance(0.6),
     // The whole mix high-passed in the bars before drops (also when the track it's built on does it).
     mixHp: hpRng.chance(0.3) ? hpRng.weighted([[1, 1], [2, 2], [4, 1]] as const) as number : 0,
     // The intro fills up over its last bars with what the drops have and it doesn't yet (hats,
@@ -1491,6 +1540,49 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
     if (opts.locks && 'dropFill' in opts.locks && !('buildup' in opts.locks)) rules.buildup = 'none'
     else rules.dropFill = fills.length ? 'fill' : null
+  }
+  /** Kept from the track made before, or locked: not the track's own to change. */
+  const given = (rule: string) => (!!keep.rules && rule in keep.rules) || (!!opts.locks && rule in opts.locks)
+  // A gap before drops has the drum fill in it (unless the fills are locked out).
+  if (rules.dropIn === 'gap' && !rules.dropFill && fills.length && !given('dropFill')) rules.dropFill = 'fill'
+  // The drops after the long breakdown: the biggest, with the big build into them (rule `bigBuild`).
+  const mainDrops = new Set<number>()
+  sections.forEach((s, i) => {
+    if (s.kind !== 'drop') return
+    for (let j = i - 1; j >= 0 && sections[j].kind !== 'drop'; j--) if (sections[j].long) mainDrops.add(s.start)
+  })
+  const isBig = (drop: Section | undefined) => !!drop && drop.kind === 'drop' && rules.bigBuild === 'big' && mainDrops.has(drop.start)
+  // How it builds: as the track it's built on does into that drop (its bars, its kick and claps
+  // there), else like one of the user's tracks (their spread of lengths, and as often the kick and
+  // the claps back in it), else 8 or 16 bars.
+  if (rules.bigBuild === 'big' && (!given('bigBars') || rules.bigBars == null)) {
+    const refs = opts.templates ?? []
+    const code = sections.find((s) => mainDrops.has(s.start))?.src?.code
+    const own = code ? refs.find((r) => r.source_code === code) : undefined
+    const mine = own ? mainBuildOf(own) : null
+    const theirs = mainBuilds(refs)
+    const like = theirs.length >= 3 ? theirs : null
+    rules.bigBars = mine?.bars ?? (like ? bigRng.pick(like).bars : bigRng.weighted([[8, 1], [16, 2]] as const))
+    const share = (f: (x: typeof theirs[number]) => boolean) => like!.filter(f).length / like!.length
+    if (!given('bigKick') && (mine || like)) {
+      const back = mine ? mine.kick : bigRng.chance(share((x) => x.kick))
+      rules.bigKick = back ? (rules.bigKick === 'roll' ? 'roll' : 'back') : 'out'
+    }
+    if (!given('bigDrums') && (mine || like)) {
+      const claps = mine ? mine.claps : bigRng.chance(share((x) => x.claps))
+      rules.bigDrums = claps ? (rules.bigDrums === 'snare' ? 'both' : rules.bigDrums) : 'snare'
+    }
+  }
+  /** What the big build sends to reverb (and its drums to delay). */
+  const bigFx = (what: 'drums' | 'stabs' | 'tops' | 'vocals') => rules.bigVerb === 'all' || String(rules.bigVerb ?? '').split('+').includes(what)
+  /**
+   * Bars the big build runs before the end of `sec` (the part before a big drop): reaching back
+   * into the long breakdown when a build between them is shorter, never past the drop before.
+   */
+  const bigBarsIn = (sec: Section) => {
+    let a = sec.start
+    for (let j = sections.indexOf(sec) - 1; j >= 0 && sections[j].kind !== 'drop'; j--) a = sections[j].start
+    return Math.max(1, Math.min(Number(rules.bigBars) || 16, sec.start + sec.bars - a))
   }
   const fxChance = { sparse: 0.45, normal: 0.75, busy: 0.95 }[rules.fx]
   const keptGaps = rules.dropGaps
@@ -1731,6 +1823,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   /** Bars a loop announces the drop after `sec` over: the track's (4 or 8), at most a build's length or half a breakdown; in an intro only its tease's. */
   const announceBars = (sec: Section, next: Section | undefined) => {
     if (!stabLoop || next?.kind !== 'drop') return 0
+    // (Into a big drop, with the stabs in the big build's effects: over the whole build.)
+    if (isBig(next) && bigFx('stabs') && (sec.kind === 'build' || sec.kind === 'break')) return Math.min(bigBarsIn(sec), sec.bars)
     const want = Number(rules.stabAnnounce ?? 8)
     if (sec.kind === 'build') return Math.min(want, sec.bars)
     if (sec.kind === 'break') return Math.min(want, Math.max(2, Math.floor(sec.bars / 2)))
@@ -1877,6 +1971,87 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
     if (sample === snare) picks.buildup = snare
     built = n
+  }
+  /** The sections before big drops, their big builds laid after the groove through the breakdowns; the bars the last one ran. */
+  const bigBuilds: Section[] = []
+  let bigBuilt = 0
+  /**
+   * The big build (rule `bigBuild`) over the last bars of `sec`, into a drop after the long
+   * breakdown: claps building (on the beat, 8ths, 16ths over the last quarter), a snare joining
+   * halfway (a roll in 8ths then 16ths, or steps 4ths → 8ths → 16ths), each louder and opening as it
+   * goes; the kick out, back four on the floor over the second half, or rolling over the last
+   * quarter (the bar before the drop as the track does it); reverb rising on the drums and a delay
+   * throw on the last bar of each four (by the build's effects), the drop dry.
+   */
+  const bigBuildUp = (sec: Section) => {
+    const z = sec.start + sec.bars
+    const n = bigBarsIn(sec)
+    const a = z - n
+    // (A roll sample leading into the drop is the snare roll: the claps build under it instead of a snare of its own.)
+    const rolled = rules.dropFill === 'roll'
+    const useClaps = (rules.bigDrums !== 'snare' || rolled) && !!clap
+    const useSnare = !rolled && (rules.bigDrums !== 'claps' || !clap) && !!snare && !(useClaps && snare.id === clap?.id)
+    const wet = !!opts.verb && bigFx('drums')
+    const throws = bigFx('drums')
+    const rise = (x: number) => Math.round(BIG_VERB_PEAK * Math.min(1, Math.max(0, x)) ** 2 * 100) / 100
+    const db = (x: number, from: number) => Math.round(from * (1 - x) * 2) / 2 || 0
+    const lp = (f0: number, f1: number, x0: number, x1: number): ClipFilter => ({
+      type: 'lowpass', from: Math.round(f0 * (f1 / f0) ** x0), to: Math.round(f0 * (f1 / f0) ** x1), q: 0.7,
+    })
+    const on = (every: number, vel: Velocity) => Array.from({ length: STEPS_PER_BAR }, (_, k) => (k % every === 0 ? vel : 0)) as Steps
+    // Over the mix high-pass's bars into the drop the build's drums thin out instead (a clip has one
+    // filter: the high-pass there takes the low-pass's place).
+    const hpN = Math.min(n, Math.max(Number(rules.mixHp ?? 0), Number(rules.bigHp ?? 0)))
+    const thin = (b: number, f: ClipFilter): ClipFilter => {
+      if (b < z - hpN) return f
+      const hz = (x: number) => Math.round(MIX_HP_FROM_HZ * (MIX_HP_TO_HZ / MIX_HP_FROM_HZ) ** ((x - (z - hpN)) / hpN))
+      return { type: 'highpass', from: hz(b), to: hz(b + 1), q: 0.7 }
+    }
+    const fxOf = (b: number, x0: number, x1: number) => ({
+      ...(wet ? { verb: { from: rise(x0), to: rise(x1) } } : {}),
+      ...(throws && (b - a + 1) % 4 === 0 ? { echo: b === z - 1 ? BIG_ECHO_LAST : BIG_ECHO } : {}),
+    })
+    const s0 = useClaps ? Math.floor(n / 2) : 0
+    for (let b = a; b < z; b++) {
+      const x0 = (b - a) / n
+      const x1 = (b - a + 1) / n
+      if (useClaps) {
+        const every = x0 < 0.5 ? 4 : x0 < 0.75 ? 2 : 1
+        lanes.setBar('clap', b, { sample: clap!, steps: on(every, x0 < 0.5 ? 2 : 3), filter: thin(b, lp(BIG_CLAP_LP_FROM_HZ, BIG_OPEN_HZ, x0, x1)),
+          gainDb: db(x0, BIG_CLAPS_FROM_DB), gainTo: db(x1, BIG_CLAPS_FROM_DB), ...fxOf(b, x0, x1) })
+        for (const r of CLAP_ROLES.slice(1)) lanes.setBar(r, b, null)
+      }
+      if (useSnare && b - a >= s0) {
+        const m = n - s0
+        const y0 = (b - a - s0) / m
+        const y1 = (b - a - s0 + 1) / m
+        const every = rules.bigSnare === 'steps' ? (y0 < 1 / 3 ? 4 : y0 < 2 / 3 ? 2 : 1) : y0 < 0.5 ? 2 : 1
+        lanes.setBar('buildup', b, { sample: snare!, steps: on(every, y0 < 0.5 ? 2 : 3), filter: thin(b, lp(ROLL_LP_FROM_HZ, BIG_OPEN_HZ, y0, y1)),
+          gainDb: db(y0, BIG_SNARE_FROM_DB), gainTo: db(y1, BIG_SNARE_FROM_DB), ...fxOf(b, x0, x1) })
+      }
+    }
+    if (kick) {
+      const k0 = rules.bigKick === 'back' ? a + Math.floor(n / 2) : rules.bigKick === 'roll' ? z - Math.max(2, Math.floor(n / 4)) : a
+      for (let b = a; b < z; b++) {
+        if (rules.bigKick === 'out') { lanes.setBar('kick', b, null); continue }
+        if (b < k0) {
+          // (The breakdown's own kick until it comes back: thinning out under the high-pass too.)
+          const p = lanes.bar('kick', b)
+          if (p && b >= z - hpN) lanes.setBar('kick', b, { ...p, filter: thin(b, p.filter ?? { type: 'highpass', from: MIX_HP_FROM_HZ, to: null, q: 0.7 }) })
+          continue
+        }
+        if (b === z - 1 && rules.dropKickOut) { lanes.setBar('kick', b, null); continue }
+        const m = z - k0
+        const y0 = (b - k0) / m
+        const y1 = (b - k0 + 1) / m
+        const s_ = rules.bigKick === 'roll' ? on(b === z - 1 ? 1 : 2, 3)
+          : b === z - 1 && rules.dropLastKick ? steps([0, 4, 8]) : on(4, 3)
+        lanes.setBar('kick', b, { sample: kick, steps: s_, filter: thin(b, lp(KICK_ROLL_LP_FROM_HZ, KICK_ROLL_LP_TO_HZ, y0, y1)),
+          gainDb: db(y0, BIG_KICK_FROM_DB), gainTo: db(y1, BIG_KICK_FROM_DB) })
+      }
+    }
+    if (useSnare) picks.buildup = snare!
+    bigBuilt = n
   }
   let built = 0
 
@@ -2103,12 +2278,58 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         // One moment for everything leading into the drop: the riser decides how long before it
         // the sound stops (its producer's choice), the fill or roll and any second FX layer stop
         // with it, and the rest of the track goes silent there too (see the silence below).
-        let t: number | undefined = keptGaps?.[z]
+        // The track's own way in (rule `dropIn`), the same into every drop: everything up to the
+        // line, or the risers stopping with the gap (the drum fill playing on through it, into the 1).
+        // Tracks from before: each transition's riser decides.
+        const fixed = rules.dropIn != null
+        const gap = fixed && rules.dropIn !== 'straight' ? Number(rules.dropInBeats ?? 2) * 4 : 0
+        let t: number | undefined = fixed ? (rules.dropIn === 'gap' ? gap : 0) : keptGaps?.[z]
+        const big = isBig(next)
         const rollJob = sec.long ? 'roll-long' : 'roll'
+        /**
+         * A riser for `job` stopping with the gap; in a track's gap one running to the line when none
+         * does (the gap cuts it). One the track doesn't play elsewhere first (a lane made again).
+         */
+        const riseInto = (job: string, role: Role, cands: SampleListItem[], want: number, o: { room?: number; tonal?: boolean } = {}) => {
+          const fresh = cands.filter((x) => !keep.avoid?.includes(x.rel_path))
+          // (Into a track's gap any riser does, the gap cuts it: one that stops with it, or runs to the line, is better.)
+          const gapped = fixed && rules.dropIn === 'gap'
+          const w = (x: SampleListItem) => (gapsAgree(gapOf(x), gap) || gapOf(x) <= TO_THE_LINE ? 1 : 0.3)
+          for (const xs of fresh.length < cands.length ? [fresh, cands] : [cands]) {
+            const s = endOn(job, role, xs, end, o.room ?? room, want, o.tonal ?? true, gapped ? undefined : t, gapped ? w : undefined)
+            if (s) return s
+          }
+          return null
+        }
         const leadIns = (rules.dropFill === 'roll' ? [...rolls.filter((s) => bodyBars(s) * 4 <= room), ...fills]
           : rules.dropFill === 'fill' ? fills : []).filter((s) => bodyBars(s) <= 2 || s.category === 'roll').filter(leads)
         let riser: SampleListItem | null = null
-        if (rules.dropRiser) {
+        if (big) {
+          // The big build's risers, stacked: a long one over the whole build, a riser over its
+          // second half, and (rule `bigRisers`) a short lift into the 1.
+          // (Each layer long enough for its part of the build when the library has one: in the key, or
+          // a noise sweep, which is in any; a long build wants its length more than a fresh import.)
+          const n = bigBarsIn(sec)
+          const bigRoom = n * BEATS_PER_BAR
+          const taken = new Set<number>()
+          const all = [...risers, ...lifts]
+          const keyed = (x: SampleListItem) => !x.key_label || !tonalKeys || tonalKeys.has(x.key_label)
+            || (x.category !== 'fx_riser' && (x.shape?.noise ?? 0) >= BIG_NOISE)
+          const layer = (job: string, role: Role, cands: SampleListItem[], want: number, min: number, max = Infinity, strict = false) => {
+            const free = cands.filter((x) => !taken.has(x.id))
+            const sized = free.filter((x) => keyed(x) && leads(x) && bodyBars(x) >= min && bodyBars(x) <= max && bodyBars(x) * BEATS_PER_BAR <= bigRoom)
+            const s = sized.length ? riseInto(job, role, sized, want, { room: bigRoom, tonal: false })
+              : strict ? null : riseInto(job, role, free.length ? free : cands, want, { room: bigRoom })
+            if (s) taken.add(s.id)
+            return s
+          }
+          riser = layer('riser-main', 'fx', all, n, Math.max(2, n * 0.6))
+          layer('riser-main2', 'fx2', risers.length > 1 ? risers : all, Math.max(2, n / 2), Math.max(2, n * 0.3), Math.max(2, n * 0.75))
+          // (The lift is short or none.)
+          if (Number(rules.bigRisers) >= 3) layer('riser-main3', 'fx3', [...lifts, ...risers], 1, 1, 2, true)
+        } else if (rules.dropRiser && fixed) {
+          riser = riseInto(sec.long ? 'riser-long' : 'riser', 'fx', risers, sec.long ? 8 : sec.bars >= 16 ? 4 : 2)
+        } else if (rules.dropRiser) {
           // A riser the track's fill can stop with (or some fill, when the track has fills into drops).
           const fill = chosen.get(rules.dropFill === 'roll' ? rollJob : 'fill')
           const withFill = fill ? risers.filter((r) => gapsAgree(gapOf(fill), gapOf(r))) : []
@@ -2119,11 +2340,13 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
           if (riser) t ??= gapOf(riser)
         }
         let lead: SampleListItem | null = null
-        if (rules.dropFill === 'roll') lead = endOn(rollJob, 'fills', rolls, end, room, sec.long ? 8 : 4, false, t)
-        if (!lead && rules.dropFill) lead = endOn('fill', 'fills', fills, end, 8, 1, false, t)
+        // (Through a track's gap the drum fill plays on into the 1; else it stops with the riser.)
+        const fillT = fixed ? 0 : t
+        if (rules.dropFill === 'roll') lead = endOn(rollJob, 'fills', rolls, end, room, sec.long ? 8 : 4, false, fillT)
+        if (!lead && rules.dropFill) lead = endOn('fill', 'fills', fills, end, 8, 1, false, fillT)
         if (lead) t ??= gapOf(lead)
         // A second layer: another length or texture than the riser, stopping with it.
-        if (riser && rules.fx !== 'sparse' && rules.fxLayers >= 2) {
+        if (riser && !big && rules.fx !== 'sparse' && rules.fxLayers >= 2) {
           const first = riser
           const want = bodyBars(first) >= 4 ? Math.max(1, bodyBars(first) / 4) : Math.min(sec.bars, bodyBars(first) * 4)
           endOn('riser2', 'fx2', [...risers, ...lifts].filter((s) => s.id !== first.id && complements(first, s) != null),
@@ -2136,9 +2359,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         // A downlifter as the drop hits, on a lane that's free there (never a bassy one).
         const down = rules.dropDown && rules.fx !== 'sparse' ? trackPick('drop-down', downs, true) : null
         if (down && !bassy(down)) placeFree(['hits', 'fx2', 'fx'], down, end)
-        dropGaps[z] = t ?? 0
+        dropGaps[z] = fixed ? gap : t ?? 0
         crashAt.add(z)  // every drop starts with a crash
-        buildUp(sec)
+        // (The big build goes on after the groove through the breakdown is laid: it has the last word on its bars.)
+        if (big) bigBuilds.push(sec)
+        else buildUp(sec)
       } else if (intoBreak) {
         const fill = rules.breakFill ? endOn('fill', 'fills', fills, end, 8, 1) : null
         if (rules.breakCrash) crashAt.add(z)
@@ -2362,9 +2587,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (crash) for (const b of crashAt) if (b < total) lanes.setBar('crash', b, { sample: crash, steps: steps([0]) })
   // … and crashes building every drop: coming faster bar by bar (half bars, quarters, 8ths), or
   // on each of the last four counts.
+  // (Into a big drop, by its rule: coming faster over the last four bars, every bar, half bars, quarters, 8ths.)
+  const bigCrashes = (sec: Section) => !!crash && isBig(sec) && !!rules.bigCrash && sec.start >= BIG_CRASH_FASTER.length
+  for (const sec of sections) {
+    if (!bigCrashes(sec)) continue
+    BIG_CRASH_FASTER.forEach(([every, db], k) => lanes.setBar('crash', sec.start - BIG_CRASH_FASTER.length + k, {
+      sample: crash!, steps: steps(Array.from({ length: STEPS_PER_BAR / every }, (_, x) => x * every), k === BIG_CRASH_FASTER.length - 1 ? 3 : 2), ...(db ? { gainDb: db } : {}),
+    }))
+  }
   if (crash && rules.buildupCrash !== 'none') {
     for (const sec of sections) {
-      if (sec.kind !== 'drop' || sec.start < CRASH_FASTER.length) continue
+      if (sec.kind !== 'drop' || sec.start < CRASH_FASTER.length || bigCrashes(sec)) continue
       if (rules.buildupCrash === 'last4') lanes.setBar('crash', sec.start - 1, { sample: crash, steps: steps(FOUR) })
       else {
         CRASH_FASTER.forEach(([every, db], k) => lanes.setBar('crash', sec.start - CRASH_FASTER.length + k, {
@@ -2588,14 +2821,20 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     vocalNote = `vocal ${vocalItem(take).name} (${take.voice}, ${take.mood}): ${use === 'both' ? 'phrase and chops' : use === 'phrase' ? 'phrase' : 'chops'}`
   }
 
-  // ---- the silence before every drop: where its FX and fill stop (the producer's), or when
-  // they run right up to it, the track's beat or two (FX, fills and hits ring through) ----
+  // ---- the big builds into the drops after the long breakdown (over what the groove through
+  // the breakdown laid there) ----
+  for (const s of bigBuilds) bigBuildUp(s)
+
+  // ---- the silence before every drop: the track's gap (rule `dropIn`: none, the drum fill alone
+  // ringing through it, or the FX), the same before every drop. Tracks from before: where its FX
+  // and fill stop (the producer's), or when they run right up to it, the track's beat or two (FX,
+  // fills and hits ring through) ----
   rules.dropGaps = dropGaps
   for (const s of sections) {
     if (s.kind !== 'drop' || s.start <= 0) continue
     const t = dropGaps[s.start] ?? 0
-    const sixteenths = t > TO_THE_LINE ? Math.min(t, MAX_SILENCE) : rules.dropSilence * 4
-    if (sixteenths) lanes.silence(s.start * 4 - sixteenths / 4, s.start * 4, THROUGH_SILENCE)
+    const sixteenths = rules.dropIn != null ? t : t > TO_THE_LINE ? Math.min(t, MAX_SILENCE) : rules.dropSilence * 4
+    if (sixteenths) lanes.silence(s.start * 4 - sixteenths / 4, s.start * 4, rules.dropIn === 'gap' ? GAP_THROUGH : THROUGH_SILENCE)
   }
 
   // ---- a breath before drops: the bar before each one without its tops (and drums and bass),
@@ -2638,9 +2877,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   })
   const hpBars = Number(rules.mixHp ?? 0)
   let hpDrops = 0
-  if (hpBars) {
+  // (Into a big drop the high-pass runs over the big build's last bars, rule `bigHp`, when that is longer.)
+  const hpFor = (sec: Section) => (isBig(sec) ? Math.max(hpBars, Number(rules.bigHp ?? 0)) : hpBars)
+  if (sections.some((s) => s.kind === 'drop' && hpFor(s))) {
     for (const sec of sections) {
-      if (sec.kind !== 'drop' || sec.start < hpBars) continue
+      const hpBars = hpFor(sec)
+      if (sec.kind !== 'drop' || !hpBars || sec.start < hpBars) continue
       const a = sec.start - hpBars
       const hz = (b: number) => Math.round(MIX_HP_FROM_HZ * (MIX_HP_TO_HZ / MIX_HP_FROM_HZ) ** ((b - a) / hpBars))
       for (const role of lanes.roles()) {
@@ -2651,7 +2893,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
           if (p && !p.filter) lanes.setBar(role, b, { ...p, filter: { type: 'highpass', from: hz(b), to: hz(b + 1), q: 0.7 } })
         }
       }
-      hpDrops++
+      if (hpBars === Number(rules.mixHp ?? 0)) hpDrops++
     }
   }
 
@@ -2672,6 +2914,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       const hit = roles.map((r) => lanes.swell(r, (bar - n) * BEATS_PER_BAR, bar * BEATS_PER_BAR, vo.amount)).some(Boolean)
       if (hit) builds[n === VERB_INTO_BARS ? 'into' : 'phrase']++
     }
+  }
+  // The big builds: the top loops (and the groove) and the vocals rising into reverb over the whole
+  // build, by its effects (with reverb builds on); the drop comes in dry.
+  if (vo) {
+    sections.forEach((sec, i) => {
+      if (!isBig(sections[i + 1])) return
+      const z = sec.start + sec.bars
+      const n = bigBarsIn(sec)
+      const roles: Role[] = [...(bigFx('tops') ? [...TOP_ROLES, 'groove'] as Role[] : []), ...(bigFx('vocals') ? ['vocal', 'vchop'] as Role[] : [])]
+      for (const r of roles) lanes.swell(r, (z - n) * BEATS_PER_BAR, z * BEATS_PER_BAR, Math.max(vo.amount, BIG_VERB_PEAK))
+    })
   }
 
   // ---- the project ----
@@ -2749,6 +3002,14 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (fit) choices.push(`sidechain ${Math.round(fit.duck * 100)} % over ${fit.beats} beat: the bass ${fit.collision >= 0.5 ? 'sits on' : fit.collision >= 0.2 ? 'partly under' : 'mostly clear of'} the kick (${fit.kickHz} Hz)`)
   if (balance.evened) choices.push(`${balance.evened} sample${balance.evened === 1 ? '' : 's'} levelled to ${balance.evened === 1 ? 'its' : 'their'} lane`)
   if (built) choices.push(`${BUILDUP_NOTE[rules.buildup as typeof BUILDUPS[number]]} into drops (${built} bars)`)
+  if (bigBuilt) {
+    const drums = { both: 'claps and a snare ' + (rules.bigSnare === 'steps' ? 'in steps' : 'roll'), claps: 'claps', snare: rules.bigSnare === 'steps' ? 'a snare in steps' : 'a snare roll' }[rules.bigDrums as BigDrums]
+    const kicks = { out: 'the kick out', back: 'the kick back in its second half', roll: 'a kick roll' }[rules.bigKick as BigKick]
+    const fx = (['drums', 'stabs', 'tops', 'vocals'] as const).filter((x) => bigFx(x) && (x === 'drums' || !!opts.verb))
+    const more = [`${Number(rules.bigRisers) >= 3 ? 'three' : 'two'} risers`, fx.length ? `reverb${fx.includes('drums') ? ' and delay' : ''} on the ${fx.join(', ')}` : '',
+      Number(rules.bigHp) > Number(rules.mixHp ?? 0) ? `the mix high-passed over ${rules.bigHp} bars` : '', rules.bigCrash && crash ? 'crashes coming faster' : ''].filter(Boolean)
+    choices.push(`the big build into the drop${mainDrops.size > 1 ? 's' : ''} after the long breakdown: ${bigBuilt} bars, ${drums}, ${kicks}, ${more.join(', ')}`)
+  }
   if (crash && rules.buildupCrash !== 'none') choices.push(rules.buildupCrash === 'faster' ? 'crashes coming faster into drops' : 'crashes on the last four counts into drops')
   if (rules.loopGap) choices.push('loops stop before breaks')
   if (tpl) choices.unshift(`structure after ${tpl.label} (${tpl.changes.join(', ')})`)
@@ -2819,12 +3080,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (claps.length > 1) choices.push(`${claps.length} layered claps`)
   if (ride && held !== 'ride') choices.push({ late: 'ride later in drop 1', second: 'ride from drop 2', both: 'ride late in drop 1, then all through' }[rules.ride])
   if (rules.dropKickOut) choices.push('four kicks out before drops')
-  const early = Object.values(dropGaps).filter((t) => t > TO_THE_LINE)
-  if (early.length) {
+  const early = rules.dropIn != null ? [] : Object.values(dropGaps).filter((t) => t > TO_THE_LINE)
+  if (rules.dropIn != null && Object.keys(dropGaps).length) {
+    const beats = Number(rules.dropInBeats ?? 2)
+    choices.push(rules.dropIn === 'straight' ? 'straight into every drop'
+      : rules.dropIn === 'gap' ? `${beats} beat${beats === 1 ? '' : 's'} of silence before every drop, the drum fill alone in it`
+        : `${beats} beat${beats === 1 ? '' : 's'} before every drop with only the FX pulling in`)
+  } else if (early.length) {
     const beats = Math.min(Math.max(...early), MAX_SILENCE) / 4
     choices.push(`FX and fills stop ${beats} beat${beats === 1 ? '' : 's'} before ${early.length < Object.keys(dropGaps).length ? 'a drop' : 'drops'}, the track with them`)
   }
-  if (rules.dropSilence && early.length < Object.keys(dropGaps).length) {
+  if (rules.dropIn == null && rules.dropSilence && early.length < Object.keys(dropGaps).length) {
     choices.push(`${rules.dropSilence} beat${rules.dropSilence > 1 ? 's' : ''} of silence before drops`)
   }
   if (set && rules.dropSet) choices.push(`FX into drops as ${set[0].source_code} layered them`)
@@ -3021,7 +3287,7 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   crash: ['phraseCrash', 'crash8', 'breakCrash', 'outroCrash', 'buildupCrash'],
   buildup: ['buildup', 'buildupBars'],
   fills: ['phraseFill', 'dropFill', 'breakFill', 'outroFill'],
-  fx: ['fx', 'dropRiser', 'breakSweep', 'fxLayers', 'dropSet'],
+  fx: ['fx', 'dropRiser', 'breakSweep', 'fxLayers', 'dropSet', 'bigRisers'],
   hits: ['dropImpact', 'breakDownlifter', 'dropDown'],
   bass: ['bassBreaks', 'bassBuild', 'bassIO', 'bassHp', 'bassTurn', 'bassTurnKind'],
   disco: ['discoIn', 'discoCount', 'discoAt'],
@@ -3037,7 +3303,7 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   stab: [],
 }
 const LAYER_OF: Partial<Record<Role, Role>> = {
-  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', disco2: 'disco', stab2: 'stab', stab3: 'stab', vchop: 'vocal',
+  clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', fx3: 'fx', disco2: 'disco', stab2: 'stab', stab3: 'stab', vchop: 'vocal',
 }
 
 /**
@@ -3059,6 +3325,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
   const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => r !== role)) as Generation['picks']
   const sig = (cs: Clip[]) => JSON.stringify(cs.map(({ id: _i, laneId: _l, ...c }) => c))
   const before = g.project.clips.filter((c) => c.laneId === laneId)
+  const elsewhere = new Set(g.project.clips.filter((c) => c.laneId !== laneId).map((c) => c.sample.relPath))
   const bpm = g.project.bpm
   for (let i = 0; i < 12; i++) {
     const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: role === 'bass' ? opts.bass : null }, seed + i * 7919, {
@@ -3068,6 +3335,8 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     const clips = rl ? r.project.clips.filter((c) => c.laneId === rl.id) : []
     if (!clips.length || sig(clips) === sig(before)) continue
     if (role !== 'bass' && clips.every((c) => before.some((b) => b.sample.relPath === c.sample.relPath))) continue
+    // (Nor a sound another lane plays already: the FX layers of a drop are three different risers.)
+    if (role !== 'bass' && clips.some((c) => elsewhere.has(c.sample.relPath))) continue
     if (role === 'bass' && r.bass && g.bass && r.bass.midi.id === g.bass.midi.id && r.bass.preset.path === g.bass.preset.path) continue
     const project = structuredClone(g.project)
     project.clips = [...project.clips.filter((c) => c.laneId !== laneId), ...clips.map((c) => ({ ...c, laneId }))]

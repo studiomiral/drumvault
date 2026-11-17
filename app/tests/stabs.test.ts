@@ -293,7 +293,8 @@ const STABS: HitItem[] = [
 const midi: MidiItem = { id: 1, file_name: 'B.mid', name: 'B', rel_path: 'MIDI/Bass/b.mid', role: 'bass', bars: 2, key_label: 'Am', key_camelot: null,
   notes: [[0, 0.5, 33, 100], [1.5, 0.5, 33, 100], [4, 0.5, 33, 100], [6.5, 0.25, 36, 90]], favorite: 0, source: null, source_code: null }
 const preset: SerumPreset = { path: '/presets/Bass/P.SerumPreset', name: 'P', folder: 'Bass', tags: [] }
-const opts: GenerateOptions = { ...OPTS, stabs: { hits: STABS }, bass: { midis: [midi], presets: [preset], favorites: [], sidechain: 0.6 } }
+// (The big build's stabs, announcing over the whole build, are tested with the big build.)
+const opts: GenerateOptions = { ...OPTS, stabs: { hits: STABS }, bass: { midis: [midi], presets: [preset], favorites: [], sidechain: 0.6 }, locks: { bigBuild: 'usual' } }
 const LIB = library()
 const gens = Array.from({ length: 60 }, (_, i) => generate(LIB, opts, 5000 + i))
 const stabLanes = (g: Generation) => g.project.lanes.filter((l) => /^Stab/.test(l.name))

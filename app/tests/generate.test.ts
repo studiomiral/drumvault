@@ -14,7 +14,7 @@ import { hitPitch } from '../src/generate/disco'
 import { parseKey } from '../src/generate/bassline'
 import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
-import { readReference, readSections, templateFrom, templateFromReference } from '../src/generate/template'
+import { mainBuildOf, mainBuilds, readReference, readSections, templateFrom, templateFromReference } from '../src/generate/template'
 import { arcFit, bestOf, scoreGeneration } from '../src/generate/score'
 import type { MixProfile, ReferenceTrack } from '../src/types/engine'
 import { SAVED_EXACT, stabParts, stabRhythm } from '../src/generate/stabs'
@@ -92,8 +92,19 @@ const laneOf = (g: Generation, name: string) => g.project.lanes.find((l) => l.na
 /** 16ths of silence before the drop at `bar`: where its FX stop, else the track's rule. */
 function silenceBefore(g: Generation, bar: number): number {
   const t = Number((g.rules.dropGaps as Record<string, number> | null)?.[bar] ?? 0)
+  if (g.rules.dropIn != null) return t                                     // the track's own way in, the same into every drop
   return t > 1 ? Math.min(t, 8) : Number(g.rules.dropSilence) * 4
 }
+/** A drop the big build leads into: the first after the long breakdown, in a track that builds big. */
+function bigDrop(g: Generation, s: Generation['sections'][number]): boolean {
+  return g.rules.bigBuild === 'big' && s.kind === 'drop' && g.sections.some((x, i) => x.long && g.sections.slice(i + 1).find((y) => y.kind === 'drop') === s)
+}
+/** Bars the mix high-pass runs before drop `s` (the big build's when that is longer). */
+function hpBefore(g: Generation, s: Generation['sections'][number]): number {
+  return Math.max(Number(g.rules.mixHp ?? 0), bigDrop(g, s) ? Number(g.rules.bigHp ?? 0) : 0)
+}
+/** The same tracks, the way they were made before the track-wide way into drops and the big build. */
+const LEGACY: GenerateOptions = { ...OPTS, locks: { dropIn: null, bigBuild: 'usual' } }
 const clipsOn = (g: Generation, name: string) => g.project.clips.filter((c) => c.laneId === laneOf(g, name))
 /** Velocity of a lane's pattern at a 16th step (absolute), 0 if silent. */
 function hitAt(g: Generation, name: string, step16: number): number {
@@ -139,7 +150,7 @@ describe('generator: rules every generation keeps', () => {
         // An intro straight into a drop may go quiet for its last two beats (the pre-drop silence),
         // and its drums for the last bar (the breath before drops).
         const intoDrop = s === intro && g.sections[1].kind === 'drop'
-        const end = (s.start + s.bars) * 4 - (intoDrop ? 2 : 0)
+        const end = (s.start + s.bars) * 4 - (intoDrop ? Math.max(2, silenceBefore(g, g.sections[1].start) / 4) : 0)
         const hatsEnd = (s.start + s.bars) * 4 - (intoDrop ? (g.rules.dropBreath === 'all' ? 4 : 2) : 0)
         // Hats none, the half next to the drops, or all through; with the lift, none until the
         // bars it fills up over (hats come in first).
@@ -172,8 +183,7 @@ describe('generator: rules every generation keeps', () => {
         } else if (c.filter?.type === 'highpass') {
           // Elsewhere only the "thin" breakdown kick is high-passed, clearly higher, and the mix
           // high-pass sweeping up in the bars before a drop.
-          const hp = Number(g.rules.mixHp ?? 0)
-          const intoDrop = g.sections.some((s) => s.kind === 'drop' && c.start >= (s.start - hp) * 4 && c.start < s.start * 4)
+          const intoDrop = g.sections.some((s) => s.kind === 'drop' && c.start >= (s.start - hpBefore(g, s)) * 4 && c.start < s.start * 4)
           if (intoDrop && c.filter.to != null) expect(c.filter.to).toBeGreaterThan(c.filter.from)
           else expect(c.filter.from).toBeGreaterThanOrEqual(180)
         }
@@ -370,6 +380,8 @@ describe('generator: rules every generation keeps', () => {
     expect(checked).toBeGreaterThan(100)
   })
 
+  /** The same seeds made the way tracks were before the track-wide way into drops (each riser's own gap). */
+  const legacy = Array.from({ length: 150 }, (_, i) => generate(LIB, LEGACY, 1000 + i))
   /** What leads into the line at `beat`: events on the fill and FX lanes whose body ends there. */
   const leadsInto = (g: Generation, beat: number) => g.project.clips.filter((c) => {
     const s = byPath.get(c.sample.relPath)
@@ -379,7 +391,7 @@ describe('generator: rules every generation keeps', () => {
 
   it('stops everything leading into a drop at one moment: the riser\'s, the fill\'s and the second layer\'s', () => {
     let early = 0, checked = 0
-    for (const g of gens) {
+    for (const g of legacy) {
       for (const d of g.sections.filter((s) => s.kind === 'drop' && s.start > 0)) {
         const into = leadsInto(g, d.start * 4)
         if (into.length < 2) continue
@@ -396,7 +408,7 @@ describe('generator: rules every generation keeps', () => {
 
   it('goes silent where the FX stop, but lets them ring through it', () => {
     let seen = 0
-    for (const g of gens) {
+    for (const g of legacy) {
       for (const d of g.sections.filter((s) => s.kind === 'drop' && s.start > 0)) {
         const t = Number((g.rules.dropGaps as Record<string, number>)[d.start])
         if (t <= 1) continue
@@ -421,7 +433,7 @@ describe('generator: rules every generation keeps', () => {
 
   it('layers a second FX into drops that complements the first', () => {
     let layered = 0
-    for (const g of gens) {
+    for (const g of legacy) {
       for (const d of g.sections.filter((s) => s.kind === 'drop' && s.start > 0)) {
         const fx = leadsInto(g, d.start * 4).filter((s) => s.category !== 'fill' && s.category !== 'roll')
         if (fx.length < 2) continue
@@ -1041,12 +1053,14 @@ describe('generator: structures and arcs from reference tracks', () => {
 
 describe('generator: reverb builds', () => {
   const verb = { tops: true, every: null, amount: 0.6 }
+  // (The big build's reverb is its own: tested with it.)
+  const OPTS_: GenerateOptions = { ...OPTS, locks: { bigBuild: 'usual' } }
   const into = (g: Generation, bar: number) => g.project.clips.filter((c) => c.verb && c.start + c.length <= bar * 4 && c.start >= (bar - 2) * 4)
 
   it('washes the top loops out into every drop and break, rising to the amount where they stop', () => {
     for (let i = 0; i < 20; i++) {
-      const g = generate(LIB, { ...OPTS, verb }, 2000 + i)
-      const plain = generate(LIB, OPTS, 2000 + i)
+      const g = generate(LIB, { ...OPTS_, verb }, 2000 + i)
+      const plain = generate(LIB, OPTS_, 2000 + i)
       expect(g.sections).toEqual(plain.sections)
       const tops = new Set(g.project.lanes.filter((l) => /^Top/.test(l.name)).map((l) => l.id))
       for (const c of g.project.clips.filter((c) => c.verb)) {
@@ -1074,7 +1088,7 @@ describe('generator: reverb builds', () => {
   })
 
   it('every 16 bars too, over a bar; nothing when off or on no part', () => {
-    const g = generate(LIB, { ...OPTS, verb: { ...verb, every: 16 } }, 2100)
+    const g = generate(LIB, { ...OPTS_, verb: { ...verb, every: 16 } }, 2100)
     // Windows: 2 bars into drops and breaks, 1 bar before every 16 bars of a section.
     const windows: [number, number][] = []
     g.sections.forEach((s, j) => {
@@ -1086,8 +1100,8 @@ describe('generator: reverb builds', () => {
     const built = g.project.clips.filter((c) => c.verb)
     expect(built.some((c) => windows.some(([a, z]) => z - a === 1 && c.start >= a * 4 && c.start + c.length <= z * 4))).toBe(true)
     for (const c of built) expect(windows.some(([a, z]) => c.start >= a * 4 && c.start + c.length <= z * 4)).toBe(true)
-    expect(generate(LIB, { ...OPTS, verb: { ...verb, tops: false } }, 2100).project.clips.some((c) => c.verb)).toBe(false)
-    expect(generate(LIB, OPTS, 2100).project.clips.some((c) => c.verb)).toBe(false)
+    expect(generate(LIB, { ...OPTS_, verb: { ...verb, tops: false } }, 2100).project.clips.some((c) => c.verb)).toBe(false)
+    expect(generate(LIB, OPTS_, 2100).project.clips.some((c) => c.verb)).toBe(false)
   })
 })
 
@@ -1369,7 +1383,7 @@ describe('generator: breakdowns, the bar before drops and intro hats as in real 
     for (const g of withBass) {
       for (const c of clipsOn(g, 'Bass')) {
         if (c.filter) expect(c.filter.type).toBe('highpass')
-        if (c.filter && !g.sections.some((s) => s.kind === 'drop' && c.start >= (s.start - Number(g.rules.mixHp ?? 0)) * 4 && c.start < (s.start + s.bars) * 4)) {
+        if (c.filter && !g.sections.some((s) => s.kind === 'drop' && c.start >= (s.start - hpBefore(g, s)) * 4 && c.start < (s.start + s.bars) * 4)) {
           expect(c.filter.from).toBe(g.rules.bassHp)
         }
       }
@@ -1830,8 +1844,8 @@ describe('generator: build-ups into drops', () => {
   const at = (g: Generation, name: string, bar: number) =>
     g.project.clips.find((c): c is PatternClip => c.type === 'pattern' && c.laneId === laneOf(g, name) && c.start <= bar * 4 && c.start + c.length > bar * 4)
   const hits = (c: PatternClip | undefined) => (c ? c.steps.slice(0, 16).filter(Boolean).length : 0)
-  /** Locked so nothing else moves the bars before drops: no silence, no FX or fill stopping early. */
-  const quiet = (locks: Record<string, unknown>): GenerateOptions => ({ ...OPTS, locks: { dropSilence: 0, dropRiser: false, dropFill: null, dropBreath: null, mixHp: 0, ...locks } })
+  /** Locked so nothing else moves the bars before drops: no silence, no FX or fill stopping early, the usual build into every drop. */
+  const quiet = (locks: Record<string, unknown>): GenerateOptions => ({ ...OPTS, locks: { dropSilence: 0, dropIn: 'straight', bigBuild: 'usual', dropRiser: false, dropFill: null, dropBreath: null, mixHp: 0, ...locks } })
   const intoDrops = (g: Generation) => g.sections.slice(0, -1).filter((_s, i) => g.sections[i + 1].kind === 'drop')
   const barsOf = (g: Generation, sec: Generation['sections'][number]) =>
     Math.min(g.rules.buildup === 'none' ? 0 : (g.rules.buildupBars as number), Math.floor(sec.bars / (sec.kind === 'intro' ? 4 : 2)))
@@ -2385,3 +2399,238 @@ describe('generator: one groove (the drums carry through breakdowns)', () => {
     expect(n).toBeGreaterThan(3)
   })
 })
+
+describe('generator: the way into drops, the same into every drop', () => {
+  const drops = (g: Generation) => g.sections.filter((s) => s.kind === 'drop' && s.start > 0)
+  const byWay = (way: string) => gens.filter((g) => g.rules.dropIn === way)
+
+  it('draws one way in per track: straight in, a gap with the drum fill alone in it, or a gap with the FX pulling in', () => {
+    for (const way of ['straight', 'gap', 'suck']) expect(byWay(way).length).toBeGreaterThan(15)
+    for (const g of gens) {
+      const want = g.rules.dropIn === 'straight' ? 0 : Number(g.rules.dropInBeats) * 4
+      for (const d of drops(g)) expect((g.rules.dropGaps as Record<string, number>)[d.start]).toBe(want)
+    }
+    expect(byWay('straight')[0].choices).toContain('straight into every drop')
+  })
+
+  it('leaves only the drum fill sounding in a gap, before every drop', () => {
+    let filled = 0
+    for (const g of byWay('gap')) {
+      const n = Number(g.rules.dropInBeats) * 4
+      for (const d of drops(g)) {
+        const mid = d.start * 4 - n / 8
+        for (const l of g.project.lanes) {
+          if (['Fills', 'Hits'].includes(l.name)) continue
+          for (let k = 1; k <= n; k++) expect(hitAt(g, l.name, d.start * 16 - k), `${g.seed} ${l.name}`).toBe(0)
+          expect(g.project.clips.some((c) => c.laneId === l.id && c.type === 'audio' && c.start <= mid && c.start + c.length > mid), `${g.seed} ${l.name}`).toBe(false)
+        }
+        if (g.rules.dropFill && covers(g, 'Fills', mid)) filled++
+      }
+      expect(g.rules.dropFill).not.toBeNull()                          // a gap has its drum fill
+    }
+    expect(filled).toBeGreaterThan(20)
+  })
+
+  it('lets the FX pull into the 1 through a gap that silences the rest', () => {
+    let pulled = 0
+    for (const g of byWay('suck')) {
+      const n = Number(g.rules.dropInBeats) * 4
+      for (const d of drops(g)) {
+        for (const name of ['Kick', 'Clap', 'Hats', 'Perc', 'Tops', 'Bass']) {
+          for (let k = 1; k <= n; k++) expect(hitAt(g, name, d.start * 16 - k)).toBe(0)
+        }
+        if (['FX', 'FX 2', 'FX 3'].some((x) => covers(g, x, d.start * 4 - 0.25))) pulled++
+      }
+    }
+    expect(pulled).toBeGreaterThan(10)
+  })
+})
+
+describe('generator: the big build into the drops after the long breakdown', () => {
+  const vopts: GenerateOptions = { ...OPTS, verb: { tops: true, every: null, amount: 0.6 } }
+  const tracks = Array.from({ length: 80 }, (_, i) => generate(LIB, vopts, 6100 + i))
+  const big = tracks.filter((g) => g.sections.some((s) => bigDrop(g, s)))
+  const at = (g: Generation, name: string, bar: number) =>
+    g.project.clips.find((c): c is PatternClip => c.type === 'pattern' && c.laneId === laneOf(g, name) && c.start <= bar * 4 && c.start + c.length > bar * 4)
+  const hits = (c: PatternClip | undefined, bar: number) => {
+    if (!c) return 0
+    const from = ((bar * 4 - c.start) * 4) % c.steps.length
+    return c.steps.slice(from, from + 16).filter(Boolean).length
+  }
+  /** The big drop, and the bars the build runs before it (reaching back into the long breakdown). */
+  const buildOf = (g: Generation) => {
+    const d = g.sections.find((s) => bigDrop(g, s))!
+    const i = g.sections.indexOf(d)
+    let a = g.sections[i - 1].start
+    for (let j = i - 2; j >= 0 && g.sections[j].kind !== 'drop'; j--) a = g.sections[j].start
+    return { d, n: Math.min(Number(g.rules.bigBars), d.start - a) }
+  }
+
+  it('builds big in most tracks with a long breakdown, the rest as into the other drops', () => {
+    const withLong = tracks.filter((g) => g.sections.some((s) => s.long))
+    expect(big.length).toBeGreaterThan(withLong.length * 0.4)
+    expect(big.length).toBeLessThan(withLong.length)
+    for (const g of big) {
+      const { n } = buildOf(g)
+      expect([4, 8, 16]).toContain(Number(g.rules.bigBars))
+      expect(g.choices.find((c) => c.startsWith('the big build'))).toContain(`${n} bars`)
+    }
+    for (const g of tracks.filter((x) => x.rules.bigBuild === 'usual')) expect(laneOf(g, 'FX 3')).toBeUndefined()
+  })
+
+  it('layers its drums: claps on the beat, in 8ths, in 16ths; a snare joining halfway; louder and opening as they go (thinning out under the high-pass)', () => {
+    let claps = 0, snares = 0
+    for (const g of big) {
+      const { d, n } = buildOf(g)
+      const a = d.start - n
+      const rolled = g.rules.dropFill === 'roll'
+      const withClaps = g.rules.bigDrums !== 'snare' || rolled
+      // (The bar before the drop may breathe or go silent: the bars before it.)
+      for (let b = a; b < d.start - 1; b++) {
+        const x = (b - a) / n
+        if (withClaps && laneOf(g, 'Clap')) {
+          expect(hits(at(g, 'Clap', b), b), `${g.seed} bar ${b}`).toBe(x < 0.5 ? 4 : x < 0.75 ? 8 : 16)
+          const c = at(g, 'Clap', b)!
+          expect(c.filter?.type).toBe(b >= d.start - Math.max(Number(g.rules.mixHp ?? 0), Number(g.rules.bigHp ?? 0)) ? 'highpass' : 'lowpass')
+          if (b === a) expect(c.gainDb).toBe(-9)
+          claps++
+        }
+        const s0 = withClaps ? Math.floor(n / 2) : 0
+        if (!rolled && g.rules.bigDrums !== 'claps' && b - a >= s0) {
+          const y = (b - a - s0) / (n - s0)
+          const want = g.rules.bigSnare === 'steps' ? (y < 1 / 3 ? 4 : y < 2 / 3 ? 8 : 16) : y < 0.5 ? 8 : 16
+          expect(hits(at(g, 'Build-up', b), b), `${g.seed} bar ${b}`).toBe(want)
+          snares++
+        }
+      }
+      if (rolled) expect(at(g, 'Build-up', a)).toBeUndefined()           // a roll sample is the snare roll there
+    }
+    expect(claps).toBeGreaterThan(40)
+    expect(snares).toBeGreaterThan(40)
+  })
+
+  it('takes the kick out, brings it back four on the floor over its second half, or rolls it over its last quarter', () => {
+    const seen = new Set<string>()
+    for (const g of big) {
+      const { d, n } = buildOf(g)
+      const a = d.start - n
+      seen.add(String(g.rules.bigKick))
+      for (let b = a; b < d.start - 1; b++) {
+        const k = hits(at(g, 'Kick', b), b)
+        if (g.rules.bigKick === 'out') expect(k).toBe(0)
+        else if (g.rules.bigKick === 'back' && b >= a + Math.floor(n / 2)) {
+          expect(k).toBe(4)
+          expect(at(g, 'Kick', b)!.filter?.type).toBe(b >= d.start - Math.max(Number(g.rules.mixHp ?? 0), Number(g.rules.bigHp ?? 0)) ? 'highpass' : 'lowpass')
+        } else if (g.rules.bigKick === 'roll' && b >= d.start - Math.max(2, Math.floor(n / 4))) expect(k).toBe(8)
+      }
+    }
+    expect(seen).toEqual(new Set(['out', 'back', 'roll']))
+  })
+
+  it('stacks its risers into the drop, the longest over the build, a short lift on FX 3; crashes coming faster', () => {
+    let three = 0, crashes = 0
+    for (const g of big) {
+      const { d } = buildOf(g)
+      const into = (name: string) => clipsOn(g, name).find((c) => {
+        const s = LIB.find((x) => x.rel_path === c.sample.relPath)
+        return s?.kind === 'event' && c.start + bodyBars(s) * 4 === d.start * 4
+      })
+      expect(into('FX'), `${g.seed}`).toBeDefined()
+      if (Number(g.rules.bigRisers) >= 3 && into('FX 3')) {
+        three++
+        expect(bodyBars(LIB.find((x) => x.rel_path === into('FX 3')!.sample.relPath)!)).toBeLessThanOrEqual(2)
+      }
+      if (g.rules.bigCrash && laneOf(g, 'Crash') && g.rules.dropIn !== 'gap') {
+        expect([4, 3, 2].map((k) => hits(at(g, 'Crash', d.start - k), d.start - k))).toEqual([1, 2, 4])
+        crashes++
+      }
+    }
+    expect(three).toBeGreaterThan(5)
+    expect(crashes).toBeGreaterThan(5)
+    // The other drops keep the track's usual way: never a third FX layer.
+    for (const g of big) {
+      for (const d of g.sections.filter((s) => s.kind === 'drop' && !bigDrop(g, s))) {
+        expect(clipsOn(g, 'FX 3').some((c) => c.start < d.start * 4 && c.start + c.length >= d.start * 4)).toBe(false)
+      }
+    }
+  })
+
+  it('sends its drums to reverb rising to the drop and throws a delay every 4 bars, the drop dry', () => {
+    let wet = 0
+    for (const g of big.filter((x) => ['drums', 'drums+stabs', 'drums+tops', 'all'].includes(String(x.rules.bigVerb)))) {
+      const { d, n } = buildOf(g)
+      const a = d.start - n
+      const rolled = g.rules.dropFill === 'roll'
+      const plays = [...(g.rules.bigDrums !== 'snare' || rolled ? ['Clap'] : []), ...(!rolled && g.rules.bigDrums !== 'claps' ? ['Build-up'] : [])]
+      for (const name of plays) {
+        const cs = clipsOn(g, name).filter((c) => c.start >= a * 4 && c.start < (d.start - 1) * 4)
+        for (const c of cs) {
+          expect(c.verb!.to).toBeGreaterThanOrEqual(c.verb!.from)
+          expect(c.verb!.to).toBeLessThanOrEqual(0.85 + 1e-9)
+          const bar = c.start / 4 - a
+          if ((bar + 1) % 4 === 0 && c.length === 4) expect(c.echo).toBeGreaterThan(0)
+          wet++
+        }
+        // Dry on the drop.
+        for (const c of clipsOn(g, name).filter((c) => c.start >= d.start * 4 && c.start < (d.start + 1) * 4)) expect(c.verb).toBeUndefined()
+      }
+    }
+    expect(wet).toBeGreaterThan(40)
+    // The top loops wash out over the whole build when the effects take them.
+    const tops = big.filter((x) => ['drums+tops', 'all'].includes(String(x.rules.bigVerb)))
+    expect(tops.some((g) => {
+      const { d, n } = buildOf(g)
+      return clipsOn(g, 'Tops').some((c) => c.verb && c.start < (d.start - n / 2) * 4 && c.start >= (d.start - n) * 4)
+    })).toBe(true)
+  })
+
+  it('high-passes the mix over its last bars when its rule is longer than the track\'s', () => {
+    let seen = 0
+    for (const g of big.filter((x) => Number(x.rules.bigHp) > Number(x.rules.mixHp ?? 0))) {
+      const { d } = buildOf(g)
+      const hp = Number(g.rules.bigHp)
+      // The build's own drums thin out there (their low-pass gives way), and the parts without a filter of their own.
+      const n = buildOf(g).n
+      for (const name of ['Clap', 'Build-up', 'Kick']) {
+        for (let b = d.start - Math.min(n, hp); b < d.start - 1; b++) {
+          const c = at(g, name, b)
+          if (c?.filter && hits(c, b)) expect(c.filter.type, `${g.seed} ${name} ${b}`).toBe('highpass')
+        }
+      }
+      const swept = g.project.clips.filter((c) => c.filter?.type === 'highpass' && c.filter.to != null && c.filter.to > c.filter.from
+        && c.start >= (d.start - hp) * 4 && c.start < (d.start - Number(g.rules.mixHp ?? 0)) * 4)
+      if (swept.length) seen++
+    }
+    expect(seen).toBeGreaterThan(3)
+  })
+
+  it('builds as long as the user\'s tracks do into their drop after the long breakdown: the reference it\'s built on, else their spread', () => {
+    const run = (rs: [string, number][]) => rs.map(([v, n]) => v.repeat(n)).join('')
+    // Intro 16, drop 32, break 32 (its fills over the last 16 bars, the kick back over the last 8), drop 32, outro 16.
+    const ref = (code: string, fillBars: number, kickBars: number): TrackArrangement => ({
+      zip_id: 9, source_code: code, bpm: 124, bars: 128,
+      parts: {
+        kick: run([['2', 48], ['0', 32 - kickBars], ['1', kickBars], ['2', 48]]),
+        bass: run([['0', 16], ['2', 32], ['0', 32], ['2', 32], ['0', 16]]),
+        top: run([['2', 128]]), hats: run([['2', 128]]),
+        fills: fillBars ? run([['0', 80 - fillBars], ['1', fillBars - 1], ['0', 49]]) : '0'.repeat(128),
+        fx: run([['0', 76], ['2', 4], ['0', 48]]),
+      },
+    })
+    expect(mainBuildOf(ref('S0901', 16, 8))).toEqual({ bars: 16, kick: true, claps: false })
+    expect(mainBuildOf(ref('S0902', 8, 0))).toMatchObject({ bars: 8, kick: false })
+    expect(mainBuildOf(ref('S0903', 0, 0))).toMatchObject({ bars: 4 })              // no fills: the FX at full
+    expect(mainBuilds([ref('S0901', 16, 8), ref('S0902', 8, 0)]).length).toBe(2)
+    // Every track drawing from three references builds 8 or 16 bars, never another length.
+    const refs = [ref('S0901', 16, 8), ref('S0902', 8, 0), ref('S0904', 16, 0)]
+    const gs = Array.from({ length: 30 }, (_, i) => generate(LIB, { ...OPTS, templates: refs, locks: { bigBuild: 'big' } }, 6300 + i))
+    for (const g of gs) {
+      const code = g.sections.find((s) => bigDrop(g, s))?.src?.code
+      const own = code ? refs.find((r) => r.source_code === code) : undefined
+      if (own) expect(g.rules.bigBars).toBe(mainBuildOf(own)!.bars)
+      else expect([8, 16]).toContain(g.rules.bigBars)
+    }
+    expect(new Set(gs.map((g) => g.rules.bigBars))).toEqual(new Set([8, 16]))
+  })
+})
+

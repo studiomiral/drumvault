@@ -31,6 +31,12 @@ const SILENCED: Role[] = [...LEAD_IN, 'disco', 'disco2', 'atmos']
 const MIX: Role[] = LEAD_IN
 
 const has = (kind: string) => (g: Generation) => g.sections.some((s) => s.kind === kind)
+const RISERS: Role[] = ['fx', 'fx2', 'fx3']
+/** What the big build into the drops after the long breakdown shapes. */
+const BIG: Role[] = ['kick', 'clap', 'buildup', ...RISERS, 'crash', ...STAB_ROLES, ...BUILD_TOPS, 'groove', 'vocal', 'vchop']
+/** A track with a drop after its long breakdown. */
+const longDrop = (g: Generation) => g.sections.some((s, i) => s.long && g.sections.slice(i + 1).some((x) => x.kind === 'drop'))
+const bigOn = (g: Generation) => g.rules.bigBuild === 'big' && longDrop(g)
 const yesNo = (yes: string, no: string) => [{ value: true, label: yes }, { value: false, label: no }]
 /** Where the intro and outro bring in a part: the half of each next to the drops. */
 const NEXT_TO_DROPS = 'the half next to the drops'
@@ -43,7 +49,12 @@ export const CHOICES: Choice[] = [
       { value: '16', label: 'every 16 bars' }, { value: '8', label: 'every 8 bars' }] },
   { rule: 'bassTurnKind', label: 'Bassline turn', group: 'Drops', roles: ['bass'], when: (g) => !!g.bass && !!g.rules.bassTurn && g.rules.bassTurn !== 'none',
     options: [{ value: 'pickup', label: 'a 16th run into the 1' }, { value: 'gap', label: 'its last beat out' }, { value: 'octave', label: 'its last beat an octave up' }] },
-  { rule: 'dropSilence', label: 'Silence before drops', group: 'Drops', roles: SILENCED,
+  { rule: 'dropIn', label: 'Way into drops', group: 'Drops', roles: [...SILENCED, 'fills', ...RISERS], when: (g) => g.rules.dropIn != null,
+    options: [{ value: 'straight', label: 'straight in' }, { value: 'gap', label: 'a gap, the drum fill alone in it' }, { value: 'suck', label: 'a gap, the FX pulling in' }] },
+  { rule: 'dropInBeats', label: 'Gap before drops', group: 'Drops', roles: [...SILENCED, ...RISERS],
+    when: (g) => g.rules.dropIn === 'gap' || g.rules.dropIn === 'suck',
+    options: [{ value: 1, label: '1 beat' }, { value: 2, label: '2 beats' }, { value: 4, label: 'a bar' }] },
+  { rule: 'dropSilence', label: 'Silence before drops', group: 'Drops', roles: SILENCED, when: (g) => g.rules.dropIn == null,
     options: [{ value: 0, label: 'none' }, { value: 1, label: '1 beat' }, { value: 2, label: '2 beats' }] },
   { rule: 'dropKickOut', label: 'Kick into drops', group: 'Drops', roles: ['kick'], options: yesNo('four kicks out', 'plays on') },
   { rule: 'buildup', label: 'Build-up', group: 'Drops', roles: BUILDUP_ROLES, unset: 'none',
@@ -55,7 +66,7 @@ export const CHOICES: Choice[] = [
     options: [{ value: 'none', label: 'none' }, { value: 'faster', label: 'faster and faster' }, { value: 'last4', label: 'on the last 4 counts' }] },
   { rule: 'dropFill', label: 'Into drops', group: 'Drops', roles: BUILDUP_ROLES,
     options: [{ value: 'roll', label: 'a roll' }, { value: 'fill', label: 'a fill' }, { value: null, label: 'no fill' }] },
-  { rule: 'dropRiser', label: 'Riser into drops', group: 'Drops', roles: ['fx', 'fx2'], options: yesNo('yes', 'no') },
+  { rule: 'dropRiser', label: 'Riser into drops', group: 'Drops', roles: ['fx', 'fx2', 'fx3'], options: yesNo('yes', 'no') },
   { rule: 'firstDrop', label: 'Drop 1', group: 'Drops', roles: ['clap2', 'clap3', 'hats2', 'perc2', 'top2', 'top3', 'groove'],
     when: (g) => g.sections[1]?.kind === 'drop', unset: 'full',
     options: [{ value: 'lean', label: 'leaner at first, full halfway' }, { value: 'full', label: 'full from the start' }] },
@@ -80,6 +91,24 @@ export const CHOICES: Choice[] = [
   { rule: 'stabsBuild', label: 'Stabs', group: 'Builds', roles: STAB_ROLES,
     when: (g) => !!g.rules.stabs && g.rules.stabsIn === 'keys' && has('build')(g),
     options: [{ value: 'sweep', label: 'filter opens' }, { value: 'filtered', label: 'low-passed' }, { value: 'none', label: 'out' }] },
+  { rule: 'bigBuild', label: 'Build into the main drop', group: 'Builds', roles: BIG, when: longDrop, unset: 'usual',
+    options: [{ value: 'big', label: 'big: layered, stacked risers, effects' }, { value: 'usual', label: 'as into the other drops' }] },
+  { rule: 'bigBars', label: 'Main build length', group: 'Builds', roles: ['kick', 'clap', 'buildup', 'fx', 'fx2', ...STAB_ROLES], when: bigOn,
+    options: [{ value: 4, label: '4 bars' }, { value: 8, label: '8 bars' }, { value: 16, label: '16 bars' }] },
+  { rule: 'bigDrums', label: 'Main build drums', group: 'Builds', roles: ['clap', 'buildup'], when: bigOn,
+    options: [{ value: 'both', label: 'claps, a snare joining' }, { value: 'claps', label: 'claps' }, { value: 'snare', label: 'a snare' }] },
+  { rule: 'bigSnare', label: 'Main build snare', group: 'Builds', roles: ['buildup'], when: (g) => bigOn(g) && g.rules.bigDrums !== 'claps',
+    options: [{ value: 'roll', label: 'a roll: 8ths, then 16ths' }, { value: 'steps', label: 'steps: 4ths, 8ths, 16ths' }] },
+  { rule: 'bigKick', label: 'Main build kick', group: 'Builds', roles: ['kick'], when: bigOn,
+    options: [{ value: 'out', label: 'out' }, { value: 'back', label: 'back in its second half' }, { value: 'roll', label: 'a roll over its last quarter' }] },
+  { rule: 'bigRisers', label: 'Main build risers', group: 'Builds', roles: ['fx3'], when: bigOn,
+    options: [{ value: 2, label: 'two: long, and its second half' }, { value: 3, label: 'three: and a short lift into the 1' }] },
+  { rule: 'bigVerb', label: 'Main build effects', group: 'Builds', roles: ['clap', 'buildup', ...STAB_ROLES], when: bigOn,
+    options: [{ value: 'drums', label: 'reverb and delay on its drums' }, { value: 'stabs', label: 'the stabs' }, { value: 'drums+stabs', label: 'its drums and the stabs' },
+      { value: 'drums+tops', label: 'its drums and the top loops' }, { value: 'all', label: 'all: drums, stabs, tops, vocals' }] },
+  { rule: 'bigHp', label: 'Main build high-pass', group: 'Builds', roles: MIX.filter((r) => r !== 'clap'), when: bigOn,
+    options: [{ value: 0, label: 'as into the other drops' }, { value: 4, label: 'the mix over its last 4 bars' }, { value: 8, label: 'over its last 8 bars' }] },
+  { rule: 'bigCrash', label: 'Main build crashes', group: 'Builds', roles: ['crash'], when: bigOn, options: yesNo('faster over its last 4 bars', 'as into the other drops') },
   { rule: 'introHats', label: 'Hats in the intro', group: 'Intro & outro', roles: ['hats'],
     options: [{ value: 'none', label: 'none' }, { value: 'half', label: 'the second half' }, { value: 'all', label: 'all through' }] },
   { rule: 'outroHats', label: 'Hats in the outro', group: 'Intro & outro', roles: ['hats'],
@@ -116,7 +145,7 @@ export const CHOICES: Choice[] = [
       { value: 'drops_breaks', label: 'drops and breakdowns' }, { value: 'breaks', label: 'breakdowns, last drop' }] },
   { rule: 'vocalLoop', label: 'Vocal loop', group: 'Sound', roles: ['vocal'], when: (g) => !!g.picks.vocal && g.rules.vocalUse !== 'chops',
     options: [{ value: 'long', label: 'the long one' }, { value: 'short', label: 'the short one' }] },
-  { rule: 'fx', label: 'FX', group: 'Sound', roles: ['fx', 'fx2', 'hits'],
+  { rule: 'fx', label: 'FX', group: 'Sound', roles: ['fx', 'fx2', 'fx3', 'hits'],
     options: [{ value: 'sparse', label: 'sparse' }, { value: 'normal', label: 'normal' }, { value: 'busy', label: 'busy' }] },
 ]
 
