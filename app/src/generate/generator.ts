@@ -15,7 +15,7 @@ import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, T
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
 import { hitPitch, hitSample } from './disco'
-import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample } from './ambience'
+import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bedShift } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { chopPitch, chopSample, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
 import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perBarFor, rollBar, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabJob, type StabLayout, type StabRoll, type StabTurn, type StabTurns } from './stabs'
@@ -1266,9 +1266,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const stringHits = (opts.strings?.hits ?? []).filter((h) => stringsShift(h, key) != null)
   // ---- vocals (SCOPE.md §6.11): the Vocals page's takes. An RNG of their own too ----
   const vrng = new Rng(seed ^ 0x564f434c)
-  // The ambience bed: an RNG of its own too.
+  // The ambience bed: an RNG of its own too. Noise, or a tonal bed that moves into the key (one that
+  // wouldn't move isn't used: it is never heard as recorded).
   const arng = new Rng(seed ^ 0x414d4249)
-  const bedHits = opts.ambience?.hits ?? []
+  const bedHits = (opts.ambience?.hits ?? []).filter((h) => bedShift(h, key) != null)
   const takes = opts.vocals?.takes ?? []
   const hitOf = new Map(hitItems.map((h) => [h.rel_path, h]))
 
@@ -2737,7 +2738,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     bed = arng.pick(fresh.length ? fresh : bedHits)
   }
   if (bed) {
-    const render = bedRender(bed, bpm)
+    const render = bedRender(bed, bpm, key, bedShift(bed, key)!)
     const item = bedItem(bed)
     const sample = bedSample(item, render, bpm)
     const first = sections[0]
@@ -3050,7 +3051,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   // (After the structure's line, which stays first.)
   if (character) choices.splice(tpl ? 1 : 0, 0, `${CHARACTER_LABEL[character]}${lead ? `, led by ${LEAD_LABEL[lead]}: teased in the intro, in the clear in the breakdowns` : ''}`)
-  if (bed) choices.push(`ambience bed: ${bed.name}, very quiet from the end of the intro to the outro, ducking under the kick`)
+  const bedMove = bed ? bedShift(bed, key)! : 0
+  if (bed) choices.push(`ambience bed: ${bed.name}${bedMove ? `, a tonal bed pitched ${bedMove > 0 ? '+' : ''}${bedMove} into ${key}` : ''}, very quiet from the end of the intro to the outro, ducking under the kick`)
   if (padBreaks && padPatch) choices.push(`break layer: ${padReese ? 'a reese' : 'a pad'} (${padPatch.name}) ${padReese ? `on ${key?.replace(/m$/, '')}` : `holding ${key}`}, opening into the next part`)
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
@@ -3377,6 +3379,14 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
   const stringsHit = !g.picks.strings ? null : was && stringsShift(was, key) != null ? was
     : fitting.length ? new Rng(seed ^ 0x53545247).pick(fitting) : null
   const strings = stringsHit && { hit: stringsHit, shift: stringsShift(stringsHit, key)! }
+  // The ambience bed: noise stays as it is; a tonal bed is moved into the new key, or another one
+  // that moves takes its place (one would be heard as recorded); none does: it goes. (One no longer
+  // on the Ambience page stays as it is.)
+  const bedHits = opts.ambience?.hits ?? []
+  const wasBed = g.picks.bed ? bedHits.find((h) => bedItem(h).id === g.picks.bed!.id) : undefined
+  const movingBeds = bedHits.filter((h) => bedShift(h, key) != null)
+  const bedHit = !wasBed ? null : bedShift(wasBed, key) != null ? wasBed
+    : movingBeds.length ? new Rng(seed ^ 0x414d4249).pick(movingBeds) : null
   const hitOf = new Map([...opts.disco?.hits ?? [], ...opts.stabs?.hits ?? []].map((h) => [h.rel_path, h]))
   const byPath = new Map(all.map((s) => [s.rel_path, s]))
   const fits = new Set(expandCompatible([key]))
@@ -3421,6 +3431,10 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
       const render = stringsRender(strings.hit, key, strings.shift, project.bpm)
       return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(stringsSample(stringsItem(strings.hit), render, project.bpm)) } }
     }
+    if (c.type === 'audio' && c.bass?.role === 'ambience' && bedHit) {
+      const render = bedRender(bedHit, project.bpm, key, bedShift(bedHit, key)!)
+      return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(bedSample(bedItem(bedHit), render, project.bpm)) } }
+    }
     // (Keys parts, stab patches and drones of older tracks stay as they are.)
     if (c.type === 'audio' && c.bass) {
       if (!bass || (c.bass.role ?? 'bass') !== 'bass') return c
@@ -3452,6 +3466,12 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
     delete picks.strings
     project.clips = project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'strings'))
     project.lanes = project.lanes.filter((l) => l.name !== 'Strings' || project.clips.some((c) => c.laneId === l.id))
+  }
+  if (bedHit) picks.bed = bedItem(bedHit)
+  else if (wasBed) {
+    delete picks.bed
+    project.clips = project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'ambience'))
+    project.lanes = project.lanes.filter((l) => l.name !== 'Ambience' || project.clips.some((c) => c.laneId === l.id))
   }
   const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((z): z is string => !!z))].sort()
   const note = `in ${key} (made in ${g.key ?? 'no key'})${swapped ? `, ${swapped} FX swapped for ones in key` : ''}${kept ? `, ${kept} kept: nothing else in key` : ''}`

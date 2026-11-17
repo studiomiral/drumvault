@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS hits (
   tone TEXT,                        -- as samples.tone (v14)
   punch_db REAL,                    -- as samples.punch_db (v16): the level a stab is set by, hit for hit
   voices INTEGER,                   -- how many notes it plays (v16): 1–2 a single note, 3 or more a chord
+  tonal INTEGER,                    -- an Ambience texture (v18): 1 a tonal bed (always moved into the key), 0 noise (never), NULL unmeasured
   created_at TEXT
 );
 
@@ -211,6 +212,8 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE hits ADD COLUMN punch_db REAL")
         if "voices" not in hit_cols:
             self.conn.execute("ALTER TABLE hits ADD COLUMN voices INTEGER")
+        if "tonal" not in hit_cols:  # v18: tonal beds and noise on the Ambience page (filled by analyze_library)
+            self.conn.execute("ALTER TABLE hits ADD COLUMN tonal INTEGER")
 
     def close(self) -> None:
         self.conn.close()
@@ -401,6 +404,10 @@ class LibraryDB:
 
     def samples_without_energy(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT id, rel_path FROM samples WHERE energy_db IS NULL OR tone IS NULL OR punch_db IS NULL").fetchall()
+
+    def textures_unmeasured(self) -> list[sqlite3.Row]:
+        """Ambience textures not yet told tonal or noise (v18)."""
+        return self.conn.execute("SELECT * FROM hits WHERE kind = 'ambience' AND tonal IS NULL ORDER BY id").fetchall()
 
     def hits_without_energy(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT id, rel_path FROM hits WHERE energy_db IS NULL OR tone IS NULL OR punch_db IS NULL OR voices IS NULL").fetchall()

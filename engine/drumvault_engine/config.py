@@ -280,6 +280,21 @@ class Thresholds:
     ambience_xfade_s: float = 1.5
     ambience_lufs_target: float = -14.0
     ambience_peak_dbfs: float = -1.0
+    # Tonal or not (ambience.tonality): the share of a texture's energy (in the band the bed is heard,
+    # above its 200 Hz low cut) in narrow peaks `ambience_tonal_peak_db` over the spectrum around
+    # them that hold for `ambience_tonal_hold_s`: a held note does, crackle, rain or a crowd flicker.
+    # From `ambience_tonal_min` a texture is a tonal bed, with a key, moved into each track's key; below,
+    # noise, never moved. (Measured: noise 0.00–0.03, tonal atmos 0.11–0.67, a pad under loud noise 0.5.)
+    ambience_tonal_min: float = 0.06
+    ambience_tonal_lo_hz: float = 200.0
+    ambience_tonal_hi_hz: float = 5000.0
+    ambience_tonal_peak_db: float = 10.0
+    ambience_tonal_hold_s: float = 1.0
+    ambience_tonal_env_hz: float = 170.0     # the width of the spectrum a peak stands out from
+    ambience_tonal_quiet_pct: float = 30.0   # the quietest frames (gaps, fades) don't count…
+    ambience_tonal_floor_db: float = 30.0    # …nor any this far under its loud frames (a tail, a gap of silence)
+    ambience_tonal_max_s: float = 30.0       # measured over at most this much from the start
+    ambience_max_shift: int = 6              # a tonal bed moves the nearest way into the key: never more than this
     strings_tail_fade_s: float = 0.02       # a sample ending before its part does fades out over this (no click)
     strings_fade_s: float = 0.25            # where a part cuts the sample (the next 8-bar line), it fades out over this
     strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)

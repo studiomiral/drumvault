@@ -105,6 +105,8 @@ export interface HitItem {
   punch_db?: number | null
   /** How many notes it plays (schema v16; null until measured): 1–2 a single note, 3 or more a chord. */
   voices?: number | null
+  /** An Ambience texture (schema v18; null until measured): 1 a tonal bed (always pitched into the track key), 0 noise (never). */
+  tonal?: number | null
 }
 
 /** A sound in the Splice folder that could go on one of the music pages (SCOPE.md §6.12). */

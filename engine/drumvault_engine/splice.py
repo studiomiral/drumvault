@@ -5,8 +5,8 @@ A scan reads nothing but file names and audio headers, and changes nothing: each
 says what it is ("MALAY_strings_stab_fall_C#min", "RARE_piano_textured_Bmin_chord2"), its header
 how long it is. A file is suggested for one page (or none): a short chord or stab for the Chord
 Stabs, a brass, horn or orchestra hit for the Disco Hits, a long string sound for the Strings, a
-bass one-shot for the Bass Samples, a long texture (crackle, hiss, room tone) for the
-Ambience. Drums, vocals, FX, bass loops and loops of anything but strings
+bass one-shot for the Bass Samples, a long texture for the Ambience: noise (crackle, hiss,
+room tone, a crowd) or a tonal bed (a drone, a soft pad in a key). Drums, vocals, FX, bass loops and loops of anything but strings
 are left out. Adding one is the page's
 own import (hits.import_hits), which copies it into the library.
 """
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from . import zipio
+from . import ambience, zipio
 from .config import Settings
 from .db import LibraryDB
 from .samples import name_key
@@ -49,6 +49,10 @@ NOT_AMBIENCE = {"pad", "pads", "chord", "chords", "piano", "synth", "string", "s
                 "drums", "perc", "bass", "vocal", "vocals", "vox", "riser", "impact", "sweep", "fx", "sfx", "hit", "stab", "guitar",
                 "songstarter", "percussion", "snare", "hat", "clap", "kit", "keys", "organ", "rhodes", "sax", "brass", "horn", "loop",
                 "fall", "rise", "ris", "uplifter", "downlifter", "transition", "footstep", "explainer"}
+# A tonal bed: a drone, a soft pad or soundscape held under the track (pitched into its key).
+TONAL_BED = {"drone", "drones", "pad", "pads", "soundscape", "soundscapes", "ambient", "bed", "evolving"}
+# …but not music that moves (chords, a melody, a loop at a tempo), an instrument of another page, drums or FX.
+NOT_TONAL = (NOT_AMBIENCE - {"pad", "pads", "synth", "fx"}) | {"sidechained", "sidechain", "pumping", "arp", "arps", "arpeggio", "progression", "vinyl", "tape", "resampled"}
 # A bass one-shot (one note a sampler can play a line with): never a loop, a drum or a kick's "sub".
 BASS = {"bass", "basses", "sub", "808", "reese"}
 NAMED = {"stab", "stabs", "chord", "chords"}
@@ -72,12 +76,17 @@ def suggest(name: str, duration_s: float, settings: Settings) -> tuple[str, str]
     isn't one of them (drums, FX, vocals, basses, loops that aren't strings, sounds too long or short)."""
     th = settings.thresholds
     w = set(words(name))
+    bed_len = th.splice_ambience_min_len_s <= duration_s <= th.strings_max_len_s
     # A texture first (its words aren't music for the other pages): long enough to lie under a section.
-    # (A name with a key is music: a texture has none.)
-    if (w & AMBIENCE or {"room", "tone"} <= w) and not w & NOT_AMBIENCE and not name_key(name):
-        if th.splice_ambience_min_len_s <= duration_s <= th.strings_max_len_s:
-            return "ambience", "a texture for the ambience bed"
-        return None
+    # Noise (crackle, a crowd, rain: no key in the name) is never moved. (Named as noise, a loop is
+    # still a texture: "texture_loop_vinyl_crackle".)
+    noise = ambience.named_noise(name)
+    if (w & AMBIENCE or {"room", "tone"} <= w) and not w & (NOT_AMBIENCE - ({"loop"} if noise else set())) and not name_key(name):
+        return ("ambience", "noise for the ambience bed: never pitched") if bed_len else None
+    # A tonal bed (a drone, a soft pad, an atmosphere in a key): always moved into the track's key.
+    tonal = w & (AMBIENCE | TONAL_BED) and not w & NOT_TONAL and not ambience.named_noise(name)
+    if tonal and (name_key_label(name)[0] or w & TONAL_BED - {"ambient", "evolving"}):
+        return ("ambience", "a tonal bed: pitched into each track's key") if bed_len else None
     if w & OTHER or ("fx" in w and not w & NAMED):
         return None
     oneshot = "oneshot" in w or {"one", "shot"} <= w

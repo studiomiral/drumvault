@@ -425,7 +425,9 @@ def test_an_atmos_stem_goes_to_the_ambience_page_not_the_library(small_lib):
     assert len(tex) == before
     for h in tex:
         assert h["rel_path"].startswith("Ambience/") and (lib / h["rel_path"]).exists()
-        assert h["key_label"] is None and h["energy_db"] is not None and h["voices"] == 0
+        # Told tonal (a key, the stem's: moved into every track's) or noise (none) by its sound.
+        assert h["tonal"] in (0, 1) and (h["key_label"] is not None) == (h["tonal"] == 1)
+        assert h["energy_db"] is not None and h["voices"] == 0
     # Processed again: the same cuts are there already, not added twice.
     r3 = pipeline.process_zip(None, settings, zip_id=r.zip_id, overrides=Overrides(stems={str(fill["id"]): "fx_atmos"}))
     assert r3.counts.ambience == 0
@@ -456,6 +458,7 @@ def test_atmos_already_in_the_library_moves_to_ambience_and_is_deleted_for_good(
         assert db.conn.execute("SELECT COUNT(*) FROM removed_samples").fetchone()[0] == 0
         assert len(db.samples_for_zip(r.zip_id, "event")) == other
     [h] = _hits(lib, "ambience")
-    assert h["key_label"] is None and Path(h["file_name"]).stem == Path(a["rel_path"]).stem
+    assert h["tonal"] in (0, 1) and (h["key_label"] is not None) == (h["tonal"] == 1)
+    assert Path(h["file_name"]).stem == Path(a["rel_path"]).stem
     # Nothing left to move.
     assert pipeline.analyze_library(settings)["atmos"] == {"moved": 0, "deleted": 0, "purged": 0}

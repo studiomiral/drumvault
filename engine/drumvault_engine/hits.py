@@ -111,6 +111,17 @@ def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings, kind: str 
     return detected.label, "detected" if detected.label else None
 
 
+def texture_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tuple[int, str | None, str | None]:
+    """(tonal, key label, key source) of an Ambience texture: a tonal bed (ambience.is_tonal) has
+    its key from its name, a bare note in it with the sound's scale, else the sound's (as a stab);
+    noise has none and is never moved."""
+    from . import ambience
+    if not ambience.is_tonal(name, ambience.tonality(mono, sr, settings.thresholds), settings.thresholds):
+        return 0, None, None
+    label, source = hit_key(name, mono, sr, settings, "stab")
+    return 1, label, source
+
+
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
     """Add disco hits (or chord stabs, strings, bass samples) from files, folders and zips. Files already
     imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s."""
@@ -142,8 +153,12 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue
-            # (A texture has no key: the bed is never moved.)
-            label, source = (None, None) if kind == "ambience" else hit_key(name, hit.mean(axis=1), audio.sr, settings, kind)
+            # A texture: a tonal bed (a key, always moved into the track's) or noise (none, never moved).
+            tonal = None
+            if kind == "ambience":
+                tonal, label, source = texture_key(name, hit.mean(axis=1), audio.sr, settings)
+            else:
+                label, source = hit_key(name, hit.mean(axis=1), audio.sr, settings, kind)
             y = resample(hit, audio.sr, out_sr)
             y, pk_db, _ = normalize.peak_normalize(y, settings.thresholds.hit_peak_dbfs)
             base = naming.slugify(Path(name).stem, 60) or "hit"
@@ -158,15 +173,15 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
                                 channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
                                 punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000),
                                 voices=keymod.count_voices(y.mean(axis=1), out_sr, settings.thresholds),
-                                tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())
+                                tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), tonal=tonal, created_at=now_iso())
             imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 
 
 def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, sr: int, origin: str) -> str | None:
     """A texture straight onto the Ambience page (an atmos cut from a stem, SCOPE.md §6.10a): written
-    to <Library>/Ambience/ at the library rate, no key (a texture is never moved), measured like an
-    imported one. The same audio already there (by its bytes): nothing new, None. Else its path."""
+    to <Library>/Ambience/ at the library rate, told tonal (a key, from the stem's in its name or its
+    sound) or noise (none), measured like an imported one. The same audio already there (by its bytes): nothing new, None. Else its path."""
     lib = Path(settings.library_path)
     out_sr = settings.output_sample_rate
     y = resample(np.asarray(data, dtype=np.float32), sr, out_sr)
@@ -182,8 +197,10 @@ def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, 
         path.unlink(missing_ok=True)
         return None
     peak = float(np.max(np.abs(y))) if y.size else 0.0
+    tonal, label, source = texture_key(name, y.mean(axis=1), out_sr, settings)
     db.insert_hit(kind="ambience", file_name=f"{name}.wav", rel_path=rel, original_path=origin, file_sha1=sha1,
-                  key_label=None, key_camelot=None, key_source=None, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
+                  key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
+                  key_source=source, tonal=tonal, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                   channels=y.shape[1], peak_db=20 * np.log10(peak) if peak > 0 else -240.0, energy_db=k_energy_db(y, out_sr),
                   punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000), voices=0,
                   tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())
@@ -195,13 +212,18 @@ def set_hit_meta(settings: Settings, hit_id: int, key_label: str | None = None, 
     """Correct a hit's key (then marked "manual") or its pitch fix (semitones on top of the move into
     the track key; up to two octaves, the hit itself plays within one either way)."""
     with LibraryDB(settings.library_path) as db:
-        if db.get_hit(hit_id) is None:
+        row = db.get_hit(hit_id)
+        if row is None:
             raise HitError("not_found", f"No disco hit with id {hit_id}")
         fields: dict = {}
+        texture = row["kind"] == "ambience"
         if clear_key:
-            fields.update(key_label=None, key_camelot=None, key_source="manual")
+            # (A texture without a key is noise: never moved.)
+            fields.update(key_label=None, key_camelot=None, key_source="manual", **({"tonal": 0} if texture else {}))
         elif key_label:
-            fields.update(key_label=key_label, key_camelot=keymod.camelot(*keymod.parse_label(key_label)), key_source="manual")
+            # (A texture given a key is a tonal bed: always moved into the track's.)
+            fields.update(key_label=key_label, key_camelot=keymod.camelot(*keymod.parse_label(key_label)), key_source="manual",
+                          **({"tonal": 1} if texture else {}))
         if pitch_fix is not None:
             fields["pitch_fix"] = max(-24, min(24, int(pitch_fix)))
         db.update_hit(hit_id, **fields)

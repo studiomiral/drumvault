@@ -30,7 +30,7 @@ export function AmbiencePanel({ g, fixed }: { g: Generation; fixed?: boolean }) 
             enabledTitle={opts.enabled ? 'On: most new generations get a very quiet texture under them' : 'Off: new generations have no ambience bed'}
             summary={summary}>
       {!textures ? (
-        <p className="text-muted text-[12.5px]">No textures yet: drop vinyl crackle, tape hiss, room tone or field recordings on the Ambience page.{' '}
+        <p className="text-muted text-[12.5px]">No textures yet: drop vinyl crackle, tape hiss, room tone, field recordings or tonal beds on the Ambience page.{' '}
           <Button variant="ghost" onClick={() => setView('ambience')}>Open Ambience</Button>
         </p>
       ) : (
@@ -41,6 +41,7 @@ export function AmbiencePanel({ g, fixed }: { g: Generation; fixed?: boolean }) 
             </Button>
             {render ? (
               <span className="text-muted"><span className="text-text">{render.presetName}</span>, a {render.bars}-bar seamless loop
+                {render.transpose ? `, a tonal bed pitched ${render.transpose > 0 ? '+' : ''}${render.transpose} into ${render.keyLabel ?? 'the key'}` : ''}
                 {rendering && <span className="text-faint"> · rendering…</span>}</span>
             ) : (
               <span className="text-muted">{opts.enabled ? `No bed in this track. Most tracks get one, from your ${textures} texture${textures === 1 ? '' : 's'}.` : 'The ambience bed is off for new generations.'}</span>

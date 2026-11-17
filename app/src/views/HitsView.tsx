@@ -4,6 +4,7 @@ import { audition } from '../audio/audition'
 import { IconDrop, IconPlay, IconStop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass } from '../components/ui'
 import { PageTabs } from '../components/PageTabs'
+import { bedTonal } from '../generate/ambience'
 import { hitSampleId } from '../generate/disco'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -38,11 +39,12 @@ const TEXT = {
       + 'like a sampler: every note is the sample played higher or lower. If a bass sounds out of key, fix its note here.',
   },
   ambience: {
-    title: 'Ambience', one: 'texture', many: 'textures', empty: 'Drop long textures here: vinyl crackle, tape hiss, room tone, field recordings.',
+    title: 'Ambience', one: 'texture', many: 'textures', empty: 'Drop long textures here: vinyl crackle, tape hiss, room tone, crowds, field recordings, or tonal beds: drones and soft pads.',
     drop: 'Drop textures: audio files, folders or zips',
-    about: 'Long textures without a beat or a tune (up to a minute each), copied into the library. Generate lays one very quietly '
+    about: 'Long textures without a beat (up to a minute each), copied into the library. Generate lays one very quietly '
       + 'under most tracks, from the end of the intro to the start of the outro, made into a seamless loop and ducking under the kick: '
-      + 'the air that makes a track sound less dry. They have no key and are never moved.',
+      + 'the air that makes a track sound less dry. Noise (crackle, hiss, a crowd) is never pitched. A tonal bed (a held tone: a drone, a pad) '
+      + 'is always pitched into the track key, never heard as recorded: tracks in its own key (or the relative one) get another.',
   },
   strings: {
     title: 'Strings', one: 'string sample', many: 'string samples', empty: 'Drop your long string samples here: held chords and lines with a key.',
@@ -164,16 +166,21 @@ export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) 
                   <div className="flex-1 min-w-0">
                     <div className="truncate font-medium">{h.name}</div>
                     <div className="text-[11px] text-faint truncate">
-                      {h.duration_s.toFixed(1)} s{h.key_source ? ` · ${SOURCE_LABEL[h.key_source]}` : ''}
+                      {h.duration_s.toFixed(1)} s
+                      {kind === 'ambience' && (bedTonal(h) ? ` · tonal bed: always pitched into the track key${h.key_label ? '' : ' (set its key to use it)'}` : ' · noise: never pitched')}
+                      {h.key_source && (kind !== 'ambience' || h.key_label) ? ` · ${SOURCE_LABEL[h.key_source]}` : ''}
                       {h.pitch_fix ? ` · pitch fixed ${h.pitch_fix > 0 ? '+' : ''}${h.pitch_fix} st` : ''}
                     </div>
                   </div>
-                  {kind !== 'ambience' && <select className={cx(inputClass, 'w-36 h-7 text-[12px]', h.key_source === 'detected' && 'text-accent')}
-                          value={h.key_label ?? ''} title={`Key: Generate moves the ${t.one} from this key into the track's`}
+                  <select className={cx(inputClass, 'w-36 h-7 text-[12px]', h.key_source === 'detected' && 'text-accent')}
+                          value={h.key_label ?? (kind === 'ambience' && bedTonal(h) ? '?' : '')} title={kind === 'ambience'
+                            ? 'Key: a tonal bed is pitched from this key into the track\'s; no key: noise, never pitched'
+                            : `Key: Generate moves the ${t.one} from this key into the track's`}
                           onChange={(e) => void setKey(h, e.target.value)}>
-                    <option value="">No key</option>
+                    {kind === 'ambience' && bedTonal(h) && !h.key_label && <option value="?" disabled>Tonal: set its key</option>}
+                    <option value="">{kind === 'ambience' ? 'No key: noise' : 'No key'}</option>
                     {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
-                  </select>}
+                  </select>
                   <button title={`Remove from the ${t.many}`} className="text-faint hover:text-bad" onClick={() => void remove(h)}>
                     <IconX className="w-4 h-4" />
                   </button>

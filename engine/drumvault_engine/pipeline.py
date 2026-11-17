@@ -1013,7 +1013,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     if out_rel.startswith(".drumvault/strings/"):
         return _render_strings(settings, preset, transpose, bpm, int(bars or 8), out, out_rel)
     if out_rel.startswith(".drumvault/ambience/"):
-        return _render_ambience(settings, preset, bpm, int(bars or 8), out, out_rel)
+        return _render_ambience(settings, preset, transpose, bpm, int(bars or 8), out, out_rel)
     if out_rel.startswith(".drumvault/drones/"):
         if out.exists():
             return {"path": out_rel, "cached": True}
@@ -1077,8 +1077,9 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     return {"path": out_rel, "cached": False}
 
 
-def _render_ambience(settings: Settings, source: str, bpm: float, bars: int, out: Path, out_rel: str) -> dict:
-    """The ambience bed's loop (ambience.py) from an Ambience page sample, `bars` bars at `bpm`."""
+def _render_ambience(settings: Settings, source: str, transpose: int, bpm: float, bars: int, out: Path, out_rel: str) -> dict:
+    """The ambience bed's loop (ambience.py) from an Ambience page sample, `bars` bars at `bpm`,
+    moved `transpose` semitones first (a tonal bed in the track key; noise: 0)."""
     from . import ambience as ambmod
     th = settings.thresholds
     src = Path(settings.library_path) / source
@@ -1086,7 +1087,11 @@ def _render_ambience(settings: Settings, source: str, bpm: float, bars: int, out
         raise PipelineError("not_found", f"Ambience sample not found: {source}")
     if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
         return {"path": out_rel, "cached": True}
-    data = ambmod.make_loop(settings, source, bpm, bars)
+    shift = max(-th.ambience_max_shift, min(th.ambience_max_shift, int(transpose)))
+    try:
+        data = ambmod.make_loop(settings, source, bpm, bars, shift)
+    except stretch.StretchError as e:
+        raise PipelineError("stretch", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) <= 1e-5:
         raise PipelineError("silent", f"The ambience sample is silent: {Path(source).name}")
     data, _, _ = normalize.loudness_normalize(data, settings.output_sample_rate, th.ambience_lufs_target, th.ambience_peak_dbfs)
@@ -1402,6 +1407,30 @@ def atmos_to_ambience(settings: Settings) -> dict:
     return {"moved": moved, "deleted": len(rows), "purged": purged}
 
 
+def measure_textures(settings: Settings) -> int:
+    """Ambience textures from before (schema v18) told tonal or noise (hits.texture_key): a tonal
+    one gets its key unless one was set by hand. How many were tonal."""
+    from . import hits as hitsmod
+    lib = Path(settings.library_path)
+    tonal = 0
+    with LibraryDB(lib) as db:
+        for r in db.textures_unmeasured():
+            path = lib / r["rel_path"]
+            if not path.exists():
+                db.update_hit(r["id"], tonal=0)  # (gone: not measured again at every start)
+                continue
+            a = load(path)
+            t, label, source = hitsmod.texture_key(r["file_name"], a.data.mean(axis=1), a.sr, settings)
+            fields: dict = {"tonal": t}
+            if r["key_source"] != "manual":
+                fields.update(key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None, key_source=source)
+            elif r["key_label"]:
+                fields["tonal"] = 1
+            db.update_hit(r["id"], **fields)
+            tonal += t
+    return tonal
+
+
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
@@ -1410,8 +1439,10 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     ctx = ctx or JobContext()
     th = settings.thresholds
     lib = Path(settings.library_path)
-    # Atmosphere first: off the drum library, onto the Ambience page (§6.10a).
+    # Atmosphere first: off the drum library, onto the Ambience page (§6.10a); then every texture
+    # there told tonal (a key: moved into each track's) or noise.
     atmos = atmos_to_ambience(settings)
+    textures = measure_textures(settings)
     with LibraryDB(lib) as db:
         loops = db.loops_without_groove()
         events = db.events_without_shape()
@@ -1498,7 +1529,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "
                               f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")
-    return {"atmos": atmos, "loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
+    return {"atmos": atmos, "tonal_textures": textures, "loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
             "arrangements": len(zips) - len(missing), "missing": missing}
 
 
