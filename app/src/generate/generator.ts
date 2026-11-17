@@ -18,7 +18,7 @@ import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { chopPitch, chopSample, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
-import { accented, bassSteps, closestGap, perBarFor, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabTurn, type StabTurns } from './stabs'
+import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perBarFor, rollBar, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabJob, type StabLayout, type StabRoll, type StabTurn, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
@@ -131,7 +131,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits' }
+const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -248,6 +248,29 @@ const STAB_TEASE_DB = -4
 const STAB_TEASE_MIN_INTRO = 24
 const STAB_TEASE_BARS = 8
 const STAB_PAN = 0.25
+/**
+ * One stab loop (rule `stabLoop`, SCOPE.md §6.9): the stabs duck `STAB_LOOP_DUCK` under the kick;
+ * a layer sits `STAB_LAYER_DB` under the main sound; each job has its place (`STAB_JOB_PAN`).
+ * Before a drop they announce it: from `STAB_ANNOUNCE_FROM` of the track's cutoff (never under
+ * `STAB_ANNOUNCE_MIN_HZ`) opening to `STAB_ANNOUNCE_HZ`, the resonance rising over `STAB_ANNOUNCE_Q`
+ * (dB, as Web Audio takes it), the room up to `STAB_ANNOUNCE_ROOM`, the delay over
+ * `STAB_ANNOUNCE_ECHO`, `STAB_ANNOUNCE_DB` down at first; the last bar dry from step
+ * `STAB_DRY_FROM` on, thrown `STAB_THROW` to the delay.
+ */
+const STAB_LOOP_DUCK = 0.1
+const STAB_LAYER_DB = -4
+const STAB_JOB_PAN: Record<StabJob, number> = { main: 0, layer: 0.15, pickups: -0.25 }
+const STAB_ANNOUNCE_FROM = 0.6
+const STAB_ANNOUNCE_MIN_HZ = 350
+const STAB_ANNOUNCE_HZ = 7000
+const STAB_ANNOUNCE_Q: [number, number] = [0.8, 7]
+const STAB_ANNOUNCE_ROOM = 0.4
+const STAB_ANNOUNCE_ECHO: [number, number] = [0.12, 0.5]
+const STAB_ANNOUNCE_DB = -4
+const STAB_DRY_FROM = 12
+const STAB_THROW = 0.9
+/** How often a loop has a moved hit (rule `stabMove`). */
+const STAB_MOVE_CHANCE = 0.4
 
 /**
  * The patches a track's bass is drawn from (SCOPE.md §6.7a): when the pool has Serum patches and
@@ -701,6 +724,8 @@ interface BarPattern {
   gate?: number
   room?: number
   echo?: number
+  /** Semitones per step on top of `pitch` (a stab loop's moved hit). */
+  bend?: number[]
 }
 
 interface Segment {
@@ -740,7 +765,7 @@ function alike(a: Segment, b: Segment): boolean {
 // (Not the chord stabs: they sit straight on the grid, where a patch's arp keeps them anyway.)
 const GROOVED = new Set<Role>(['clap', 'clap2', 'clap3', 'hats', 'hats2', 'ride', 'perc', 'perc2', 'top', 'top2', 'top3', 'top4'])
 
-const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}|${p.gate ?? ''}|${p.room ?? ''}|${p.echo ?? ''}`
+const patternKey = (p: BarPattern) => `${p.sample.rel_path}|${p.steps.join('')}|${JSON.stringify(p.filter ?? null)}|${p.pitch ?? 0}|${p.gainDb ?? 0}|${p.gainTo ?? ''}|${p.gate ?? ''}|${p.room ?? ''}|${p.echo ?? ''}|${p.bend?.join(',') ?? ''}`
 
 class Lanes {
   bars = new Map<Role, (BarPattern | null)[]>()
@@ -923,7 +948,7 @@ class Lanes {
     const out: Clip[] = []
     for (const [role, bars] of this.bars) {
       const laneId = laneIds.get(role)!
-      const emit = (start: number, len: number, p: BarPattern, steps: Steps, patternBars: 1 | 2) => {
+      const emit = (start: number, len: number, p: BarPattern, steps: Steps, patternBars: 1 | 2, bend = p.bend) => {
         if (!steps.some(Boolean)) return
         const c: PatternClip = {
           id: uid('c'), laneId, type: 'pattern', start: start * BEATS_PER_BAR, length: len * BEATS_PER_BAR,
@@ -935,11 +960,16 @@ class Lanes {
         if (p.gate) c.gate = p.gate
         if (p.room) c.verb = { from: p.room, to: p.room }
         if (p.echo) c.echo = p.echo
+        // (A moved hit cleared since, by the silence before a drop, takes its move with it.)
+        const moves = bend?.map((x, i) => (c.steps[i] ? x : 0))
+        if (moves?.some(Boolean)) c.bend = moves
         if (this.feel && (GROOVED.has(role) || (this.stabFeel && STAB_ROLES.includes(role)))) c.groove = grooveFor(this.feel, c.steps)
         out.push(c)
       }
       const key = (b: number) => (bars[b] ? patternKey(bars[b]!) : '')
-      const rest = (b: number) => (bars[b] ? patternKey({ ...bars[b]!, steps: [] }) : '')
+      // (A stab bar's moved hit is part of its rhythm: two bars differing in it still make one 2-bar pattern.)
+      const rest = (b: number) => (bars[b] ? patternKey({ ...bars[b]!, steps: [], bend: undefined }) : '')
+      const zero = new Array<number>(STEPS_PER_BAR).fill(0)
       for (let b = 0; b < bars.length;) {
         const p = bars[b]
         if (!p) { b++; continue }
@@ -947,7 +977,8 @@ class Lanes {
           let pairs = 1
           while (key(b + 2 * pairs) === key(b) && key(b + 2 * pairs + 1) === key(b + 1)) pairs++
           if (pairs >= 2) {
-            emit(b, 2 * pairs, p, [...p.steps, ...bars[b + 1]!.steps], 2)
+            const nb = bars[b + 1]!.bend
+            emit(b, 2 * pairs, p, [...p.steps, ...bars[b + 1]!.steps], 2, p.bend || nb ? [...p.bend ?? zero, ...nb ?? zero] : undefined)
             b += 2 * pairs
             continue
           }
@@ -1131,6 +1162,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const useStabs = stabPool.length > 0 && (keptRule ?? true)
   // (Known before the rules are: a kept or locked value, else on.)
   const stabFitEarly = ((keep.rules?.stabFit ?? opts.locks?.stabFit ?? true) as boolean) !== false
+  // (One loop of them, rule `stabLoop`, likewise: on unless kept or locked off; only with stabs that fit.)
+  const stabLoopEarly = stabFitEarly && ((keep.rules?.stabLoop ?? opts.locks?.stabLoop ?? true) as boolean) !== false
   const stabs: SampleListItem[] = []
   if (useStabs) {
     const keptIds = STAB_ROLES.map((r) => keep.picks?.[r]?.id)
@@ -1140,7 +1173,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       const chosen = stabs.map((x) => stabOf.get(x.rel_path)!).filter(Boolean)
       return srng.pickBy(cands, (x) => {
         const h = stabOf.get(x.rel_path)
-        return h ? stabWeight(h, hitPitch(h, key), topsTone, chosen, TONE_BANDS_PER_OCTAVE) : 1
+        // (A loop's stabs are its accents: tight hits over sustained, swelling ones.)
+        return h ? stabWeight(h, hitPitch(h, key), topsTone, chosen, TONE_BANDS_PER_OCTAVE) * (stabLoopEarly ? focusWeight(h) : 1) : 1
       })
     }
     for (const role of STAB_ROLES) {
@@ -1387,6 +1421,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       perBar: perBarFor(stabs.map((x) => stabOf.get(x.rel_path)!).filter(Boolean)),
       bass: bass ? bassSteps(bass.notes ?? bass.midi.notes, bassBars(bass)) : null,
       mode: ((keep.rules?.stabBass ?? opts.locks?.stabBass ?? stabMode) as StabBass),
+      loop: stabLoopEarly,
     } : undefined),
     // How a phrase's last bar turns; a slow filter opening over the first bars of drop 1 or of every
     // drop; a dark tease at the end of a long intro; drop 1 on the lean rhythm at first; a phrase of
@@ -1403,12 +1438,27 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     stabsCutoff: srng.int(700, 1800),
     // How many stab samples take turns in the rhythm (as many as the page has), and how: a bar
     // each (two of them), or hit by hit.
-    stabCount: srng.weighted([[1, 4], [2, 4], [3, 2]] as const) as number,
+    stabCount: srng.weighted(stabLoopEarly ? [[1, 3], [2, 5], [3, 2]] as const : [[1, 4], [2, 4], [3, 2]] as const) as number,
     stabTurns: srng.weighted([['bars', 1], ['hits', 1]] as const) as StabTurns,
+    // One stab loop (SCOPE.md §6.9): a second stab layered on the main one or playing its pickups;
+    // the bars before every drop it announces it over; a roll into its last beat, or none.
+    stabLoop: stabLoopEarly,
+    stabLayout: srng.weighted([['stack', 3], ['split', 2]] as const) as StabLayout,
+    stabAnnounce: srng.weighted([[4, 2], [8, 3]] as const) as number,
+    stabRoll: srng.weighted([['none', 2], ['eighths', 2], ['sixteenths', 1]] as const) as StabRoll,
+    // Sometimes a hit of the loop moves (the house organ's lift): its last hit a tone up (most
+    // often), a fourth, a minor third or a tone down; the loop's last hit, or every bar's.
+    ...((mv, at, on) => ({ stabMove: on ? mv : 0, stabMoveAt: at }))(
+      srng.weighted([[2, 4], [5, 2], [3, 1.5], [-2, 1.5]] as const) as number,
+      srng.weighted([['loop', 3], ['bar', 2]] as const) as 'loop' | 'bar',
+      srng.chance(STAB_MOVE_CHANCE)),
   }
+  // A loop's drops hit open and whole: the filter opens before them (the announcement), not over them.
+  if (stabLoopEarly) Object.assign(drawn, { stabsOpen: 'none', stabsGrow: false })
   // What the track drew, then what its character and its lead make of it; a real track's own
   // decisions, what is kept and what is locked go over those.
-  const rules: typeof drawn = { ...drawn, ...(character ? charRules as Partial<typeof drawn> : undefined), ...(leadRules(lead) as Partial<typeof drawn>),
+  const charOwn = character && stabLoopEarly ? Object.fromEntries(Object.entries(charRules).filter(([k]) => k !== 'stabsOpen')) : charRules
+  const rules: typeof drawn = { ...drawn, ...(character ? charOwn as Partial<typeof drawn> : undefined), ...(leadRules(lead) as Partial<typeof drawn>),
     ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
@@ -1509,8 +1559,16 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
   }
 
-  /** What each stab lane plays of the track's stab rhythm (their turns in it), and its pitch in the track key. */
-  const stabSteps = stabs.length ? stabParts(rules.stabRhythm, Math.min(Number(rules.stabCount ?? 1), stabs.length), rules.stabTurns) : []
+  /**
+   * What each stab lane plays of the track's stab rhythm (their turns in it, or their jobs in one
+   * loop: the main sound, a layer on it, the pickups), and its pitch in the track key.
+   */
+  const two = (r: Velocity[][]) => [r[0], r[1 % r.length]]
+  const stabLoop = !!rules.stabFit && !!rules.stabLoop && stabs.length > 0
+  const stabJobs: StabJob[] | null = stabLoop
+    ? loopJobs(two(rules.stabRhythm), Math.min(Number(rules.stabCount ?? 1), stabs.length), (rules.stabLayout ?? 'stack') as StabLayout) : null
+  const stabSteps = !stabs.length ? [] : stabJobs ? loopParts(rules.stabRhythm, stabJobs)
+    : stabParts(rules.stabRhythm, Math.min(Number(rules.stabCount ?? 1), stabs.length), rules.stabTurns)
   stabs.splice(stabSteps.length)
   for (const role of STAB_ROLES.slice(stabs.length)) delete picks[role]
   const stabPitch = stabs.map((x) => (stabOf.has(x.rel_path) ? hitPitch(stabOf.get(x.rel_path)!, key) : 0))
@@ -1528,43 +1586,109 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
 
   // ---- stabs that fit (rule `stabFit`): the rhythm with its accents, its lean version and its turn at
-  // the end of a phrase, each as the stabs' parts; a gate where a stab would ring into the next ----
+  // the end of a phrase, each as the stabs' parts; a gate where a stab would ring into the next.
+  // One loop (rule `stabLoop`): every hit full (the accents of the track), the lean version on its
+  // anchor, a layer hitting with the main sound ----
   const stabFit = !!rules.stabFit && stabs.length > 0
   lanes.stabFeel = stabFit
   const stabN = stabSteps.length
-  const stabFull = stabFit ? accented(rules.stabRhythm) : rules.stabRhythm
-  const two = (r: Velocity[][]) => [r[0], r[1 % r.length]]
-  const partsOf = (r: Velocity[][]) => stabParts(r, stabN, rules.stabTurns)
+  const stabFull = stabLoop ? rules.stabRhythm : stabFit ? accented(rules.stabRhythm) : rules.stabRhythm
+  const partsOf = (r: Velocity[][]) => (stabJobs ? loopParts(r, stabJobs) : stabParts(r, stabN, rules.stabTurns))
   const stabVariants = stabFit ? {
     full: partsOf(two(stabFull)),
-    lean: partsOf(sparse(two(stabFull))),
+    lean: partsOf(sparse(two(stabFull), stabLoop)),
     // (The last bar of a phrase is always the rhythm's second bar: phrases are 8 bars.)
     turn: partsOf([two(stabFull)[0], turned(two(stabFull)[1], rules.stabTurn as StabTurn)]),
   } : null
   const gapBeats = (closestGap(two(stabFull)) / 4) * STAB_GATE_SHARE
-  const stabGate = stabs.map((x, i) => {
-    const rings = (x.duration_s / 2 ** ((stabPitch[i] ?? 0) / 12)) * (bpm / 60)   // beats, at the pitch it plays
-    return stabFit && rings > gapBeats ? Math.max(STAB_GATE_MIN_BEATS, Math.round(gapBeats * 16) / 16) : undefined
-  })
+  /** How long each stab rings (beats, at the pitch it plays). */
+  const stabRings = stabs.map((x, i) => (x.duration_s / 2 ** ((stabPitch[i] ?? 0) / 12)) * (bpm / 60))
+  const gateFor = (i: number, gap: number) => (stabFit && stabRings[i] > gap ? Math.max(STAB_GATE_MIN_BEATS, Math.round(gap * 16) / 16) : undefined)
+  const stabGate = stabs.map((_, i) => gateFor(i, gapBeats))
+  /** A loop's layer sits under the main sound (dB). */
+  const stabLayerDb = stabs.map((_, i) => (stabJobs?.[i] === 'layer' ? STAB_LAYER_DB : 0))
+  const stabRollSteps = stabLoop ? rollBar((rules.stabRoll ?? 'none') as StabRoll) : null
+  /** The roll's gate: its 16ths (or 8ths) never ringing into each other. */
+  const rollGate = stabs.map((_, i) => gateFor(i, ((rules.stabRoll === 'eighths' ? 2 : 1) / 4) * STAB_GATE_SHARE))
+  /**
+   * A loop's moved hit (rule `stabMove`, the house organ's lift): semitones on the last hit of
+   * the loop (its second bar; a 1-bar loop's every bar) or of every bar, per step of the bar
+   * (`hits`: what all the stabs play in it; `other`: in the loop's other bar), or undefined where
+   * nothing moves. The move answers the loop's own hits: a loop (or, for every bar, a bar) of one
+   * hit doesn't move.
+   */
+  const stabMove = stabLoop ? Number(rules.stabMove ?? 0) : 0
+  const loopOf2 = rules.stabMoveAt === 'loop' && rules.stabRhythm.length > 1
+  let stabMoved = false
+  const moveOf = (hits: Velocity[][], other: Velocity[][], k: number): number[] | undefined => {
+    if (!stabMove || (loopOf2 && k % 2 === 0)) return undefined
+    const steps = (b: Velocity[][]) => Array.from({ length: STEPS_PER_BAR }, (_, j) => b.some((p) => p[j])).filter(Boolean).length
+    const at = Array.from({ length: STEPS_PER_BAR }, (_, j) => hits.some((p) => p[j])).lastIndexOf(true)
+    if (at < 0 || steps(hits) + (loopOf2 ? steps(other) : 0) < 2) return undefined
+    stabMoved = true
+    return Array.from({ length: STEPS_PER_BAR }, (_, j) => (j === at ? stabMove : 0))
+  }
   /**
    * One bar of the stabs: `which` version of the rhythm (bar `k` of its two), low-passed from
-   * `hz[0]` to `hz[1]` over the bar, `db` down, no hit louder than `cap`, with a delay throw.
+   * `hz[0]` to `hz[1]` over the bar (resonance `q`), `db` down, no hit louder than `cap`, its send
+   * to the room, a delay throw (`echo`: true for the usual one, or how much). A loop's `roll` takes
+   * the bar's place (the main sound and its layer), and `dryFrom` leaves the bar empty from that 16th.
    */
-  const stabBar = (b: number, k: number, o: { which?: 'full' | 'lean' | 'turn'; hz?: [number, number]; db?: number; cap?: Velocity; echo?: boolean } = {}) => {
+  const stabBar = (b: number, k: number, o: { which?: 'full' | 'lean' | 'turn'; hz?: [number, number]; q?: number; db?: number; cap?: Velocity;
+    echo?: boolean | number; room?: number; roll?: Velocity[] | null; dryFrom?: number } = {}) => {
     const parts = stabVariants![o.which ?? 'full']
+    const bars = stabs.map((_, i) => (o.roll ? (stabJobs?.[i] === 'pickups' ? [] : o.roll) : parts[i]?.[k % 2] ?? [])
+      .map((v, j) => (o.dryFrom != null && j >= o.dryFrom ? 0 : Math.min(v, o.cap ?? 3))) as Steps)
+    const bend = o.roll ? undefined : moveOf(bars, stabs.map((_, i) => parts[i]?.[(k + 1) % 2] ?? []), k)
     stabs.forEach((x, i) => {
-      const mine = parts[i]?.[k % 2]
-      const s_ = (mine ?? []).map((v) => Math.min(v, o.cap ?? 3)) as Steps
+      const s_ = bars[i]
       if (!s_.some(Boolean)) { lanes.setBar(STAB_ROLES[i], b, null); return }
-      const filter: ClipFilter | undefined = o.hz && { type: 'lowpass', from: Math.round(o.hz[0]), to: Math.round(o.hz[1]) === Math.round(o.hz[0]) ? null : Math.round(o.hz[1]), q: 0.8 }
+      const filter: ClipFilter | undefined = o.hz && { type: 'lowpass', from: Math.round(o.hz[0]), to: Math.round(o.hz[1]) === Math.round(o.hz[0]) ? null : Math.round(o.hz[1]), q: o.q ?? 0.8 }
+      const gate = o.roll ? rollGate[i] : stabGate[i]
+      const db = (o.db ?? 0) + stabLayerDb[i]
+      const echo = o.echo === true ? STAB_ECHO : o.echo || 0
       lanes.setBar(STAB_ROLES[i], b, {
-        sample: x, steps: s_, room: STAB_ROOM, ...(filter ? { filter } : {}), ...(stabPitch[i] ? { pitch: stabPitch[i] } : {}),
-        ...(o.db ? { gainDb: o.db } : {}), ...(stabGate[i] ? { gate: stabGate[i] } : {}), ...(o.echo ? { echo: STAB_ECHO } : {}),
+        sample: x, steps: s_, room: o.room ?? STAB_ROOM, ...(filter ? { filter } : {}), ...(stabPitch[i] ? { pitch: stabPitch[i] } : {}),
+        ...(db ? { gainDb: db } : {}), ...(gate ? { gate } : {}), ...(echo ? { echo } : {}), ...(bend && s_.some((v, j) => v && bend[j]) ? { bend } : {}),
       })
     })
   }
   /** The cutoff `t` of the way (0…1) from `f0` to `f1` (evenly in pitch). */
   const sweepHz = (f0: number, f1: number, t: number) => f0 * (f1 / f0) ** Math.max(0, Math.min(1, t))
+  /** Where a loop's announcement starts (Hz): darker than the track's cutoff. */
+  const announceHz = () => Math.max(STAB_ANNOUNCE_MIN_HZ, Number(rules.stabsCutoff) * STAB_ANNOUNCE_FROM)
+  /**
+   * A loop announcing the drop at bar `z` over the `n` bars before it: low-passed and opening with
+   * its resonance rising, the room and the delay growing, a little down at first; its last bar the
+   * roll (by the track's rule) and dry for the last beat, thrown into the delay, so its echoes ring
+   * into the silence and the drop comes in dry, open and whole.
+   */
+  const announce = (z: number, n: number) => {
+    const from = announceHz()
+    const r2 = (x: number) => Math.round(x * 100) / 100
+    for (let j = 0; j < n; j++) {
+      const t0 = j / n, t1 = (j + 1) / n
+      const last = j === n - 1
+      // (Bar k of the rhythm: the bar before the drop is the loop's second.)
+      stabBar(z - n + j, j - n + 2 * n, {
+        hz: [sweepHz(from, STAB_ANNOUNCE_HZ, t0), sweepHz(from, STAB_ANNOUNCE_HZ, t1)],
+        q: Math.round((STAB_ANNOUNCE_Q[0] + (STAB_ANNOUNCE_Q[1] - STAB_ANNOUNCE_Q[0]) * t1 ** 1.5) * 10) / 10,
+        room: r2(STAB_ROOM + (STAB_ANNOUNCE_ROOM - STAB_ROOM) * t1),
+        echo: last ? STAB_THROW : r2(STAB_ANNOUNCE_ECHO[0] + (STAB_ANNOUNCE_ECHO[1] - STAB_ANNOUNCE_ECHO[0]) * t0),
+        db: Math.round(STAB_ANNOUNCE_DB * (1 - t0) * 2) / 2,
+        ...(last ? { roll: stabRollSteps, dryFrom: STAB_DRY_FROM } : {}),
+      })
+    }
+  }
+  /** Bars a loop announces the drop after `sec` over: the track's (4 or 8), at most a build's length or half a breakdown; in an intro only its tease's. */
+  const announceBars = (sec: Section, next: Section | undefined) => {
+    if (!stabLoop || next?.kind !== 'drop') return 0
+    const want = Number(rules.stabAnnounce ?? 8)
+    if (sec.kind === 'build') return Math.min(want, sec.bars)
+    if (sec.kind === 'break') return Math.min(want, Math.max(2, Math.floor(sec.bars / 2)))
+    if (sec.kind === 'intro') return rules.stabsTease && sec.bars >= STAB_TEASE_MIN_INTRO ? Math.min(want, STAB_TEASE_BARS) : 0
+    return 0
+  }
   /** The stabs through a section, by the track's rules (stabs that fit). `drop`: which drop this is (0 the first). */
   const stabsFit = (sec: Section, next: Section | undefined, drop: number) => {
     const a = sec.start
@@ -1573,6 +1697,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     const cut = Number(rules.stabsCutoff)
     const keys = rules.stabsIn === 'keys'
     const phraseEnd = (b: number) => (b - a) % PHRASE === PHRASE - 1
+    // A loop announces the drop after this section over its last bars: the rest of it ends there.
+    const ann = announceBars(sec, next)
+    const end = z - ann
     if (sec.kind === 'drop') {
       const half = a + Math.floor(n / 2 / PHRASE) * PHRASE || a + n / 2
       // A slow opening over the drop's first bars: the first drop's, or every drop's.
@@ -1595,43 +1722,51 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       // on (a delay throw at the end of each phrase), after leaving the line darker and softer.
       const from = breakShape(a, n).lead
       for (let j = 0; j < Math.min(2, from - a); j++) stabBar(a + j, j, { hz: [sweepHz(6000, cut, j / 2), sweepHz(6000, cut, (j + 1) / 2)], db: STAB_FADE_DB * (j + 1), cap: j ? 1 : 2 })
-      for (let b = from; b < z; b++) stabBar(b, b - a, { which: phraseEnd(b) && rules.stabTurn !== 'none' ? 'turn' : 'full', echo: phraseEnd(b) })
+      for (let b = from; b < end; b++) stabBar(b, b - a, { which: phraseEnd(b) && rules.stabTurn !== 'none' ? 'turn' : 'full', echo: phraseEnd(b) })
     } else if (sec.kind === 'break') {
       const playing = STAB_ROLES.some((r) => lanes.bar(r, a - 1))
       const opens = !!next && next.kind !== 'outro'
       if (keys && rules.stabsBreaks === 'filtered') {
-        // They stay, as the drums do: closing over the first bars, held softer and dark, opening into the next part.
+        // They stay, as the drums do: closing over the first bars, held softer and dark, opening into the next part
+        // (a loop's announcement in place of the opening).
         const close = Math.min(GLUE_CLOSE_BARS, Math.max(1, Math.floor(n / 4)))
-        const open = opens ? Math.min(Number(rules.glueOpen ?? PHRASE), Math.max(2, Math.floor(n / 2))) : 0
-        const bare = !!sec.long && z - open - (a + close) >= GLUE_BARE_MIN_BARS
-        for (let b = a; b < z; b++) {
+        const open = ann ? 0 : opens ? Math.min(Number(rules.glueOpen ?? PHRASE), Math.max(2, Math.floor(n / 2))) : 0
+        const bare = !!sec.long && end - open - (a + close) >= GLUE_BARE_MIN_BARS
+        for (let b = a; b < end; b++) {
           const j = b - a
           if (j < close) stabBar(b, j, { hz: [sweepHz(STAB_OPEN_HZ, cut, j / close), sweepHz(STAB_OPEN_HZ, cut, (j + 1) / close)], db: Math.round(STAB_BREAK_DB * ((j + 1) / close) * 2) / 2, cap: 2 })
-          else if (b >= z - open) {
-            const t = (b - (z - open)) / open
+          else if (b >= end - open) {
+            const t = (b - (end - open)) / open
             stabBar(b, j, { hz: [sweepHz(cut, STAB_OPEN_HZ, t), sweepHz(cut, STAB_OPEN_HZ, t + 1 / open)], db: Math.round(STAB_BREAK_DB * (1 - t) * 2) / 2, cap: 2 })
           } else if (!bare || b < a + close + 4) stabBar(b, j, { hz: [cut, cut], db: STAB_BREAK_DB, cap: 2 })
         }
       } else if (playing) {
         // They leave across the line: two bars darker and softer, not a hard stop.
-        for (let j = 0; j < Math.min(2, n); j++) stabBar(a + j, j, { hz: [sweepHz(6000, cut, j / 2), sweepHz(6000, cut, (j + 1) / 2)], db: STAB_FADE_DB * (j + 1), cap: j ? 1 : 2 })
+        for (let j = 0; j < Math.min(2, n - ann); j++) stabBar(a + j, j, { hz: [sweepHz(6000, cut, j / 2), sweepHz(6000, cut, (j + 1) / 2)], db: STAB_FADE_DB * (j + 1), cap: j ? 1 : 2 })
       }
     } else if (sec.kind === 'build') {
-      if (keys && rules.stabsBuild !== 'none') {
+      if (stabLoop) {
+        // A loop plays the build dark (by the track's rule), then announces the drop.
+        if (rules.stabsBuild !== 'none') {
+          for (let b = a; b < end; b++) stabBar(b, b - a, { hz: [announceHz(), announceHz()], db: STAB_ANNOUNCE_DB })
+        }
+      } else if (keys && rules.stabsBuild !== 'none') {
         for (let b = a; b < z; b++) {
           const j = b - a
           stabBar(b, j, { hz: rules.stabsBuild === 'sweep' ? [sweepHz(cut, 8000, j / n), sweepHz(cut, 8000, (j + 1) / n)] : [cut, cut], cap: 2 })
         }
       }
     } else if (sec.kind === 'intro') {
-      // A dark tease of the lean rhythm at the end of a long intro (16 bars of it stay clean).
-      if (rules.stabsTease && n >= STAB_TEASE_MIN_INTRO && (next?.kind === 'drop' || next?.kind === 'build')) {
+      // A dark tease of the lean rhythm at the end of a long intro (16 bars of it stay clean); a
+      // loop going straight into the drop announces it instead.
+      if (!ann && rules.stabsTease && n >= STAB_TEASE_MIN_INTRO && (next?.kind === 'drop' || next?.kind === 'build')) {
         for (let b = z - STAB_TEASE_BARS; b < z; b++) {
           const t = (b - (z - STAB_TEASE_BARS)) / STAB_TEASE_BARS
           stabBar(b, b - a, { which: 'lean', hz: [sweepHz(cut * 0.7, cut * 1.6, t), sweepHz(cut * 0.7, cut * 1.6, t + 1 / STAB_TEASE_BARS)], db: STAB_TEASE_DB, cap: 2 })
         }
       }
     }
+    if (ann) announce(z, ann)
   }
 
   const crashAt = new Set<number>()
@@ -2503,12 +2638,14 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   // Stabs that fit: in a room, ducking a little under the kick, and side by side when they take turns.
   if (stabFit) {
-    const pans = stabs.length === 2 ? [-STAB_PAN, STAB_PAN] : stabs.length >= 3 ? [0, -STAB_PAN, STAB_PAN] : [0]
+    // (A loop's main sound in the middle, its layer just beside it, the pickups the other side.)
+    const pans = stabJobs ? stabJobs.map((j) => STAB_JOB_PAN[j])
+      : stabs.length === 2 ? [-STAB_PAN, STAB_PAN] : stabs.length >= 3 ? [0, -STAB_PAN, STAB_PAN] : [0]
     STAB_ROLES.forEach((role, i) => {
       const l = project.lanes.find((x) => laneRole(x.name) === role)
       if (!l) return
       l.room = true
-      l.duck = STAB_DUCK
+      l.duck = stabJobs ? STAB_LOOP_DUCK : STAB_DUCK
       l.duckBeats = STAB_DUCK_BEATS
       l.pan = pans[i] ?? 0
     })
@@ -2606,8 +2743,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
       : `in drops, ${rules.stabsBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`
-    const turns = stabs.length < 2 ? '' : stabs.length === 2 && !stabSteps[0][1].some(Boolean) && !stabSteps[1][0].some(Boolean)
-      ? ' taking turns bar by bar' : ' taking turns hit by hit'
+    const turns = stabs.length < 2 ? '' : stabJobs ? (stabJobs.includes('layer') ? ' layered' : '') + (stabJobs.includes('pickups') ? `${stabJobs.includes('layer') ? ',' : ''} the last on the pickups` : '')
+      : stabs.length === 2 && !stabSteps[0][1].some(Boolean) && !stabSteps[1][0].some(Boolean)
+        ? ' taking turns bar by bar' : ' taking turns hit by hit'
     choices.push(`chord stab${stabs.length > 1 ? 's' : ''} ${stabs.map((x) => x.name).join(stabs.length > 2 ? ', ' : ' and ')}${turns}, ${where}`)
     if (stabFit) {
       const moved = stabPitch.filter(Boolean).length ? `, moved ${stabPitch.map((p) => `${p > 0 ? '+' : ''}${p}`).join(' / ')} st into the key` : ''
@@ -2617,8 +2755,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         rules.stabsOpen !== 'none' ? `a filter opening over ${rules.stabsOpen === 'first' ? 'drop 1' : 'every drop'}` : null,
         rules.stabEcho !== 'none' ? `delay throws ${rules.stabEcho === 'breaks' ? 'into breakdowns' : `every ${rules.stabEcho} bars`}` : null,
         stabGate.some(Boolean) ? 'gated' : null,
+        stabMoved ? `the ${rules.stabMoveAt === 'bar' ? 'last hit of every bar' : 'loop\'s last hit'} ${stabMove > 0 ? '+' : ''}${stabMove} st` : null,
+        stabLoop ? `announcing drops over ${rules.stabAnnounce} bars (filter and delay rising${rules.stabRoll !== 'none' ? `, a roll in ${rules.stabRoll}` : ''}, thrown into the drop)` : null,
       ].filter(Boolean).join(', ')
-      choices.push(`stabs written for the track: ${how || 'with its feel'}${moved}`)
+      choices.push(`${stabLoop ? 'one stab loop' : 'stabs written for the track'}: ${how || 'with its feel'}${moved}`)
     }
   }
   if (vo && builds.into + builds.phrase) {
@@ -3021,7 +3161,8 @@ export function rerollStabs(all: SampleListItem[], opts: GenerateOptions, g: Gen
 
 /** The rules the stab reroll draws again. */
 const STAB_RULES = ['stabs', 'stabRhythm', 'stabsIn', 'stabsBreaks', 'stabsBuild', 'stabsCutoff', 'stabCount', 'stabTurns',
-  'stabFit', 'stabBass', 'stabTurn', 'stabsOpen', 'stabsTease', 'stabsGrow', 'stabsRest', 'stabEcho']
+  'stabFit', 'stabBass', 'stabTurn', 'stabsOpen', 'stabsTease', 'stabsGrow', 'stabsRest', 'stabEcho', 'stabLoop', 'stabLayout', 'stabAnnounce', 'stabRoll',
+  'stabMove', 'stabMoveAt']
 
 /**
  * The lanes of `roles` made again (with their rules `own`, `force` set), the rest of the track

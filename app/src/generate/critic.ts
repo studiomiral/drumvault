@@ -11,7 +11,7 @@ import { BAND_HZ } from './eq'
 import { feelFit, hasFeel } from './feel'
 import { hitPitch } from './disco'
 import { laneRole, newLaneSound, STAB_ROLES, type GenerateOptions, type Generation, type Role } from './generator'
-import { stabWeight, toneShare } from './stabs'
+import { focusWeight, stabWeight, toneShare } from './stabs'
 import { Rng } from './rng'
 
 /** The lanes whose loops are listened to: the layers that fill the drops up. */
@@ -199,7 +199,7 @@ function refineStabs(all: SampleListItem[], opts: GenerateOptions, g: Generation
     const next = newLaneSound(all, opts, now, lane.id, g.seed, (_s, cands) => {
       const ok = cands.map((c) => ({ c, h: byPath.get(c.rel_path) })).filter((x): x is { c: SampleListItem; h: typeof h } => !!x.h)
         .filter((x) => shift(x.h) < STAB_SHIFT && pile(x.h) < STAB_PILE)
-      return ok.length ? rng.pickBy(ok, (x) => stabWeight(x.h, hitPitch(x.h, now.key), tops, others, BANDS_PER_OCTAVE)).c : null
+      return ok.length ? rng.pickBy(ok, (x) => stabWeight(x.h, hitPitch(x.h, now.key), tops, others, BANDS_PER_OCTAVE) * (now.rules.stabLoop ? focusWeight(x.h) : 1)).c : null
     })
     if (!next) continue
     now = next

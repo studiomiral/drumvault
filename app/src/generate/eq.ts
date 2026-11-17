@@ -41,9 +41,10 @@ const LOW_CUT_HZ: Partial<Record<Role, number>> = {
 /**
  * The parts matched to the user's tracks. FX, fills and crashes are moments, each its own sound
  * (a riser isn't a sweep), so an average of them is no target: they get the low cut alone; hits
- * (impacts, downlifters: their boom is the point) not even that.
+ * (impacts, downlifters: their boom is the point) not even that. Nor the stabs: the references'
+ * "music" is mostly pads and chords holding, whose tone dulled a stab's attack, its accent.
  */
-const MATCHED = new Set(['kick', 'clap', 'hats', 'ride', 'perc', 'top', 'music'])
+const MATCHED = new Set(['kick', 'clap', 'hats', 'ride', 'perc', 'top'])
 /** A high-pass with a flat top (Butterworth): Web Audio takes its Q in dB. */
 const FLAT_Q_DB = -3.01
 /** How much of the difference to the reference the EQ makes up (it nudges, it doesn't copy). */

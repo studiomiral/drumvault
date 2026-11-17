@@ -236,9 +236,12 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
   return measured
 }
 
-/** A stab hits this much under the clap's hits (dB); without a measured clap, this much under the kick's. Never past the kick's own gain less this. */
-export const STAB_VS_CLAP_DB = -3
-export const STAB_VS_KICK_DB = -9
+/**
+ * A stab hits as hard as the clap's hits (dB; the accents of the track); without a measured clap,
+ * this much under the kick's. Never past the kick's own gain less this.
+ */
+export const STAB_VS_CLAP_DB = 0
+export const STAB_VS_KICK_DB = -6
 export const STAB_UNDER_KICK_DB = 1
 /**
  * The lanes levelled hit for hit, and how far under the clap's hits one of theirs sits (dB): the

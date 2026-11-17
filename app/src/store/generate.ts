@@ -306,7 +306,8 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
   // Kept stabs (all of them) play their rhythm on, taking the same turns; kept disco hits come in again.
   if (k.lanes.includes('stab') && g.picks.stab && g.rules.stabs) {
     for (const role of STAB_ROLES) if (g.picks[role]) picks[role] = g.picks[role]
-    Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits' })
+    Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits',
+      stabLoop: !!g.rules.stabLoop, ...(g.rules.stabLoop ? { stabLayout: g.rules.stabLayout, stabMove: g.rules.stabMove ?? 0, stabMoveAt: g.rules.stabMoveAt } : {}) })
   }
   // A kept bed plays on.
   if (k.lanes.includes('bed') && g.picks.bed) rules.bedIn = true

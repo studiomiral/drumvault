@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { createEcho } from '../src/audio/reverb'
 import { ECHO_BEATS, eventsInRange } from '../src/audio/schedule'
-import { hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB } from '../src/generate/balance'
+import { hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB, STAB_VS_KICK_DB } from '../src/generate/balance'
 import { refine, STAB_SHIFT } from '../src/generate/critic'
 import { hitPitch, hitSample } from '../src/generate/disco'
 import { generate, laneRole, setTrackRule, type GenerateOptions, type Generation } from '../src/generate/generator'
 import { CHOICES } from '../src/generate/choices'
 import { Rng } from '../src/generate/rng'
-import { accented, bassSteps, closestGap, isChord, perBarFor, shiftWeight, sparse, stabRhythm, stabWeight, turned } from '../src/generate/stabs'
+import { accented, bassSteps, closestGap, focusWeight, hitFocus, isChord, loopJobs, loopParts, perBarFor, rollBar, shiftWeight, sparse, stabRhythm, stabWeight, turned, type StabLayout } from '../src/generate/stabs'
 import type { HitItem, LoopGroove, MidiItem, SampleListItem, SerumPreset } from '../src/types/api'
 import type { Category, SampleKind } from '../src/types/engine'
 import type { Clip, Lane, PatternClip, Project, Velocity } from '../src/types/project'
@@ -150,7 +150,7 @@ describe('stab levels: hit for hit', () => {
     const by = Object.fromEntries(p.lanes.map((l) => [l.name, l.levelDb!]))
     expect(by.Stab).toBe(by.Kick - STAB_UNDER_KICK_DB)
     const noClap = level([2, 10], 1, false)
-    expect(Math.abs(-12 + noClap.Stab - (-15 + noClap.Kick - 9))).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(-12 + noClap.Stab - (-15 + noClap.Kick + STAB_VS_KICK_DB))).toBeLessThanOrEqual(0.5)
   })
 })
 
@@ -289,6 +289,21 @@ const stabLanes = (g: Generation) => g.project.lanes.filter((l) => /^Stab/.test(
 const stabClips = (g: Generation) => g.project.clips.filter((c) => stabLanes(g).some((l) => l.id === c.laneId)) as PatternClip[]
 const hitOfClip = (c: Clip) => STABS.find((h) => h.rel_path === c.sample.relPath)!
 const kickOf = (g: Generation) => g.project.lanes.find((l) => l.name === 'Kick')!.levelDb!
+const two = (r: Velocity[][]) => [r[0], r[1 % r.length]]
+/** The bars a loop announces each drop over: drop start → the bars before it. */
+const announced = (g: Generation): Map<number, number> => {
+  const out = new Map<number, number>()
+  if (!g.rules.stabLoop) return out
+  const want = Number(g.rules.stabAnnounce)
+  g.sections.forEach((s, i) => {
+    if (g.sections[i + 1]?.kind !== 'drop') return
+    const n = s.kind === 'build' ? Math.min(want, s.bars) : s.kind === 'break' ? Math.min(want, Math.max(2, Math.floor(s.bars / 2)))
+      : s.kind === 'intro' && g.rules.stabsTease && s.bars >= 24 ? Math.min(want, 8) : 0
+    if (n) out.set(s.start + s.bars, n)
+  })
+  return out
+}
+const inAnnouncement = (g: Generation, c: Clip) => [...announced(g)].some(([z, n]) => c.start >= (z - n) * 4 && c.start < z * 4)
 
 describe('stabs written for the track', () => {
   it('picks stabs near the key: far fewer need a big move than a blind draw would', () => {
@@ -299,13 +314,18 @@ describe('stabs written for the track', () => {
     expect(far(shifts)).toBeLessThan(far(blind) / 3)
   })
 
-  it('puts them in a room, ducking under the kick, side by side when they take turns, with the track\'s feel', () => {
+  it('puts them in a room, ducking a little under the kick, each in its place in the loop, with the track\'s feel', () => {
     for (const g of gens) {
       const lanes = stabLanes(g)
       expect(g.rules.stabFit).toBe(true)
-      for (const l of lanes) expect([l.room, l.duck, l.duckBeats]).toEqual([true, 0.25, 0.4])
-      expect(lanes.map((l) => l.pan)).toEqual(lanes.length === 1 ? [0] : lanes.length === 2 ? [-0.25, 0.25] : [0, -0.25, 0.25])
-      for (const c of stabClips(g)) {
+      expect(g.rules.stabLoop).toBe(true)
+      for (const l of lanes) expect([l.room, l.duck, l.duckBeats]).toEqual([true, 0.1, 0.4])
+      // The main sound in the middle, a layer just beside it, the pickups the other side.
+      const jobs = loopJobs(two(g.rules.stabRhythm as Velocity[][]), lanes.length, g.rules.stabLayout as StabLayout)
+      expect(jobs.length).toBe(lanes.length)
+      expect(lanes.map((l) => l.pan)).toEqual(jobs.map((j) => ({ main: 0, layer: 0.15, pickups: -0.25 })[j]))
+      // (A loop's announcements open the room up: below.)
+      for (const c of stabClips(g).filter((x) => !inAnnouncement(g, x))) {
         expect(c.verb).toEqual({ from: 0.18, to: 0.18 })
         expect(c.groove).toBeDefined()   // the loops swing, and so do the stabs
       }
@@ -326,29 +346,36 @@ describe('stabs written for the track', () => {
       for (const l of stabLanes(g)) {
         const h = hitOfClip(stabClips(g).find((c) => c.laneId === l.id)!)
         if (!by.has(h.rel_path)) by.set(h.rel_path, new Set())
-        // (A track led by its stabs has them up to 1.5 dB over that.)
-        const lead = g.rules.lead === 'stab' ? Math.min(1.5, Math.max(0, kickOf(g) - 1 - (l.levelDb! - 1.5))) : 0
+        // (Held at the kick less 1 dB: under the ceiling, not where the clap puts it. A track led by
+        // its stabs has them 1.5 dB over that.)
+        if (l.levelDb! >= kickOf(g) - 1) continue
+        const lead = g.rules.lead === 'stab' ? 1.5 : 0
         by.get(h.rel_path)!.add(Math.round(((h.punch_db! + l.levelDb! - lead) - (clapSample.punch_db! + clap.levelDb!)) * 2) / 2)
       }
     }
-    for (const xs of by.values()) for (const x of xs) expect(Math.abs(x - -3)).toBeLessThanOrEqual(0.5)
+    // (As hard as the clap's hits: the accents of the track.)
+    for (const xs of by.values()) for (const x of xs) expect(Math.abs(x - STAB_VS_CLAP_DB)).toBeLessThanOrEqual(0.5)
   })
 
-  it('answers the bassline: few stabs where a bass note starts', () => {
-    let onBass = 0, all = 0
+  it('leans into the bassline\'s rests: fewer stabs where a bass note starts than the loop alone would', () => {
+    let onBass = 0, all = 0, blindOn = 0, blindAll = 0
     for (const g of gens.filter((x) => x.rules.stabBass === 'answer' && x.bass)) {
       // (The track's own bassline: written for it, not the MIDI file's.)
-      const bass = bassSteps(g.bass!.notes ?? g.bass!.midi.notes, g.bass!.bars ?? g.bass!.midi.bars);
-      (g.rules.stabRhythm as number[][]).forEach((b, k) => hitsOf(b).forEach((i) => { all++; if (bass.onset[(k % 2) * 16 + i]) onBass++ }))
+      const bass = bassSteps(g.bass!.notes ?? g.bass!.midi.notes, g.bass!.bars ?? g.bass!.midi.bars)
+      const count = (r: number[][], add: (on: boolean) => void) => r.forEach((b, k) => hitsOf(b).forEach((i) => add(bass.onset[(k % 2) * 16 + i])))
+      count(g.rules.stabRhythm as number[][], (x) => { all++; if (x) onBass++ })
+      // The same loops drawn without the bassline.
+      for (let k = 0; k < 4; k++) count(stabRhythm(new Rng(g.seed * 7 + k), [], { loop: true }), (x) => { blindAll++; if (x) blindOn++ })
     }
     expect(all).toBeGreaterThan(40)
-    expect(onBass / all).toBeLessThan(0.08)
+    expect(onBass / all).toBeLessThan((blindOn / blindAll) * 0.85)
   })
 
   it('throws a delay on the last bar of a phrase, by the track\'s rule, and gates a stab that would ring into the next', () => {
     const seen = new Set<string>()
     for (const g of gens) {
-      const echoes = stabClips(g).filter((c) => c.echo)
+      // (A loop's announcements have their own delay: below.)
+      const echoes = stabClips(g).filter((c) => c.echo && !inAnnouncement(g, c))
       seen.add(String(g.rules.stabEcho))
       if (g.rules.stabEcho === 'none' && g.rules.lead !== 'stab') expect(echoes).toEqual([])
       for (const c of echoes) {
@@ -366,7 +393,7 @@ describe('stabs written for the track', () => {
         if (g.rules.stabEcho === '16') expect(bar % 16).toBe(15)
         if (g.rules.stabEcho === 'breaks') expect(bar).toBe(drop.bars - 1)
       }
-      for (const c of stabClips(g)) {
+      for (const c of stabClips(g).filter((x) => !inAnnouncement(g, x))) {
         const rings = (hitOfClip(c).duration_s / 2 ** ((c.pitch ?? 0) / 12)) * (BPM / 60)
         const gap = (closestGap(g.rules.stabRhythm as Velocity[][]) / 4) * 0.92
         expect(c.gate != null).toBe(rings > gap)
@@ -418,5 +445,210 @@ describe('stabs written for the track', () => {
       // A kept stab stays.
       expect(refine(LIB, opts, g, { locked: ['stab'] })).toBe(g)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// One stab loop
+// ---------------------------------------------------------------------------
+
+describe('one stab loop: its parts', () => {
+  const r = [on(2, 7, 10), on(2, 10, 13)]
+  it('gives a second stab a layer on the main one or the pickups, a third the pickups under a pair', () => {
+    expect(loopJobs(r, 1, 'stack')).toEqual(['main'])
+    expect(loopJobs(r, 2, 'stack')).toEqual(['main', 'layer'])
+    expect(loopJobs(r, 2, 'split')).toEqual(['main', 'pickups'])
+    expect(loopJobs(r, 3, 'split')).toEqual(['main', 'layer', 'pickups'])
+    // Without pickups a second stab stacks, and there is no third.
+    const plain = [on(2, 10), on(2, 10)]
+    expect(loopJobs(plain, 2, 'split')).toEqual(['main', 'layer'])
+    expect(loopJobs(plain, 3, 'split')).toEqual(['main', 'layer'])
+    // A bar of 16ths alone (no 8th to be the pickups of) is the main stab's.
+    expect(loopJobs([on(3, 11)], 2, 'split')).toEqual(['main', 'layer'])
+  })
+
+  it('stacks the main sound and its layer on the same hits; the pickups on their own; together the whole loop', () => {
+    const [main, layer, pickups] = loopParts(r, ['main', 'layer', 'pickups'])
+    expect(main.map(hitsOf)).toEqual([[2, 10], [2, 10]])
+    expect(layer).toEqual(main)
+    expect(pickups.map(hitsOf)).toEqual([[7], [13]])
+    const [a, b] = loopParts(r, ['main', 'layer'])
+    expect(a).toEqual(r)
+    expect(b).toEqual(r)
+  })
+
+  it('keeps the anchor in its lean version, and rolls into a drop in 8ths or 8ths then 16ths, the last beat dry', () => {
+    expect(sparse([on(3, 6, 14)], true).map(hitsOf)).toEqual([[6]])
+    expect(sparse([on(3, 11)], true).map(hitsOf)).toEqual([[3]])
+    expect(rollBar('none')).toBeNull()
+    expect(hitsOf(rollBar('eighths')!)).toEqual([0, 2, 4, 6, 8, 10])
+    expect(hitsOf(rollBar('sixteenths')!)).toEqual([0, 2, 4, 6, 8, 9, 10, 11])
+    expect(rollBar('sixteenths')!.slice(0, 2)).toEqual([2, 0])   // building up
+  })
+
+  it('draws a loop with a hit in every bar, more of the classics, and the saved rhythms as they are more often', () => {
+    for (let i = 0; i < 40; i++) {
+      const loop = stabRhythm(new Rng(i), [], { loop: true })
+      expect(loop.length).toBe(2)
+      for (const b of loop) expect(b.some(Boolean)).toBe(true)
+    }
+    const saved = [{ name: 'A', steps: [[0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0]] }]
+    const exact = (loop: boolean) => Array.from({ length: 200 }, (_, i) => stabRhythm(new Rng(i), saved, loop ? { loop } : undefined))
+      .filter((x) => x.length === 1 && hitsOf(x[0]).join() === '2,7,10').length
+    expect(exact(true)).toBeGreaterThan(exact(false))
+  })
+
+  it('prefers tight hits: a stab whose energy is in its first 200 ms over a sustained one', () => {
+    const tight = hit({ duration_s: 0.3, energy_db: -21, punch_db: -14 })     // all of it in its loudest 200 ms
+    const pad = hit({ duration_s: 1.6, energy_db: -12, punch_db: -14 })       // spread over 1.6 s
+    expect(hitFocus(tight)).toBeCloseTo(1, 1)
+    expect(hitFocus(pad)!).toBeLessThan(0.2)
+    expect(focusWeight(tight)).toBe(1)
+    expect(focusWeight(pad)).toBeLessThan(0.4)
+    expect(focusWeight(hit({ energy_db: null, punch_db: null }))).toBe(1)
+  })
+})
+
+describe('pattern clips moving a hit', () => {
+  it('plays a step\'s bend on top of the clip\'s pitch, like a sampler', () => {
+    const c: PatternClip = {
+      id: 'c', laneId: 'Stab', type: 'pattern', start: 0, length: 4, gainDb: 0, patternBars: 1, steps: on(2, 10), pitch: -1,
+      bend: Array.from({ length: 16 }, (_, i) => (i === 10 ? 2 : 0)),
+      sample: { id: 1, relPath: 'stab.wav', name: 'stab', kind: 'oneshot', category: 'chord_stab' } as PatternClip['sample'],
+    }
+    const [a, b] = eventsInRange({ bpm: 120, clips: [c] } as unknown as Project, 0, 2)
+    expect(a.rate).toBeCloseTo(2 ** (-1 / 12), 6)
+    expect(b.rate).toBeCloseTo(2 ** (1 / 12), 6)
+  })
+})
+
+describe('one stab loop in a generated track', () => {
+  const bar = (g: Generation, l: Lane, b: number): PatternClip | undefined =>
+    stabClips(g).find((c) => c.laneId === l.id && c.start <= b * 4 && c.start + c.length > b * 4)
+  const stepsAt = (c: PatternClip | undefined, b: number) => {
+    if (!c) return new Array(16).fill(0)
+    const from = ((b * 4 - c.start) * 4) % c.steps.length
+    return c.steps.slice(from, from + 16)
+  }
+
+  it('plays the whole loop in the drops, every hit full: a layer with the main sound, a little under it; the pickups on their own', () => {
+    const seen = new Set<string>()
+    for (const g of gens) {
+      const lanes = stabLanes(g)
+      const jobs = loopJobs(two(g.rules.stabRhythm as Velocity[][]), lanes.length, g.rules.stabLayout as StabLayout)
+      jobs.forEach((j) => seen.add(j))
+      const drops = g.sections.filter((s) => s.kind === 'drop')
+      const d = drops[drops.length - 1]
+      for (let b = d.start; b < d.start + 4; b++) {
+        if (g.rules.stabsRest && d.bars >= 32 && b >= d.start + 16 && b < d.start + 24) continue
+        const parts = lanes.map((l) => stepsAt(bar(g, l, b), b))
+        const want = (g.rules.stabRhythm as number[][])[(b - d.start) % (g.rules.stabRhythm as number[][]).length]
+        expect(parts.reduce((n, p) => n.map((v, i) => Math.max(v, p[i])), new Array(16).fill(0)).map(Boolean)).toEqual(want.map(Boolean))
+        for (const p of parts) for (const v of p) if (v) expect(v).toBe(3)   // the accents: no softer answers
+        const li = jobs.indexOf('layer')
+        if (li > 0) {
+          expect(parts[li].map(Boolean)).toEqual(parts[0].map(Boolean))
+          expect(bar(g, lanes[li], b)!.gainDb - (bar(g, lanes[0], b)!.gainDb)).toBe(-4)
+        }
+        const pi = jobs.indexOf('pickups')
+        if (pi > 0) for (const i of hitsOf(parts[pi])) expect(i % 2).toBe(1)
+      }
+    }
+    expect(seen).toEqual(new Set(['main', 'layer', 'pickups']))
+  })
+
+  it('hits the drops open and whole: no filter opening over them, nor a lean first drop', () => {
+    for (const g of gens) {
+      expect(g.rules.stabsOpen).toBe('none')
+      if (g.rules.character !== 'drums') expect(g.rules.stabsGrow).toBe(false)
+      for (const d of g.sections.filter((s) => s.kind === 'drop')) {
+        for (const c of stabClips(g).filter((x) => x.start === d.start * 4)) {
+          expect(c.filter).toBeUndefined()
+          expect(c.echo).toBeUndefined()
+        }
+      }
+    }
+  })
+
+  it('announces every drop: low-passed and opening, the resonance, room and delay rising, its last beat dry and thrown into the drop', () => {
+    let builds = 0, breaks = 0, rolls = 0
+    for (const g of gens) {
+      const main = stabLanes(g)[0]
+      for (const [z, n] of announced(g)) {
+        const sec = g.sections.find((s) => s.start + s.bars === z)!
+        if (sec.kind === 'build') builds++
+        if (sec.kind === 'break') breaks++
+        expect([4, 8]).toContain(Number(g.rules.stabAnnounce))
+        const clips = Array.from({ length: n }, (_, j) => bar(g, main, z - n + j))
+        // The silence before the drop may take the whole last bar, its hits being in its last beat only.
+        const playing = clips.filter((c): c is PatternClip => !!c)
+        expect(playing.length).toBeGreaterThanOrEqual(n - 1)
+        for (const c of playing) {
+          expect(c.length).toBe(4)
+          expect(c.filter).toMatchObject({ type: 'lowpass' })
+          expect(c.echo).toBeGreaterThan(0)
+        }
+        for (let j = 1; j < playing.length; j++) {
+          expect(playing[j].filter!.from).toBeGreaterThan(playing[j - 1].filter!.from)
+          expect(playing[j].filter!.q).toBeGreaterThanOrEqual(playing[j - 1].filter!.q)
+          expect(playing[j].verb!.to).toBeGreaterThanOrEqual(playing[j - 1].verb!.to)
+          expect(playing[j].echo!).toBeGreaterThanOrEqual(playing[j - 1].echo!)
+        }
+        const last = bar(g, main, z - 1)
+        if (last) {
+          expect(last.echo).toBe(0.9)
+          expect(last.steps.slice(12).some(Boolean)).toBe(false)
+          // (The silence before the drop takes at most its last two beats: the roll's first two stay.)
+          if (g.rules.stabRoll !== 'none') {
+            rolls++
+            expect(hitsOf(last.steps.slice(0, 8))).toEqual([0, 2, 4, 6])
+          }
+        }
+      }
+    }
+    expect(builds).toBeGreaterThan(10)
+    expect(breaks).toBeGreaterThan(20)
+    expect(rolls).toBeGreaterThan(5)
+  })
+
+  it('sometimes moves the loop\'s last hit: a tone up most often, on all the stabs playing it', () => {
+    const moved = gens.filter((g) => g.rules.stabMove)
+    expect(moved.length).toBeGreaterThan(10)
+    expect(moved.length).toBeLessThan(gens.length * 0.7)
+    let any = 0
+    for (const g of moved) {
+      const bent = stabClips(g).filter((c) => c.bend)
+      // (A loop of one hit has nothing to answer: it doesn't move, and the choices don't say it does.)
+      expect(bent.length > 0).toBe(g.choices.some((c) => / st, announcing|last hit [+-]\d+ st/.test(c)))
+      if (bent.length) any++
+      for (const c of bent) {
+        expect(c.bend!.length).toBe(c.steps.length)
+        const at = c.bend!.flatMap((v, i) => (v ? [i] : []))
+        for (const i of at) {
+          expect(c.bend![i]).toBe(g.rules.stabMove)
+          expect(c.steps[i]).toBeGreaterThan(0)
+          // The last hit of its bar.
+          expect(c.steps.slice(i + 1, (Math.floor(i / 16) + 1) * 16).some(Boolean)).toBe(false)
+        }
+        if (g.rules.stabMoveAt === 'loop' && c.patternBars === 2) expect(at.every((i) => i >= 16)).toBe(true)
+      }
+    }
+    expect(any).toBeGreaterThan(moved.length * 0.6)
+    for (const g of gens.filter((x) => !x.rules.stabMove)) expect(stabClips(g).some((c) => c.bend)).toBe(false)
+    expect(gens.some((g) => g.choices.some((c) => /loop's last hit \+2 st|last hit of every bar \+2 st/.test(c)))).toBe(true)
+  })
+
+  it('keeps the stabs\' own tone: a low cut, no bands moving it to the references\' pads', () => {
+    for (const g of gens) for (const l of stabLanes(g)) for (const b of l.eq?.bands ?? []) expect(b.type).toBe('highpass')
+  })
+
+  it('leaves a track made before the loop as it was: its stabs taking turns, no announcement', () => {
+    const g = generate(LIB, { ...opts, locks: { stabLoop: false } }, 5003)
+    expect(g.rules.stabLoop).toBe(false)
+    const before = { ...g, rules: Object.fromEntries(Object.entries(g.rules).filter(([k]) => !['stabLoop', 'stabLayout', 'stabAnnounce', 'stabRoll', 'stabMove', 'stabMoveAt'].includes(k))) }
+    const r = setTrackRule(LIB, opts, before as Generation, 'stabEcho', '16', CHOICES.find((c) => c.rule === 'stabEcho')!.roles)
+    expect(r.rules.stabLoop).toBeFalsy()
+    for (const l of stabLanes(r)) expect(l.duck).toBe(0.25)
+    expect(stabClips(r).some((c) => c.bend || c.echo === 0.9)).toBe(false)
   })
 })

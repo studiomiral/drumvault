@@ -322,8 +322,9 @@ function patternEvents(clip: PatternClip, bpm: number, from: number, to: number,
     const accent = g ? dbToGain(g.gains[inBar] ?? 0) : 1
     // A gated hit plays its gate's length and fades out at the end; any other rings to its end.
     const dur = clip.gate ? beatToSec(clip.gate, bpm) : null
+    const bend = clip.bend?.[i % n]
     push(out, clip, bpm, start, 0, dur, gain * VELOCITY_GAIN[v] * accent, from, to, false, 0, clip.sample.relPath,
-      { rate, ...(dur ? { release: Math.min(GATE_RELEASE_MAX_S, dur * GATE_RELEASE_SHARE) } : {}) })
+      { rate: bend ? pitchRate((clip.pitch ?? 0) + bend) : rate, ...(dur ? { release: Math.min(GATE_RELEASE_MAX_S, dur * GATE_RELEASE_SHARE) } : {}) })
   }
 }
 

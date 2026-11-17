@@ -162,6 +162,11 @@ export interface PatternClip extends ClipBase {
   groove?: StepGroove
   /** Each hit plays at most this long (beats), fading out at its end (a gated stab); to its end when unset. */
   gate?: number
+  /**
+   * Semitones per step (as `steps`) on top of `pitch`, played like a sampler: a stab loop's hit
+   * moved up a tone (SCOPE.md §6.9). Unset or 0: the clip's pitch.
+   */
+  bend?: number[]
 }
 
 /** A groove applied to one-shot steps (taken from a loop, see LoopGroove in api.ts). */

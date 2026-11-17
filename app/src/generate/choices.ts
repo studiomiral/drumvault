@@ -98,8 +98,8 @@ export const CHOICES: Choice[] = [
   { rule: 'ride', label: 'Ride', group: 'Sound', roles: ['ride', 'crash'],
     options: [{ value: 'late', label: 'later in drop 1' }, { value: 'second', label: 'from drop 2' }, { value: 'both', label: 'late in drop 1, then all through' }] },
   { rule: 'stabCount', label: 'Stab sounds', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs && !!g.picks.stab, unset: 1,
-    options: [{ value: 1, label: 'one' }, { value: 2, label: 'two, taking turns' }, { value: 3, label: 'three, taking turns' }] },
-  { rule: 'stabTurns', label: 'Stabs take turns', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.picks.stab2 && !g.picks.stab3, unset: 'hits',
+    options: [{ value: 1, label: 'one' }, { value: 2, label: 'two' }, { value: 3, label: 'three' }] },
+  { rule: 'stabTurns', label: 'Stabs take turns', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.picks.stab2 && !g.picks.stab3 && !looped(g), unset: 'hits',
     options: [{ value: 'bars', label: 'bar by bar' }, { value: 'hits', label: 'hit by hit' }] },
   { rule: 'stringsAt', label: 'Strings', group: 'Sound', roles: ['strings'], when: (g) => !!g.picks.strings,
     options: [{ value: 'later', label: 'from the second drop' }, { value: 'halves', label: 'the second half of drops' }, { value: 'breaks', label: 'in the breakdowns' },
@@ -125,7 +125,23 @@ CHOICES.push(
 
 /** The stab choices of tracks whose stabs are written for them (rule `stabFit`). */
 const fitted = (g: Generation) => !!g.rules.stabs && !!g.rules.stabFit
+/** …and played as one loop (rule `stabLoop`). */
+function looped(g: Generation): boolean { return fitted(g) && !!g.rules.stabLoop }
 CHOICES.push(
+  { rule: 'stabLoop', label: 'Stab loop', group: 'Sound', roles: STAB_ROLES, when: fitted, unset: false,
+    options: yesNo('one loop, announcing drops', 'taking turns (as before)') },
+  { rule: 'stabLayout', label: 'Second stab', group: 'Sound', roles: STAB_ROLES, when: (g) => looped(g) && !!g.picks.stab2 && !g.picks.stab3,
+    options: [{ value: 'stack', label: 'layered on the first' }, { value: 'split', label: 'on the pickups' }] },
+  { rule: 'stabMove', label: 'Stab moves', group: 'Sound', roles: STAB_ROLES, when: looped, unset: 0,
+    options: [{ value: 0, label: 'never' }, { value: 2, label: 'a tone up' }, { value: 3, label: 'a minor third up' }, { value: 5, label: 'a fourth up' },
+      { value: -2, label: 'a tone down' }] },
+  { rule: 'stabMoveAt', label: 'Stab move on', group: 'Sound', roles: STAB_ROLES, when: (g) => looped(g) && !!g.rules.stabMove,
+    options: [{ value: 'loop', label: 'the loop\'s last hit' }, { value: 'bar', label: 'every bar\'s last hit' }] },
+  { rule: 'stabAnnounce', label: 'Stabs announce drops', group: 'Builds', roles: STAB_ROLES, when: looped,
+    options: [{ value: 4, label: 'over 4 bars' }, { value: 8, label: 'over 8 bars' }] },
+  { rule: 'stabRoll', label: 'Stab roll into drops', group: 'Builds', roles: STAB_ROLES, when: looped,
+    options: [{ value: 'none', label: 'none' }, { value: 'eighths', label: 'in 8ths' }, { value: 'sixteenths', label: '8ths, then 16ths' }] },
+
   { rule: 'stabFit', label: 'Stabs', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs, unset: false,
     options: yesNo('written for the track', 'placed as before') },
   { rule: 'stabTurn', label: 'Stabs every 8 bars', group: 'Every 8 and 16 bars', roles: STAB_ROLES, when: fitted,
