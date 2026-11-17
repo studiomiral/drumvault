@@ -5,6 +5,7 @@ vi.hoisted(() => {
   ;(globalThis as { window?: unknown }).window = { drumvault: {} }
 })
 
+import { describeTrack, HOT_TAGS, houseTags, LABELS } from '../src/arrange/describe'
 import { infoText, INFO_FILE } from '../src/arrange/exporter'
 import { balanceFrom } from '../src/generate/balance'
 import { generate, rerollVocal, type GenerateOptions, type Generation } from '../src/generate/generator'
@@ -155,6 +156,8 @@ describe('info.txt', () => {
     expect(INFO_FILE).toBe('info.txt')
     expect(infoText(project(sungBy('v1')), o, [t])).toBe([
       'Title: Generated 08 - 124 BPM - E minor', 'BPM: 124', 'Key: E minor', 'Length: 5:10 (160 bars)', '',
+      'About the track', 'Club house in a minor key at 124 BPM in E minor: just kick, clap and hats.',
+      'Would sit well on labels like Toolroom, Defected and Hot Creations.', 'Tags: Club, Groovy, Dark', '',
       'Vocals', '- T_VA_124_vocal_hook_v1_Em.wav', '  Splice pack: Vocal Allstars (Toolroom)',
       '  https://splice.com/sounds/packs/toolroom-records/toolroom-vocal-all-stars/samples', '',
     ].join('\n'))
@@ -164,5 +167,52 @@ describe('info.txt', () => {
     const made = { ...loop('m1', 'Em'), source: 'elevenlabs', lines: ['Hold on'], voice: 'female', mood: 'gospel', splice: undefined } as VocalMeta
     expect(infoText(project(sungBy('m1')), o, [made])).toContain('- “Hold on”\n  AI-generated with ElevenLabs (female, gospel); lyrics written for this app')
     expect(infoText(project([]), o, [made])).toContain('\nVocals: none\n')
+  })
+})
+
+describe('the track described in info.txt', () => {
+  const gs = Array.from({ length: 12 }, (_, i) => generate(LIB, { bpm: BPM, minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true }, 9300 + i))
+  const about = (g: Generation, sung: VocalMeta[] = []) =>
+    describeTrack({ ...g.project, generation: g } as Project, sung, g.sections.reduce((n, x) => n + x.bars, 0))
+
+  it('says what kind of house it is, what it\'s made of, its DJ layout and labels it would sit with', () => {
+    for (const g of gs) {
+      const [what, layout, labels] = about(g)
+      const c = g.rules.character as keyof typeof LABELS | null
+      expect(what).toMatch(new RegExp(`^.+ at 124 BPM in [A-G][#b]? (minor|major)(, built around .+)?: .+\\.$`))
+      if (c) expect(what.toLowerCase()).toContain(c === 'drums' ? 'percussive' : c === 'disco' ? 'disco' : c === 'dub' ? 'dubby' : 'deep')
+      const drops = g.sections.filter((x) => x.kind === 'drop').length
+      expect(layout).toContain(`${g.sections.reduce((n, x) => n + x.bars, 0)} bars`)
+      expect(layout).toContain(`${['no', 'one', 'two', 'three', 'four'][drops]} drop`)
+      expect(labels).toBe(`Would sit well on labels like ${LABELS[c ?? 'none'][0]}, ${LABELS[c ?? 'none'][1]} and ${LABELS[c ?? 'none'][2]}.`)
+    }
+  })
+
+  it('names the vocal and where it sings; a soulful made vocal leans to Defected', () => {
+    const g = gs.find((x) => x.rules.character === 'dub') ?? gs[0]
+    const lanes = [...g.project.lanes, { id: 'v', name: 'Vocal', mute: false } as Project['lanes'][number]]
+    const clips = [...g.project.clips, { id: 'vc', laneId: 'v', type: 'audio', start: 0, length: 4, sample: { relPath: 'x' } } as unknown as Project['clips'][number]]
+    const made = { ...loop('m', 'Am'), source: 'elevenlabs', voice: 'female', mood: 'gospel', lines: ['Hold on'], splice: undefined } as VocalMeta
+    const [what, , labels] = describeTrack({ ...g.project, lanes, clips, generation: { ...g, rules: { ...g.rules, vocalAt: 'halves' } } } as Project, [made], 160)
+    expect(what).toContain('a gospel female vocal in the second half of each drop')
+    expect(labels.startsWith('Would sit well on labels like Defected')).toBe(true)
+  })
+
+  it('picks three House of Tracks tags that fit: its character\'s, a soulful vocal\'s', () => {
+    const want: Record<string, string> = { dub: 'Dub', disco: 'Funky', drums: 'Raw' }
+    for (const g of gs) {
+      const tags = houseTags({ ...g.project, generation: g } as Project, [])
+      expect(tags.length).toBe(3)
+      expect(new Set(tags).size).toBe(3)
+      for (const t of tags) expect(HOT_TAGS).toContain(t)
+      const c = String(g.rules.character)
+      if (want[c]) expect(tags).toContain(want[c])
+      else expect(tags).toContain('Club')
+    }
+    const g = gs.find((x) => x.rules.character === 'deep') ?? gs[0]
+    const lanes = [...g.project.lanes, { id: 'v', name: 'Vocal', mute: false } as Project['lanes'][number]]
+    const clips = [...g.project.clips, { id: 'vc', laneId: 'v', type: 'audio', start: 0, length: 4, sample: { relPath: 'x' } } as unknown as Project['clips'][number]]
+    const made = { ...loop('m', 'Am'), source: 'elevenlabs', voice: 'female', mood: 'gospel', lines: ['Hold on'], splice: undefined } as VocalMeta
+    expect(houseTags({ ...g.project, lanes, clips, generation: g } as Project, [made])).toContain('Soulful')
   })
 })

@@ -15,6 +15,7 @@ import { BEATS_PER_BAR } from '../lib/project'
 import type { MasterResult, PreflightResult, PreflightSection } from '../types/engine'
 import type { Project } from '../types/project'
 import type { VocalMeta } from '../vocals/plan'
+import { describeTrack, houseTags } from './describe'
 
 export interface ExportOptions {
   /** The folder the project folder goes in. */
@@ -90,7 +91,7 @@ export function safeName(s: string): string {
 export const INFO_FILE = 'info.txt'
 
 /**
- * info.txt (SCOPE.md §6.5): the track (title, BPM, key, length) and, for each vocal it sings, where
+ * info.txt (SCOPE.md §6.5): the track (title, BPM, key, length), a short description of it (describe.ts) and, for each vocal it sings, where
  * it is from: a Splice loop's file, pack, label and the pack's page; a made vocal's ElevenLabs credit.
  */
 export function infoText(project: Project, o: Pick<ExportOptions, 'folder' | 'range'>, takes: VocalMeta[]): string {
@@ -104,6 +105,7 @@ export function infoText(project: Project, o: Pick<ExportOptions, 'folder' | 'ra
     `Length: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} (${bars} bars)`,
   ]
   const sung = vocalTakes(project).map((id) => takes.find((t) => t.id === id)).filter((t): t is VocalMeta => !!t)
+  lines.push('', 'About the track', ...describeTrack(project, sung, bars), `Tags: ${houseTags(project, sung).join(', ')}`)
   lines.push('', sung.length ? 'Vocals' : 'Vocals: none')
   for (const t of sung) {
     if (t.source === 'splice') {
