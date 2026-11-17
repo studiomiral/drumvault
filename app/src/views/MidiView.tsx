@@ -198,13 +198,14 @@ function Learned({ model }: { model: BassModel }) {
   }
   const total = [...ivs.values()].reduce((a, b) => a + b, 0) || 1
   const top = [...ivs.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-  const from = [...model.from.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  const loops = model.periods[2] + model.periods[4] + model.periods[8]
+  const answerFrom = [...model.answers.map((a) => a.from)].sort((a, b) => a - b)[Math.floor(model.answers.length / 2)] ?? 12
   const pct = (x: number) => `${Math.round(x * 100)}%`
   return (
     <section className="rounded-xl border border-line bg-panel-2 px-4 py-3 text-[12px] space-y-2">
       <div className="flex items-center gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">What Generate learned</span>
-        <span className="text-muted">from {model.lines} loop{model.lines === 1 ? '' : 's'} (an 8-bar file counts as two)</span>
+        <span className="text-muted">from {model.lines} loop{model.lines === 1 ? '' : 's'}: {model.cells[16].length} rhythms of 4 beats, {model.cells[8].length} of 2</span>
       </div>
       <div className="flex items-center gap-3">
         <span className="w-24 text-muted">Notes start</span>
@@ -215,11 +216,11 @@ function Learned({ model }: { model: BassModel }) {
         <span className="text-text">{top.map(([n, c]) => `${n} ${pct(c / total)}`).join(' · ')}</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="w-24 text-muted">Later bars</span>
+        <span className="w-24 text-muted">Repeats every</span>
         <span className="text-text">
-          bar 2 of 2 differs in {pct(model.varies.two)}; of 4: bar 2 {pct(model.varies.four[0])}, bar 3 {pct(model.varies.four[1])},
-          bar 4 {pct(model.varies.four[2])}{from != null ? `; most often from ${from === 0 ? 'the 1 (the whole bar)' : `16th ${from + 1}`}` : ''}
-          {model.moveShare ? `; ${pct(model.moveShare)} of whole-bar changes move to another root` : ''}
+          {loops ? `2 beats ${pct(model.periods[2] / loops)} · 4 beats ${pct(model.periods[4] / loops)} · 8 beats ${pct(model.periods[8] / loops)}` : 'no line repeats within 8 beats'}
+          {model.answers.length ? `; an 8-beat loop answers from 16th ${answerFrom + 1} of its second bar` : ''}
+          {model.long ? <span className="text-faint">{`; ${model.long} longer line${model.long === 1 ? '' : 's'} (16 or 32 beats) learned as 8-beat loops: cut ${model.long === 1 ? 'it' : 'them'} to their best 4 or 8 beats`}</span> : ''}
         </span>
       </div>
     </section>

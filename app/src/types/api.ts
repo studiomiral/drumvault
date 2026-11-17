@@ -151,6 +151,8 @@ export interface SerumPreset {
   tags: string[]
   /** Sample files it names that aren't on this Mac (made on another computer): left out of the pools. */
   missing?: number
+  /** Mono with legato and portamento: an overlapping next note glides (a bassline may slide on it). */
+  glide?: boolean
   /**
    * Not a Serum preset but a Bass Samples page one-shot (SCOPE.md §6.7a): `path` is its
    * library-relative file, and the engine plays the bassline with it like a sampler.

@@ -131,6 +131,11 @@ export interface BassRender {
   bars?: number
   /** The track's groove: per 16th step, how late (in 16ths) notes starting there play. */
   groove?: number[]
+  /**
+   * The bassline's turn at the end of a phrase (SCOPE.md §6.7): the loop with its last beat
+   * changed (`turnOf` on `notes`), so an edit of the line changes its turns too. Without notes it plays as it is.
+   */
+  turn?: 'gap' | 'octave' | 'pickup'
   /** An older track's Serum chord stab part: the patch's own chord (semitones from the root), or its root alone. */
   stab?: { voicing?: number[]; oneKey?: boolean }
   /** An older track's drone: how it was made (its file is named after it; it isn't made again). */

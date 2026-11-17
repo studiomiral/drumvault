@@ -3,6 +3,7 @@
 // (§6.7). Each is made once and cached by the engine.
 
 import { api } from '../api'
+import { playedNotes } from '../generate/bassline'
 import type { BassRender, Project } from '../types/project'
 import { buffers } from './context'
 import { bassPath, soundPath, tempoMode, tempoPath } from './schedule'
@@ -48,7 +49,7 @@ export function renderBass(b: BassRender, bpm: number): Promise<void> {
   if (!p) {
     const state = renderState[b.role ?? 'bass']
     if (state.pending++ === 0) for (const fn of state.listeners) fn(true)
-    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: b.notes, bars: b.bars, groove: b.groove })
+    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: playedNotes(b), bars: b.bars, groove: b.groove })
       .then(() => {
         bassReady.add(path)
       })

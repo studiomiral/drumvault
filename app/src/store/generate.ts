@@ -11,7 +11,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  applyMix, bassBars, bassRenderOf, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
   setStabRhythm, setTrackRule, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
@@ -24,7 +24,7 @@ import { loadVocals, playableVocals, useVocals } from './vocals'
 import type { VocalTake } from '../generate/vocals'
 import type { VocalRequest } from '../vocals/plan'
 import { hitSampleId, hitTranspose } from '../generate/disco'
-import { bassModel, generateBassline, generatedMidi, isGenerated } from '../generate/bassline'
+import { bassModel, generateBassline, generatedMidi, isGenerated, type LoopBeats } from '../generate/bassline'
 import { Rng, randomSeed } from '../generate/rng'
 import { bestOf, bestOfSteps, CANDIDATES } from '../generate/score'
 import { serializeProject } from '../lib/project'
@@ -49,7 +49,8 @@ export interface GenerateSettings {
   tempo: { min: number; max: number } | null
   /** Bass on/off, its sidechain depth under the kick (0…1) and new basslines' length (null: any). */
   /** …and what plays it: Serum patches, Bass Samples page one-shots, or either (SCOPE.md §6.7a). */
-  bass: { enabled: boolean; sidechain: number; bars: 1 | 2 | 4 | null; source: BassSource }
+  /** `beats`: loop length of new basslines (2, 4 or 8 beats), null: as long as the library's really are. */
+  bass: { enabled: boolean; sidechain: number; beats: LoopBeats | null; source: BassSource }
   /** Reverb builds on/off, on which parts, also every 8 or 16 bars, and how far the send rises. */
   verb: { enabled: boolean } & VerbOptions
   /** Disco hits on/off: when on, some tracks get one or two (SCOPE.md §6.8). */
@@ -69,10 +70,14 @@ export interface GenerateSettings {
 const BASS_KEY = 'drumvault.generate.bass'
 
 function savedBass(): GenerateSettings['bass'] {
+  const base: GenerateSettings['bass'] = { enabled: true, sidechain: 0.6, beats: null, source: 'both' }
   try {
-    return { enabled: true, sidechain: 0.6, bars: null, source: 'both', ...JSON.parse(localStorage.getItem(BASS_KEY) ?? '{}') }
+    const { bars, ...saved } = JSON.parse(localStorage.getItem(BASS_KEY) ?? '{}')
+    // (Saved before loops were counted in beats: a bar was 4 beats, longer ones are 8 now.)
+    const beats = 'beats' in saved ? saved.beats : bars === 1 ? 4 : bars ? 8 : null
+    return { ...base, ...saved, beats }
   } catch {
-    return { enabled: true, sidechain: 0.6, bars: null, source: 'both' }
+    return base
   }
 }
 
@@ -332,7 +337,7 @@ function options(fresh = false): GenerateOptions {
   const { basslines } = useBass.getState()
   const presets = bassPatches(settings.bass.source)
   const bass = settings.bass.enabled && basslines.length && presets.length
-    ? { midis: basslines, presets, favorites: bassSettings().favorites, octaves: bassSettings().octaves, sidechain: settings.bass.sidechain, bars: settings.bass.bars } : null
+    ? { midis: basslines, presets, favorites: bassSettings().favorites, octaves: bassSettings().octaves, sidechain: settings.bass.sidechain, beats: settings.bass.beats } : null
   const { enabled, ...verb } = settings.verb
   const { hits } = useHits.getState()
   const discoHits = hits.filter((h) => h.kind === 'disco')
@@ -587,7 +592,7 @@ function writeBassClips(g: Generation): void {
   const bars = bassBars(b)
   for (const c of g.project.clips) {
     if (c.type !== 'audio' || !c.bass || (c.bass.role ?? 'bass') !== 'bass') continue
-    c.bass = bassRenderOf(b)
+    c.bass = bassClipRender(b, c.bass)
     c.sample = { ...c.sample, relPath: bassPath(c.bass, g.project.bpm), name: `${b.preset.name} · ${b.midi.name}`, bars,
       durationS: (bars * 4 * 60) / g.project.bpm }
     c.trimBeats %= bars * 4
@@ -689,19 +694,19 @@ export function setBassOptions(patch: Partial<GenerateSettings['bass']>): void {
   } catch {
     // not remembered
   }
-  if (patch.enabled !== undefined || patch.bars !== undefined) invalidate()
+  if (patch.enabled !== undefined || patch.beats !== undefined) invalidate()
 }
 
 /**
  * A new bassline for the current generation (Generate's bass section): written from what the
- * MIDI library's basslines have in common, in the track key, `bars` long (else the setting's).
- * A transpose of a line written before (an octave up, say) carries over.
+ * MIDI library's basslines have in common, in the track key, `beats` long (else the setting's),
+ * sliding a note on a patch that glides. A transpose of a line written before (an octave up, say) carries over.
  */
-export function newBassline(bars: 1 | 2 | 4 | null = useGenerate.getState().settings.bass.bars): boolean {
+export function newBassline(beats: LoopBeats | null = useGenerate.getState().settings.bass.beats): boolean {
   const g = current()
   const model = bassModel(useBass.getState().basslines)
   if (!g?.bass || !model) return false
-  const line = generateBassline(model, new Rng(randomSeed()), { key: g.key, bars })
+  const line = generateBassline(model, new Rng(randomSeed()), { key: g.key, beats, glide: !!g.bass.preset.glide })
   setGenerationBass({ midi: generatedMidi(line, g.key), transpose: isGenerated(g.bass.midi) ? g.bass.transpose : presetOctave(g.bass.preset.path) })
   return true
 }

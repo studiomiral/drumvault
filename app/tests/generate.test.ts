@@ -629,6 +629,8 @@ describe('generator: bass (Serum 2)', () => {
   })
   const preset = (n: number): SerumPreset => ({ path: `/presets/Bass/P${n}.SerumPreset`, name: `P${n}`, folder: 'Bass', tags: [] })
   const BASS = { midis: [midi(1, 'Am'), midi(2, 'Fm', 4), midi(3, null)], presets: [preset(1), preset(2), preset(3)], favorites: [], sidechain: 0.5 }
+  // A line with notes next to each other in a beat (somewhere to slide).
+  const RICH: MidiItem = { ...midi(4, 'Am', 1), notes: [[0, 0.5, 45, 100], [0.75, 0.25, 57, 100], [1.5, 0.25, 55, 100], [1.75, 0.25, 52, 100], [2.5, 0.5, 45, 100], [3.5, 0.25, 57, 100], [3.75, 0.25, 55, 100]] }
 
   it('plays a patch in the octave saved for it, every track', () => {
     const octaves = { [preset(2).path]: -12, [preset(3).path]: 12 }
@@ -680,11 +682,58 @@ describe('generator: bass (Serum 2)', () => {
     expect(swung).toBeGreaterThan(10)
   })
 
-  it('writes basslines of the length asked for', () => {
-    for (const bars of [1, 2, 4] as const) {
-      for (let seed = 0; seed < 5; seed++) expect(generate(LIB, { ...OPTS, bass: { ...BASS, bars } }, 7200 + seed).bass!.midi.bars).toBe(bars)
+  it('writes basslines of the length asked for: a loop of 2, 4 or 8 beats', () => {
+    for (const beats of [2, 4, 8] as const) {
+      for (let seed = 0; seed < 5; seed++) {
+        const m = generate(LIB, { ...OPTS, bass: { ...BASS, beats } }, 7200 + seed).bass!.midi
+        expect([m.bars, m.name.endsWith(`(${beats} beats)`)]).toEqual([beats === 8 ? 2 : 1, true])
+      }
     }
     expect(generate(LIB, { ...OPTS, bass: { ...BASS, midis: [] } }, 7).bass).toBeNull()        // nothing to learn from
+  })
+
+  it('writes the same drums whatever the bassline (the line has an RNG of its own)', () => {
+    const drums = (g: ReturnType<typeof generate>) => JSON.stringify(g.project.clips.filter((c) => c.type === 'pattern').map((c) => [c.start, c.sample.relPath]))
+    for (let seed = 0; seed < 5; seed++) {
+      expect(drums(generate(LIB, { ...OPTS, bass: { ...BASS, beats: 2 } }, 7300 + seed))).toBe(drums(generate(LIB, { ...OPTS, bass: { ...BASS, beats: 8 } }, 7300 + seed)))
+    }
+  })
+
+  it('slides a note only on a patch that glides', () => {
+    const overlaps = (glide: boolean) => Array.from({ length: 30 }, (_, seed) => {
+      const presets = BASS.presets.map((p) => ({ ...p, glide }))
+      const n = generate(LIB, { ...OPTS, bass: { ...BASS, midis: [midi(1, 'Am'), RICH], presets } }, 7400 + seed).bass!.midi.notes
+      return n.slice(0, -1).filter(([s, l], i) => s + l > n[i + 1][0] + 1e-9).length
+    }).reduce((a, b) => a + b, 0)
+    expect(overlaps(false)).toBe(0)
+    expect(overlaps(true)).toBeGreaterThan(0)
+  })
+
+  it('turns the bassline at phrase ends in drops: the last loop of the phrase plays its turn, the loop all through otherwise', () => {
+    for (const [every, kind] of [['8', 'pickup'], ['16', 'gap'], ['drop', 'octave']] as const) {
+      for (let seed = 0; seed < 8; seed++) {
+        const g = generate(LIB, { ...OPTS, bass: BASS, locks: { bassTurn: every, bassTurnKind: kind } }, 7500 + seed)
+        const b = g.bass!
+        const L = (b.midi.bars) * 4
+        const lane = g.project.lanes.find((l) => l.name === 'Bass')!
+        const clips = g.project.clips.filter((c): c is AudioClip => c.laneId === lane.id && c.type === 'audio')
+        const turns = clips.filter((c) => c.bass?.turn)
+        for (const d of g.sections.filter((s) => s.kind === 'drop')) {
+          const ends = [...Array.from({ length: Math.floor((d.bars - 1) / (every === '8' ? 8 : every === '16' ? 16 : 1e9)) }, (_, i) => d.start + (i + 1) * (every === '8' ? 8 : 16)), d.start + d.bars]
+          for (const end of ends) {
+            const t = turns.find((c) => c.start === end * 4 - L)
+            expect(t, `seed ${seed}: a turn before bar ${end}`).toBeDefined()
+            expect(t!.bass).toMatchObject({ turn: kind, notes: b.midi.notes, midiId: b.midi.id })
+            expect(t!.sample.relPath).toBe(bassPath(t!.bass!, g.project.bpm))
+            expect(t!.sample.relPath).toContain(`-t${kind}`)
+          }
+        }
+        // Only in drops.
+        for (const t of turns) expect(g.sections.some((s) => s.kind === 'drop' && t.start >= s.start * 4 && t.start < (s.start + s.bars) * 4)).toBe(true)
+      }
+    }
+    const none = generate(LIB, { ...OPTS, bass: BASS, locks: { bassTurn: 'none' } }, 7500)
+    expect(none.project.clips.some((c) => c.type === 'audio' && c.bass?.turn)).toBe(false)
   })
 
   it('keeps the bassline and patch when asked, and leaves bass out without material', () => {

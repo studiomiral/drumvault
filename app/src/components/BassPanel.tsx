@@ -3,8 +3,8 @@ import { api } from '../api'
 import { playback } from '../audio/engine'
 import { onBassRendering } from '../audio/tempo'
 import { BarSlider } from '../arrange/LaneHeaders'
-import { isGenerated } from '../generate/bassline'
-import { bassBars, transposeTo, type Generation } from '../generate/generator'
+import { isGenerated, LOOP_BEATS, loopBeatsOf } from '../generate/bassline'
+import { bassBars, transposeTo, type Generation, type GenerationBass } from '../generate/generator'
 import { attempt, useApp } from '../store/app'
 import { bassPatches, loadBass, toggleFavoritePreset, useBass, type BassSource } from '../store/bass'
 import { useHits } from '../store/hits'
@@ -16,6 +16,13 @@ import { PianoRoll, type RollNote } from './PianoRoll'
 import { Button, cx, inputClass, Segmented } from './ui'
 
 const NO_FAVORITES: string[] = []
+
+/** How long the line is before it repeats: "2 beats", "4 beats", "8 beats" (a longer one in bars). */
+function loopLabel(b: GenerationBass): string {
+  const bars = bassBars(b)
+  const beats = loopBeatsOf(b.notes ?? b.midi.notes, bars)
+  return beats <= 8 ? `${beats} beats` : `${beats / 4} bars`
+}
 
 /** Bass (SCOPE.md §6.7): the generation's bassline through a Serum 2 patch, browsable in place. */
 export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
@@ -52,7 +59,7 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
   const summary = !opts.enabled ? 'Off: G generates without bass'
     : missing ?? (b ? <>
-        <span className="text-text">{b.midi.name}</span> · {bassBars(b)} bar{bassBars(b) === 1 ? '' : 's'} · {b.preset.name}
+        <span className="text-text">{b.midi.name}</span> · {loopLabel(b)} · {b.preset.name}
         {kept && <span className="text-accent"> · keeping the {kept}</span>}
       </> : 'On: the next generation gets a bass')
 
@@ -98,13 +105,13 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
             <span className="text-muted">Bassline</span>
             <span className="flex flex-wrap items-center gap-1.5 min-w-0">
               <button className={btn} title="Write a new bassline, learned from your MIDI basslines" onClick={() => newBassline()}>New bassline</button>
-              {([null, 1, 2, 4] as const).map((n) => (
-                <button key={n ?? 'any'} className={cx(btn, opts.bars === n && 'bg-accent/20 text-accent')}
-                        title={n ? `New basslines are ${n} bar${n === 1 ? '' : 's'} long (and write one now)` : 'New basslines as long as your MIDI basslines tend to be'}
-                        onClick={() => { setBassOptions({ bars: n }); newBassline(n) }}>{n ?? 'Any'}</button>
+              {([null, ...LOOP_BEATS] as const).map((n) => (
+                <button key={n ?? 'any'} className={cx(btn, opts.beats === n && 'bg-accent/20 text-accent')}
+                        title={n ? `New basslines are a loop of ${n} beats (and write one now)` : 'New basslines as long as your MIDI basslines really are before they repeat'}
+                        onClick={() => { setBassOptions({ beats: n }); newBassline(n) }}>{n ? `${n} beats` : 'Any'}</button>
               ))}
               <span className="truncate font-medium ml-1">{b.midi.name}</span>
-              <span className="text-faint text-[11.5px] whitespace-nowrap">{b.midi.key_label ?? 'no key'} · {b.midi.bars} bar{b.midi.bars === 1 ? '' : 's'}</span>
+              <span className="text-faint text-[11.5px] whitespace-nowrap">{b.midi.key_label ?? 'no key'} · {loopLabel(b)}{b.preset.glide ? ' · the patch glides' : ''}</span>
               <span className="text-faint text-[11.5px] ml-1 whitespace-nowrap">learned from {basslines.length} bassline{basslines.length === 1 ? '' : 's'}</span>
             </span>
             <span className="text-muted">Transpose</span>

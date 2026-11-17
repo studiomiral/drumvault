@@ -308,7 +308,8 @@ export async function newClipBassline(): Promise<void> {
   const keepTranspose = isGenerated(old.midiId)
   const notes = old.notes ?? basslines.find((m) => m.id === old.midiId)?.notes ?? []
   const key = keyOfLine(notes.map(([s, l, p, v]) => [s, l, p + (keepTranspose ? 0 : old.transpose), v]))
-  const m = generatedMidi(generateBassline(model, new Rng(randomSeed()), { key, bars: null }), key)
+  const glide = !!useBass.getState().presets.find((p) => p.path === old.preset)?.glide
+  const m = generatedMidi(generateBassline(model, new Rng(randomSeed()), { key, beats: null, glide }), key)
   await changeBass('New bassline', (b) => ({
     ...b, midiId: m.id, midiName: m.name, notes: m.notes, bars: m.bars, keyLabel: key, transpose: keepTranspose ? b.transpose : 0,
   }))
