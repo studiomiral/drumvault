@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS hits (
   punch_db REAL,                    -- as samples.punch_db (v16): the level a stab is set by, hit for hit
   voices INTEGER,                   -- how many notes it plays (v16): 1–2 a single note, 3 or more a chord
   tonal INTEGER,                    -- an Ambience texture (v18): 1 a tonal bed (always moved into the key), 0 noise (never), NULL unmeasured
+  bpm REAL,                         -- an Ambience texture's tempo (v19): a loop with a rhythm, synced to the track; 0 none (no beat), NULL unchecked
   created_at TEXT
 );
 
@@ -214,6 +215,8 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE hits ADD COLUMN voices INTEGER")
         if "tonal" not in hit_cols:  # v18: tonal beds and noise on the Ambience page (filled by analyze_library)
             self.conn.execute("ALTER TABLE hits ADD COLUMN tonal INTEGER")
+        if "bpm" not in hit_cols:  # v19: textures with a rhythm, synced to the track (filled by analyze_library)
+            self.conn.execute("ALTER TABLE hits ADD COLUMN bpm REAL")
 
     def close(self) -> None:
         self.conn.close()
@@ -408,6 +411,10 @@ class LibraryDB:
     def textures_unmeasured(self) -> list[sqlite3.Row]:
         """Ambience textures not yet told tonal or noise (v18)."""
         return self.conn.execute("SELECT * FROM hits WHERE kind = 'ambience' AND tonal IS NULL ORDER BY id").fetchall()
+
+    def textures_untimed(self) -> list[sqlite3.Row]:
+        """Ambience textures whose tempo hasn't been looked for (v19)."""
+        return self.conn.execute("SELECT * FROM hits WHERE kind = 'ambience' AND bpm IS NULL ORDER BY id").fetchall()
 
     def hits_without_energy(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT id, rel_path FROM hits WHERE energy_db IS NULL OR tone IS NULL OR punch_db IS NULL OR voices IS NULL").fetchall()

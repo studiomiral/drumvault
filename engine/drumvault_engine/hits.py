@@ -149,7 +149,17 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
             except Exception as e:  # noqa: BLE001 - one bad file doesn't stop the rest
                 failed.append(f"{name}: {e}")
                 continue
-            hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind in ("strings", "ambience") else None)
+            # A texture with a tempo is a loop: kept whole bars from its start (trimmed to its sound,
+            # it would lose its downbeat and its length on the grid). Else trimmed like any hit.
+            bpm = None
+            if kind == "ambience":
+                from . import ambience
+                bpm = ambience.loop_bpm(name, settings.thresholds)
+            if bpm:
+                hit = ambience.whole_bars(audio.data, audio.sr, bpm, settings.thresholds.strings_max_len_s)
+                hit = hit if np.any(hit) else None
+            else:
+                hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind in ("strings", "ambience") else None)
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue
@@ -173,15 +183,19 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
                                 channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
                                 punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000),
                                 voices=keymod.count_voices(y.mean(axis=1), out_sr, settings.thresholds),
-                                tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), tonal=tonal, created_at=now_iso())
+                                tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), tonal=tonal,
+                                bpm=(bpm or 0.0) if kind == "ambience" else None, created_at=now_iso())
             imported.append({"id": hid, "kind": kind, "file_name": name, "key_label": label, "key_source": source})
     return {"imported": imported, "skipped": skipped, "failed": failed, "warnings": warnings}
 
 
-def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, sr: int, origin: str) -> str | None:
+def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, sr: int, origin: str,
+                bpm: float | None = None) -> str | None:
     """A texture straight onto the Ambience page (an atmos cut from a stem, SCOPE.md §6.10a): written
     to <Library>/Ambience/ at the library rate, told tonal (a key, from the stem's in its name or its
-    sound) or noise (none), measured like an imported one. The same audio already there (by its bytes): nothing new, None. Else its path."""
+    sound) or noise (none), measured like an imported one. `bpm`: the tempo it was cut on the grid
+    at (the library's), so its bed keeps the rhythm in time. The same audio already there (by its
+    bytes): nothing new, None. Else its path."""
     lib = Path(settings.library_path)
     out_sr = settings.output_sample_rate
     y = resample(np.asarray(data, dtype=np.float32), sr, out_sr)
@@ -200,7 +214,7 @@ def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, 
     tonal, label, source = texture_key(name, y.mean(axis=1), out_sr, settings)
     db.insert_hit(kind="ambience", file_name=f"{name}.wav", rel_path=rel, original_path=origin, file_sha1=sha1,
                   key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
-                  key_source=source, tonal=tonal, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
+                  key_source=source, tonal=tonal, bpm=float(bpm or 0.0), pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                   channels=y.shape[1], peak_db=20 * np.log10(peak) if peak > 0 else -240.0, energy_db=k_energy_db(y, out_sr),
                   punch_db=k_punch_db(y, out_sr, settings.thresholds.punch_window_ms / 1000), voices=0,
                   tone=json.dumps(arrangement.tone(y, out_sr, settings.thresholds) or []), created_at=now_iso())

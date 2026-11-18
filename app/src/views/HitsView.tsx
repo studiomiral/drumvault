@@ -4,7 +4,7 @@ import { audition } from '../audio/audition'
 import { IconDrop, IconPlay, IconStop, IconX } from '../components/icons'
 import { Button, cx, Empty, inputClass } from '../components/ui'
 import { PageTabs } from '../components/PageTabs'
-import { bedTonal } from '../generate/ambience'
+import { bedTempo, bedTonal } from '../generate/ambience'
 import { hitSampleId } from '../generate/disco'
 import { ALL_KEYS } from '../lib/camelot'
 import { attempt, useApp } from '../store/app'
@@ -168,6 +168,7 @@ export function HitsView({ kind }: { kind: Exclude<HitItem['kind'], 'drone'> }) 
                     <div className="text-[11px] text-faint truncate">
                       {h.duration_s.toFixed(1)} s
                       {kind === 'ambience' && (bedTonal(h) ? ` · tonal bed: always pitched into the track key${h.key_label ? '' : ' (set its key to use it)'}` : ' · noise: never pitched')}
+                      {kind === 'ambience' && bedTempo(h) ? ` · ${bedTempo(h)} BPM: synced to the track tempo` : ''}
                       {h.key_source && (kind !== 'ambience' || h.key_label) ? ` · ${SOURCE_LABEL[h.key_source]}` : ''}
                       {h.pitch_fix ? ` · pitch fixed ${h.pitch_fix > 0 ? '+' : ''}${h.pitch_fix} st` : ''}
                     </div>

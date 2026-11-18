@@ -59,6 +59,14 @@ describe('the ambience bed', () => {
     for (const g of gens) for (const c of bedClips(g)) expect([c.bass!.transpose, c.bass!.keyLabel, c.pitch]).toEqual([0, null, undefined])
   })
 
+  it('repeats a loop with a rhythm on its own bars, whatever the track tempo', () => {
+    // A 2-bar guitar loop at 120 (4 s), a 1-bar one at 125, a 3-bar atmos cut, an 8- and a 32-bar loop.
+    const loop = (bars: number, bpm: number) => ({ duration_s: (bars * 240) / bpm, bpm })
+    expect([128, 118].map((t) => bedBars(loop(2, 120), t))).toEqual([4, 4])
+    expect([bedBars(loop(1, 125), BPM), bedBars(loop(3, 124), BPM), bedBars(loop(8, 122), BPM), bedBars(loop(32, 122), BPM)])
+      .toEqual([4, 6, 8, 16])
+  })
+
   it('leaves the rest of the track as it is, and is made again with another texture', () => {
     const g = gens.find((x) => bedClips(x).length)!
     const bare = generate(LIB, { ...OPTS, ambience: null }, g.seed)

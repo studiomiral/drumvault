@@ -132,6 +132,12 @@ def pitch_by(x: np.ndarray, sr: int, semitones: float, settings: Settings) -> np
     return _rubberband(x, sr, ["--pitch", repr(float(semitones))], x.shape[0], settings)
 
 
+def stretch_pitch(x: np.ndarray, sr: int, frames: int, semitones: float, settings: Settings) -> np.ndarray:
+    """`x` (n, ch) stretched to exactly `frames` frames and moved `semitones` (Rubber Band, one pass)."""
+    args = ["--time", repr(frames / x.shape[0])] + (["--pitch", repr(float(semitones))] if semitones else [])
+    return _rubberband(x, sr, args, frames, settings)
+
+
 def _rubberband(x: np.ndarray, sr: int, args: list[str], expected: int, settings: Settings) -> np.ndarray:
     info = rubberband_info(settings.rubberband_binary, settings.rubberband_r3_flag)
     if not info.path:

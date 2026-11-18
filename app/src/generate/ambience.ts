@@ -22,10 +22,23 @@ export function bedItem(h: HitItem): SampleListItem {
   return { ...hitSample(h), category: 'fx_atmos', source_code: 'Ambience' }
 }
 
-/** The bars the bed's loop runs before it repeats: 16, 8 or 4, the most the sample fills (a shorter one is laid end to end). */
-export function bedBars(h: Pick<HitItem, 'duration_s'>, bpm: number): number {
+/**
+ * The bars the bed's loop runs before it repeats: 16, 8 or 4, the most the sample fills (a shorter
+ * one is laid end to end). A texture with a rhythm (a tempo: a guitar loop) is stretched to the
+ * track tempo on the grid: its own bars (16 at most), repeated to 4 bars or more (1 → 4, 3 → 6).
+ */
+export function bedBars(h: Pick<HitItem, 'duration_s' | 'bpm'>, bpm: number): number {
+  if (h.bpm && h.bpm > 0) {
+    const own = Math.max(1, Math.round((h.duration_s * h.bpm) / 60 / BEATS_PER_BAR))
+    return own >= 16 ? 16 : own * Math.ceil(4 / own)
+  }
   const bars = (h.duration_s * bpm) / 60 / BEATS_PER_BAR
   return bars >= 16 ? 16 : bars >= 8 ? 8 : 4
+}
+
+/** A texture with a rhythm: its tempo, stretched to the track's. Null: no beat. */
+export function bedTempo(h: Pick<HitItem, 'bpm'>): number | null {
+  return h.bpm && h.bpm > 0 ? h.bpm : null
 }
 
 /** A tonal bed (the engine heard a held tone, or a key was set by hand): pitched into the key. Else noise. */

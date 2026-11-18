@@ -295,6 +295,11 @@ class Thresholds:
     ambience_tonal_floor_db: float = 30.0    # …nor any this far under its loud frames (a tail, a gap of silence)
     ambience_tonal_max_s: float = 30.0       # measured over at most this much from the start
     ambience_max_shift: int = 6              # a tonal bed moves the nearest way into the key: never more than this
+    # A texture with a rhythm (a guitar loop, a music loop, an atmos cut on the grid) has a tempo: a
+    # number in its name in this range (an atmos cut: the library's). It is kept whole bars on import
+    # (not trimmed to its sound) and its bed is stretched to the track tempo, repeating on the bar grid.
+    ambience_loop_bpm_lo: float = 80.0
+    ambience_loop_bpm_hi: float = 160.0
     strings_tail_fade_s: float = 0.02       # a sample ending before its part does fades out over this (no click)
     strings_fade_s: float = 0.25            # where a part cuts the sample (the next 8-bar line), it fades out over this
     strings_lufs_target: float = -14.0      # like the bass renders (the mix balance takes it from there)

@@ -210,6 +210,8 @@ export interface HitItem {
   voices?: number | null
   /** An Ambience texture (schema v18; null until measured): 1 a tonal bed (always pitched into the track key), 0 noise (never). */
   tonal?: number | null
+  /** An Ambience texture's tempo (schema v19): a loop with a rhythm, stretched to the track tempo on the grid; 0 none (no beat), null unchecked. */
+  bpm?: number | null
 }
 
 /** What an import of Splice vocal loops did (vocalloop.import_loops). */

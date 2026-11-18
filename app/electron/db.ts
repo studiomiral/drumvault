@@ -195,8 +195,9 @@ export class LibraryReader {
     const tone = this.hasColumn('hits', 'tone') ? 'tone' : 'NULL AS tone'
     const more = this.hasColumn('hits', 'voices') ? 'punch_db, voices' : 'NULL AS punch_db, NULL AS voices'
     const tonal = this.hasColumn('hits', 'tonal') ? 'tonal' : 'NULL AS tonal'
+    const bpm = this.hasColumn('hits', 'bpm') ? 'bpm' : 'NULL AS bpm'
     return this.all<Omit<HitItem, 'name' | 'tone'> & { tone: string | null }>(
-      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}, ${tone}, ${more}, ${tonal}
+      `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}, ${tone}, ${more}, ${tonal}, ${bpm}
        FROM hits ORDER BY id`)
       .map((r) => ({ ...r, tone: toneOf(r.tone), pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
@@ -287,6 +288,9 @@ export class LibraryReader {
     // Ambience textures told tonal or noise (v18).
     if (this.hasTable('hits') && this.hasColumn('hits', 'kind')
         && (this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM hits WHERE kind = 'ambience'${this.hasColumn('hits', 'tonal') ? ' AND tonal IS NULL' : ''}`)[0]?.n ?? 0) > 0) return true
+    // …and their tempo looked for (v19): a loop is synced to the track.
+    if (this.hasTable('hits') && this.hasColumn('hits', 'kind')
+        && (this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM hits WHERE kind = 'ambience'${this.hasColumn('hits', 'bpm') ? ' AND bpm IS NULL' : ''}`)[0]?.n ?? 0) > 0) return true
     // Imports from before the library kept its own copy: kept while the zip or folder is still there.
     const lib = this.library
     if (lib && this.all<{ source_code: string; original_path: string | null }>(

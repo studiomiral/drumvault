@@ -574,7 +574,7 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                         from . import hits as hitsmod
                         label = key_of.get(o.name, (k.label, k.camelot))[0] or key_label
                         name = Path(naming.event_rel_path(o.category, settings.library_bpm, label, tag, ev.bars or 0, counts.ambience + 1)).stem
-                        rel = hitsmod.add_texture(db, settings, name, data, ev.sr, f"{tag}:{o.name}")
+                        rel = hitsmod.add_texture(db, settings, name, data, ev.sr, f"{tag}:{o.name}", settings.library_bpm)
                         if rel:
                             written.append(lib / rel)
                             counts.ambience += 1
@@ -964,6 +964,8 @@ BASS_RENDER_VERSION = 2
 STAB_RENDER_VERSION = 3
 # Strings (their own folder, strings.py).
 STRINGS_RENDER_VERSION = 1
+# The ambience bed (its own folder, ambience.py). 2: a texture with a tempo stretched to the track's, on the grid.
+AMBIENCE_RENDER_VERSION = 2
 
 
 def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -> None:
@@ -1085,11 +1087,16 @@ def _render_ambience(settings: Settings, source: str, transpose: int, bpm: float
     src = Path(settings.library_path) / source
     if not source.startswith("Ambience/") or ".." in Path(source).parts or not src.exists():
         raise PipelineError("not_found", f"Ambience sample not found: {source}")
+    _drop_stale_bass_renders(out.parent, AMBIENCE_RENDER_VERSION)
     if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
         return {"path": out_rel, "cached": True}
     shift = max(-th.ambience_max_shift, min(th.ambience_max_shift, int(transpose)))
+    # A texture with a rhythm (its tempo on the Ambience page) is stretched to the track's, on the grid.
+    with LibraryDB(settings.library_path) as db:
+        row = db.hit_by_path(source)
+    source_bpm = float(row["bpm"] or 0) if row is not None else ambmod.loop_bpm(source, th)
     try:
-        data = ambmod.make_loop(settings, source, bpm, bars, shift)
+        data = ambmod.make_loop(settings, source, bpm, bars, shift, source_bpm or None)
     except stretch.StretchError as e:
         raise PipelineError("stretch", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) <= 1e-5:
@@ -1391,7 +1398,8 @@ def atmos_to_ambience(settings: Settings) -> dict:
             path = lib / r["rel_path"]
             if path.exists():
                 a = load(path)
-                if hitsmod.add_texture(db, settings, Path(r["rel_path"]).stem, a.data, a.sr, f"{r['source_code']}:{r['rel_path']}"):
+                if hitsmod.add_texture(db, settings, Path(r["rel_path"]).stem, a.data, a.sr, f"{r['source_code']}:{r['rel_path']}",
+                                       float(r["bpm"] or settings.library_bpm)):
                     moved += 1
         if rows:
             ids = [r["id"] for r in rows]
@@ -1431,6 +1439,63 @@ def measure_textures(settings: Settings) -> int:
     return tonal
 
 
+def time_textures(settings: Settings) -> int:
+    """Ambience textures from before (schema v19) given their tempo (ambience.loop_bpm: a number in
+    the name; 0 without). A loop imported trimmed to its sound is read again whole bars from where it
+    came from (a file or a zip still there), so it repeats on the grid. How many have a tempo."""
+    from . import ambience as ambmod
+    th = settings.thresholds
+    lib = Path(settings.library_path)
+    out_sr = settings.output_sample_rate
+    timed = 0
+    with LibraryDB(lib) as db:
+        for r in db.textures_untimed():
+            bpm = ambmod.loop_bpm(r["file_name"], th)
+            fields: dict = {"bpm": bpm or 0.0}
+            path = lib / r["rel_path"]
+            orig = _texture_original(r["original_path"] or "") if bpm and path.exists() else None
+            if orig is not None:
+                try:
+                    a = load(orig)
+                except Exception as e:  # noqa: BLE001 - kept as it is
+                    log.warning("texture %s: original not read again: %s", r["file_name"], e)
+                else:
+                    y = resample(ambmod.whole_bars(a.data, a.sr, bpm, th.strings_max_len_s), a.sr, out_sr)
+                    if np.any(y) and abs(y.shape[0] - int(round(float(r["duration_s"] or 0) * out_sr))) > out_sr // 100:
+                        y, pk_db, _ = normalize.peak_normalize(y, th.hit_peak_dbfs)
+                        write_wav(path, y, out_sr, settings.output_format)
+                        fields.update(duration_s=y.shape[0] / out_sr, peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
+                                      punch_db=k_punch_db(y, out_sr, th.punch_window_ms / 1000),
+                                      tone=json.dumps(arrmod.tone(y, out_sr, th) or []))
+                if orig.parent.name.startswith("drumvault-texture-"):
+                    import shutil
+                    shutil.rmtree(orig.parent, ignore_errors=True)
+            db.update_hit(r["id"], **fields)
+            timed += bool(bpm)
+    return timed
+
+
+def _texture_original(origin: str) -> Path | None:
+    """Where an imported texture came from, if it is still there: its file, or (from a zip,
+    "<zip>!<name>") a copy of it out of the zip in a temp folder (the caller removes it)."""
+    if "!" in origin:
+        z, _, name = origin.partition("!")
+        if not Path(z).is_file():
+            return None
+        import zipfile
+        try:
+            with zipfile.ZipFile(z) as zf:
+                data = zf.read(name)
+        except (KeyError, zipfile.BadZipFile, OSError):
+            return None
+        d = Path(tempfile.mkdtemp(prefix="drumvault-texture-"))
+        f = d / Path(name).name
+        f.write_bytes(data)
+        return f
+    p = Path(origin)
+    return p if p.is_absolute() and p.is_file() else None
+
+
 def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     """Fill in what older libraries lack: loop grooves (from the loop files), event shapes (from
     the event files), the kept originals (copied from where the zips and packs came from) and
@@ -1443,6 +1508,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
     # there told tonal (a key: moved into each track's) or noise.
     atmos = atmos_to_ambience(settings)
     textures = measure_textures(settings)
+    timed = time_textures(settings)
     with LibraryDB(lib) as db:
         loops = db.loops_without_groove()
         events = db.events_without_shape()
@@ -1534,7 +1600,7 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
             db.set_arrangement(z["id"], arr)
     ctx.progress("done", 1.0, f"{len(loud)} loudness, {len(loops)} loop grooves, {len(events)} event shapes, "
                               f"{len(unkept) - len(not_kept)} originals kept, {len(zips) - len(missing)} arrangements")
-    return {"atmos": atmos, "tonal_textures": textures, "loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
+    return {"atmos": atmos, "tonal_textures": textures, "timed_textures": timed, "loudness": len(loud), "grooves": len(loops), "shapes": len(events), "kept": len(unkept) - len(not_kept), "not_kept": not_kept,
             "arrangements": len(zips) - len(missing), "missing": missing}
 
 

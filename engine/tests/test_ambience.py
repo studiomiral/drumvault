@@ -183,3 +183,100 @@ def test_splice_suggests_noise_and_tonal_beds():
     assert splice.suggest("SM_BSS_75_songstarter_tape_vinyl_roots_C#min.wav", 12.8, S) is None
     assert splice.suggest("FF_CL_ambience_london_bar_yellow.wav", 25.5, S)[0] == "ambience"
     assert splice.suggest("NOIZU_125_white_noise_fall_03.wav", 15.4, S) is None             # a downlifter
+
+
+# ---- Textures with a rhythm (a guitar loop): synced to the track tempo ----
+
+def clicks(bpm: float, bars: int, lead_s: float = 0.0, tail_s: float = 0.0) -> np.ndarray:
+    """A loop with a rhythm: a short plucked click on every beat at `bpm` (`lead_s` of near-silence
+    before its first beat inside the loop, `tail_s` of ring after its last bar)."""
+    beat = 60.0 / bpm
+    n = int(round(bars * 4 * beat * SR + tail_s * SR))
+    x = np.zeros(n, dtype=np.float32)
+    t = np.arange(int(0.08 * SR)) / SR
+    pluck = (np.sin(2 * np.pi * 440 * t) * np.exp(-t * 60)).astype(np.float32) * 0.5
+    for b in range(bars * 4):
+        i = int(round((b * beat + lead_s) * SR))
+        x[i:i + len(pluck)] += pluck[:max(0, n - i)]
+    return np.stack([x, x], axis=1)
+
+
+def onsets_s(y: np.ndarray, sr: int) -> list[float]:
+    """Where each click starts (s): the envelope crossing half its peak after a quiet stretch."""
+    env = np.abs(y.mean(axis=1))
+    thr = 0.5 * env.max()
+    out, last = [], -sr
+    for i in np.flatnonzero(env > thr):
+        if i - last > sr // 10:
+            out.append(i / sr)
+        last = i
+    return out
+
+
+def test_a_tempo_in_the_name_makes_a_texture_a_loop():
+    th = Settings().thresholds
+    assert ambience.loop_bpm("ZEN_SONI_122_electric_guitar_loop_chank_Gmin.wav", th) == 122
+    assert ambience.loop_bpm("fh2_kit19_shak_guitar_electric_2_loop_120_Gm.wav", th) == 120
+    assert ambience.loop_bpm("MRJ_Music_Loop_004_Cm_122.wav", th) == 122
+    assert ambience.loop_bpm("FX_Atmos_124_Bbm_S0002-83259-stems_8bar_05.wav", th) == 124
+    assert ambience.loop_bpm("Vinyl Crackle Am.wav", th) is None
+    assert ambience.loop_bpm("Room Tone 2.wav", th) is None
+
+
+def test_a_loop_imports_whole_bars_from_its_start_never_trimmed(tmp_path):
+    # Its first beat a little in (a soft attack) and a ring after its 2 bars: kept from the start, 2 bars.
+    s, _, row = imported(tmp_path, "T_APFG_120_electric_guitar_loop_luvv_Gmaj.wav", clicks(BPM, 2, lead_s=0.05, tail_s=0.3))
+    assert row["bpm"] == 120 and row["duration_s"] == pytest.approx(4.0, abs=1e-3)
+    y, sr = sf.read(Path(s.library_path) / row["rel_path"], always_2d=True)
+    assert onsets_s(y, sr)[0] == pytest.approx(0.05, abs=0.003)
+    _, _, noise = imported(tmp_path / "b", "Room Tone.wav", crackle(10))
+    assert noise["bpm"] == 0
+
+
+def test_a_loop_is_stretched_to_the_track_tempo_on_the_grid(tmp_path):
+    if not stretch.rubberband_info(Settings().rubberband_binary, Settings().rubberband_r3_flag).path:
+        pytest.skip("Rubber Band not installed")
+    s, rel, _ = imported(tmp_path, "Guitar_Loop_120_Gm.wav", clicks(BPM, 2))
+    sr = s.output_sample_rate
+    y = ambience.make_loop(s, rel, 125.0, 8, 0, 120.0)
+    assert y.shape[0] == int(round(8 * 240 / 125 * sr))
+    # Every beat of every repeat on the track's beat (125 BPM), none off it, none missing.
+    found = onsets_s(y, sr)
+    beat = 60 / 125
+    assert len(found) == 32
+    assert max(abs(t - round(t / beat) * beat) for t in found) < 0.004
+    # Unsynced, it drifts (the old bed): a click lands off the grid.
+    loose = ambience.make_loop(s, rel, 125.0, 8)
+    assert max(abs(t - round(t / beat) * beat) for t in onsets_s(loose, sr)) > 0.02
+
+
+def test_render_bass_syncs_a_loop_by_its_tempo_on_the_page(tmp_path):
+    if not stretch.rubberband_info(Settings().rubberband_binary, Settings().rubberband_r3_flag).path:
+        pytest.skip("Rubber Band not installed")
+    s, rel, _ = imported(tmp_path, "Wahmatic_Guitar_125_G#Min_PL_2.wav", clicks(125.0, 1, tail_s=0.2))
+    out = ".drumvault/ambience/abc-0-b4-0-120.wav"
+    pipeline.render_bass(s, rel, 0, 0, BPM, out, bars=4)
+    y, sr = sf.read(Path(s.library_path) / out, always_2d=True)
+    assert y.shape[0] == int(round(8 * sr))
+    found = onsets_s(y, sr)
+    assert len(found) == 16 and max(abs(t - round(t / 0.5) * 0.5) for t in found) < 0.004
+
+
+def test_textures_from_before_get_their_tempo_and_their_whole_bars_back(tmp_path):
+    s, _, loop = imported(tmp_path, "FF_DHG_123_kit_loop_neon_guitar_pluck_Gmin.wav", clicks(123.0, 4, tail_s=0.3))
+    _, _, noise = imported(tmp_path, "Tape Hiss.wav", crackle(8))
+    lib = Path(s.library_path)
+    # As an older import left it: trimmed short of its 4 bars, no tempo looked for.
+    y, sr = sf.read(lib / loop["rel_path"], always_2d=True)
+    sf.write(str(lib / loop["rel_path"]), y[: int(6.9 * sr)], sr, subtype="PCM_24")
+    with LibraryDB(s.library_path) as db:
+        db.conn.execute("UPDATE hits SET bpm = NULL")
+        db.update_hit(loop["id"], duration_s=6.9)
+        assert len(db.textures_untimed()) == 2
+    assert pipeline.time_textures(s) == 1
+    with LibraryDB(s.library_path) as db:
+        h = db.get_hit(loop["id"])
+        assert h["bpm"] == 123 and h["duration_s"] == pytest.approx(4 * 240 / 123, abs=1e-3)
+        assert db.get_hit(noise["id"])["bpm"] == 0
+        assert db.textures_untimed() == []
+    assert sf.info(str(lib / loop["rel_path"])).frames == int(round(4 * 240 / 123 * s.output_sample_rate))
