@@ -184,7 +184,12 @@ export async function exportStems(project: Project, o: ExportOptions,
     if (isCancelled()) break
     const t = targets[i]
     onProgress(`Rendering ${t.label}`, i / targets.length)
-    const audio = await renderLanes(project, t.key === 'master' ? unmuted : t.key === 'instrumental' ? instrumental : [t.key], o.range, o.sampleRate)
+    const audio = await renderLanes(project, t.key === 'master' ? unmuted : t.key === 'instrumental' ? instrumental : [t.key], o.range, o.sampleRate, {
+      onProgress: (f, what) => onProgress(what === 'bus' ? 'Rendering the drum bus' : `Rendering ${t.label}`, (i + 0.8 * f) / targets.length),
+      isCancelled,
+    })
+    // Cancelled while rendering: the stem ran out in silence, so it isn't written.
+    if (isCancelled()) break
     const channels = [audio.getChannelData(0), audio.getChannelData(1)]
     const peak = peakOf(channels)
     result.maxPeak = Math.max(result.maxPeak, peak)

@@ -98,6 +98,8 @@ describe('project model', () => {
     p.clips.push(makeClip(sample('loop', 'top', 4), p.lanes[5].id, 32), makeClip(sample('oneshot', 'kick'), p.lanes[0].id, 0))
     p.markers.push({ id: 'm1', name: 'Drop', start: 64, end: 128, color: '#db2777' })
     p.loop = { start: 64, end: 96, enabled: true }
+    p.lanes[0].bus = true
+    p.drumBus = { thresholdDb: -13.8, ratio: 2, kneeDb: 6, attackMs: 10, releaseBeats: 0.25, makeupDb: 2 }
     const back = parseProject(serializeProject(p))
     expect({ ...back, updatedAt: '' }).toEqual({ ...p, updatedAt: '' })
     expect(() => parseProject('{"format":"other"}')).toThrow()
