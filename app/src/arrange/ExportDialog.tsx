@@ -131,7 +131,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             )}
             {phase.result?.mastered && (
               <p className="text-muted mb-2">
-                Mastered with Ozone 11: at most <b className="text-text">{phase.result.mastered.max_lufs.toFixed(1)} LUFS</b> (momentary),
+                Mastered with Ozone 11: the drops at <b className="text-text">{phase.result.mastered.short_term_lufs.toFixed(1)} LUFS</b> short-term,
                 the whole track {phase.result.mastered.lufs.toFixed(1)} LUFS integrated, peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
               </p>
             )}

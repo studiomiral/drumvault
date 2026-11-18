@@ -203,8 +203,8 @@ export interface CleanRendersResult {
 export interface MasterResult {
   /** Integrated: the whole track. */
   lufs: number;
-  /** Its loudest moment (momentary, 400 ms: a meter's M): what the master is set by. */
-  max_lufs: number;
+  /** Its loudest 3 s (the drops), short-term: what the master is set by. */
+  short_term_lufs: number;
   peak_db: number;
   gain_db: number;
   passes: number;

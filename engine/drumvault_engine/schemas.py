@@ -243,7 +243,7 @@ class MasterMixdownParams(BaseModel):
 
 class MasterResult(BaseModel):
     lufs: float                # integrated, the whole track
-    max_lufs: float            # its loudest moment (momentary, 400 ms): what the master is set by
+    short_term_lufs: float     # its loudest 3 s (the drops): what the master is set by
     peak_db: float
     gain_db: float
     passes: int
