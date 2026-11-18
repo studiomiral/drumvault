@@ -44,6 +44,24 @@ export function lyricsOf(info: TrackInfo): string {
     .flatMap((x) => x.split(' / ')).join('\n')
 }
 
+/**
+ * The sample packs of the Splice loops it sings (the credits' "Splice pack:" lines and the links
+ * under them), each once; unknown ones left out.
+ */
+export function vocalPacks(info: TrackInfo): { names: string[]; urls: string[] } {
+  const names: string[] = []
+  const urls: string[] = []
+  const lines = info.vocals.split('\n').map((l) => l.trim())
+  lines.forEach((l, i) => {
+    const name = /^Splice pack: (.+)$/.exec(l)?.[1]
+    if (!name) return
+    if (name !== 'unknown' && !names.includes(name)) names.push(name)
+    const url = lines[i + 1] ?? ''
+    if (/^https?:\/\//.test(url) && !urls.includes(url)) urls.push(url)
+  })
+  return { names, urls }
+}
+
 /** The form's values for a track: info.txt, and the page's choices (or their defaults). */
 export function hotFields(info: TrackInfo, rec: UploadRecord | undefined): HotFields {
   const vocal = vocalKind(info)
@@ -59,6 +77,9 @@ export function hotFields(info: TrackInfo, rec: UploadRecord | undefined): HotFi
     vocal,
     vocalCategory: vocal === 'None' ? 'Instrumental' : rec?.vocalCategory ?? DEFAULT_VOCAL_CATEGORY,
     lyrics: lyricsOf(info),
+    // The form asks a Royalty Free vocal's pack and its link (one of each: the first link).
+    vocalPack: vocal === 'Royalty Free' ? vocalPacks(info).names.join(', ') : '',
+    vocalPackUrl: vocal === 'Royalty Free' ? vocalPacks(info).urls[0] ?? '' : '',
   }
 }
 
@@ -94,6 +115,12 @@ export function uploadProblems(check: UploadCheck, info: TrackInfo): UploadProbl
   if (!/^[A-G][#b]? (major|minor)$/.test(info.key)) warnings.push('No key in info.txt: choose it in the form')
   if (info.tags.length !== 3) warnings.push(`${info.tags.length || 'No'} tags in info.txt: the form gets ${info.tags.length ? 'those' : 'none'}`)
   if (!info.description.trim()) warnings.push('No description in info.txt')
+  if (vocalKind(info) === 'Royalty Free') {
+    const { names, urls } = vocalPacks(info)
+    if (!names.length) warnings.push('The vocal\'s sample pack is unknown: type it in the form')
+    if (!urls.length) warnings.push('The vocal\'s sample pack has no link: paste it in the form')
+    else if (urls.length > 1) warnings.push(`It sings loops from ${urls.length} packs; the form takes one link: ${urls[0]}`)
+  }
   return { blocking: [...blocking, ...track], track, warnings }
 }
 

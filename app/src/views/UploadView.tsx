@@ -387,6 +387,8 @@ function TrackPanel({ track, rec, setRecord, progress, zipping, busy, filling, r
           <CopyRow label="This track contains" value={fields.vocal} />
           <CopyRow label="Vocal category" value={fields.vocalCategory} />
           {fields.lyrics && <CopyRow label="Lyrics" value={fields.lyrics} multiline />}
+          {fields.vocalPack && <CopyRow label="Vocal pack" value={fields.vocalPack} />}
+          {fields.vocalPackUrl && <CopyRow label="Vocal pack URL" value={fields.vocalPackUrl} />}
           {singing && <CopyRow label="Vocal credits" value={info.vocals} multiline />}
           <FileRow label="Master" path={check.master} />
           {singing && <FileRow label="Master Instrumental" path={check.masterInstrumental} />}

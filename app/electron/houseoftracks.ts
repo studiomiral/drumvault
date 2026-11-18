@@ -41,6 +41,14 @@ export const HOT_SELECTORS = {
   tagsInput: '#tags_input',
   tagOption: '#tags li.option',
   tagChip: '#tags .chip',
+  /**
+   * The fields "Royalty Free" brings up: the vocal's sample pack name and its URL. Not in the page
+   * as first saved, so they're found by what their label, placeholder, name or id says (the first
+   * visible text field matching, and not one of the fields above); a "Dump form" with Royalty Free
+   * chosen gives their selectors.
+   */
+  vocalPack: { label: 'pack|sample', not: 'url|link|https?:' },
+  vocalPackUrl: { label: 'url|link|https?:' },
 } as const
 
 /** The file inputs, by what goes in them (WAVs and the two zips). */
@@ -97,6 +105,20 @@ const PAGE_FILL = String.raw`async (S, V, verify) => {
     el.dispatchEvent(new Event('change', { bubbles: true }))
   }
   const missing = (field, value, sel) => row(field, value, false, 'not found on the page (' + sel + ')')
+  const describe = (el) => [el.placeholder, el.name, el.id, el.getAttribute('aria-label'),
+    el.id && q('label[for="' + CSS.escape(el.id) + '"]')?.textContent, el.closest('label')?.textContent,
+    el.previousElementSibling?.textContent, el.parentElement?.previousElementSibling?.textContent].filter(Boolean).join(' ')
+  const known = [S.trackName, S.bpm, S.description, S.lyrics, S.tagsInput]
+  const byLabel = (m) => [...document.querySelectorAll('input:not([type]), input[type="text"], input[type="url"], textarea')]
+    .filter((el) => !el.disabled && (el.offsetWidth || el.offsetHeight) && !known.some((k) => el.matches(k)))
+    .find((el) => new RegExp(m.label, 'i').test(describe(el)) && !(m.not && new RegExp(m.not, 'i').test(describe(el))))
+  const textByLabel = (field, m, v) => {
+    const el = byLabel(m)
+    if (!el) return row(field, v, false, 'no field labelled /' + m.label + '/ on the page')
+    if (!verify) setValue(el, v)
+    const where = el.id ? '#' + el.id : el.name ? '[name=' + el.name + ']' : el.tagName.toLowerCase()
+    row(field, v, el.value === v, el.value === v ? 'in ' + where : 'the page has "' + el.value.slice(0, 60) + '" (' + where + ')')
+  }
 
   const text = (field, sel, v) => {
     const el = q(sel)
@@ -166,6 +188,12 @@ const PAGE_FILL = String.raw`async (S, V, verify) => {
   select('Price', S.price, '€' + V.price, (o) => o.text.replace(/\D/g, '') === String(V.price))
   select('Main instrument', S.instrument, V.instrument, (o) => norm(o.text) === norm(V.instrument))
   if (V.lyrics) text('Lyrics', S.lyrics, V.lyrics)
+  if (V.vocal === 'Royalty Free') {
+    if (V.vocalPack) textByLabel('Vocal pack', S.vocalPack, V.vocalPack)
+    else row('Vocal pack', '', false, 'unknown: type it in the form')
+    if (V.vocalPackUrl) textByLabel('Vocal pack URL', S.vocalPackUrl, V.vocalPackUrl)
+    else row('Vocal pack URL', '', false, 'no link: paste it in the form')
+  }
   return rows
 }`
 

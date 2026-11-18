@@ -11,7 +11,8 @@ vi.hoisted(() => {
 import { fillScript, hotKey, isHotUrl } from '../electron/houseoftracks'
 import { checkFolder, listExports, readUploads, uploadsFile, writeUpload, zipPart } from '../electron/upload'
 import { parseInfoText } from '../src/arrange/exporter'
-import { hotFields, lyricsOf, PRICES, uploadProblems, vocalKind } from '../src/upload/fields'
+import { hotFields, lyricsOf, PRICES, uploadProblems, vocalKind, vocalPacks } from '../src/upload/fields'
+import type { UploadCheck } from '../src/types/api'
 
 const INFO = (title: string, length = '5:27 (176 bars)', vocals = 'Vocals: none') =>
   `Title: ${title}\nBPM: 129\nKey: F# minor\nLength: ${length}\n\nAbout the track\nDeep, warm house.\nTags: Melodic, Club, Soulful\n\n${vocals}\n`
@@ -151,19 +152,36 @@ describe('upload: the House of Tracks form', () => {
     expect(isHotUrl('not a url')).toBe(false)
   })
 
+  const ALL_THERE: UploadCheck = {
+    master: 'x', masterInstrumental: null, mixdown: 'x', mixdownInstrumental: null, stems: 1, midi: 1, info: true, zips: { stems: null, midi: null },
+  }
+
   it('fills from info.txt and the choices, with the vocal kind from the credits', () => {
     const none = parseInfoText(INFO('Bring It - 129 BPM - F# minor'))
     expect(hotFields(none, undefined)).toEqual({
       trackName: 'Bring It', bpm: '129', key: 'F# minor', genre: 'House', description: 'Deep, warm house.',
       tags: ['Melodic', 'Club', 'Soulful'], price: 299, instrument: 'Drums & Percussion', vocal: 'None', vocalCategory: 'Instrumental', lyrics: '',
+      vocalPack: '', vocalPackUrl: '',
     })
     const splice = parseInfoText(INFO('X', undefined, 'Vocals\n- a.wav\n  Splice pack: P (L)\n  https://splice.com/a'))
     expect(vocalKind(splice)).toBe('Royalty Free')
-    expect(hotFields(splice, { status: 'none', price: 449, vocalCategory: 'Male' })).toMatchObject({ price: 449, vocal: 'Royalty Free', vocalCategory: 'Male' })
+    expect(hotFields(splice, { status: 'none', price: 449, vocalCategory: 'Male' })).toMatchObject({
+      price: 449, vocal: 'Royalty Free', vocalCategory: 'Male', vocalPack: 'P (L)', vocalPackUrl: 'https://splice.com/a',
+    })
+    const two = parseInfoText(INFO('X', undefined, 'Vocals\n- a.wav\n  Splice pack: P (L)\n  https://splice.com/a\n- b.wav\n  Splice pack: P (L)\n  https://splice.com/a\n- c.wav\n  Splice pack: Q\n  https://splice.com/q'))
+    expect(vocalPacks(two)).toEqual({ names: ['P (L)', 'Q'], urls: ['https://splice.com/a', 'https://splice.com/q'] })
+    expect(hotFields(two, undefined)).toMatchObject({ vocalPack: 'P (L), Q', vocalPackUrl: 'https://splice.com/a' })
+    expect(uploadProblems({ ...ALL_THERE, masterInstrumental: 'x', mixdownInstrumental: 'x' }, two).warnings)
+      .toEqual(['It sings loops from 2 packs; the form takes one link: https://splice.com/a'])
+    const unknown = parseInfoText(INFO('X', undefined, 'Vocals\n- a.wav\n  Splice pack: unknown\n  Link: unknown'))
+    expect(hotFields(unknown, undefined)).toMatchObject({ vocal: 'Royalty Free', vocalPack: '', vocalPackUrl: '' })
+    expect(uploadProblems({ ...ALL_THERE, masterInstrumental: 'x', mixdownInstrumental: 'x' }, unknown).warnings).toEqual([
+      'The vocal\'s sample pack is unknown: type it in the form', 'The vocal\'s sample pack has no link: paste it in the form',
+    ])
     const made = parseInfoText(INFO('X', undefined, 'Vocals\n- “Bring it back / One more time”\n  AI-generated with ElevenLabs (female, soulful); lyrics written for this app'))
     expect(vocalKind(made)).toBe('AI Generated')
     expect(lyricsOf(made)).toBe('Bring it back\nOne more time')
-    expect(hotFields(made, undefined).vocalCategory).toBe('Female')
+    expect(hotFields(made, undefined)).toMatchObject({ vocalCategory: 'Female', vocalPack: '', vocalPackUrl: '' })
     expect(PRICES).toEqual([299, 349, 399, 449, 499])
   })
 

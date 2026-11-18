@@ -111,6 +111,9 @@ export interface HotFields {
   vocal: 'None' | 'Original' | 'Royalty Free' | 'AI Generated'
   vocalCategory: string
   lyrics: string
+  /** A Royalty Free vocal's sample pack (name, and its page): '' when there's none. */
+  vocalPack: string
+  vocalPackUrl: string
 }
 
 export interface HotFillRequest {
