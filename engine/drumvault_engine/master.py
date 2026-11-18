@@ -107,7 +107,7 @@ class _Chain:
             for p in self.paths:
                 if not Path(p).exists():
                     raise MasterError("no_ozone", f"Ozone 11 not found at {p}")
-            from pedalboard import load_plugin
+            from .plugins import load_plugin
             log.info("loading Ozone 11 (%s, %s)", *self.paths)
             self._plugins = tuple(load_plugin(p) for p in self.paths)
         return self._plugins
@@ -160,20 +160,27 @@ def master_mixdown(settings: Settings, mix_path: str, out_path: str, fmt: str = 
     x = np.ascontiguousarray((data * 10 ** ((th.master_pre_lufs - level) / 20)).T)
 
     chain = _chain_for(settings)
-    with chain.lock:
-        from pedalboard import Pedalboard
-        dyn, mx = chain.plugins()
-        _configure(dyn, mx, th)
-        board = Pedalboard([dyn, mx])
 
-        def render(g: float) -> np.ndarray:
-            _set(mx, "max_input_gain_db", g)
-            return np.asarray(board(x, sr, reset=True), dtype=np.float32).T
+    def run():
+        # On the plugin thread (plugins.py): each pass resets the chain (reset=True), which
+        # pedalboard only does on the thread JUCE loads plugins on.
+        with chain.lock:
+            from pedalboard import Pedalboard
+            dyn, mx = chain.plugins()
+            _configure(dyn, mx, th)
+            board = Pedalboard([dyn, mx])
 
-        lo, hi = (float(v.replace(",", ".")) for v in (mx.parameters["max_input_gain_db"].valid_values[0],
-                                                       mx.parameters["max_input_gain_db"].valid_values[-1]))
-        gain, y, short, passes = solve_gain(render, lambda a: max_short_term_lufs(a, sr, th.master_short_term_s),
-                                            th.master_target_lufs, lo, hi, th.master_tolerance_lu, th.master_max_passes)
+            def render(g: float) -> np.ndarray:
+                _set(mx, "max_input_gain_db", g)
+                return np.asarray(board(x, sr, reset=True), dtype=np.float32).T
+
+            lo, hi = (float(v.replace(",", ".")) for v in (mx.parameters["max_input_gain_db"].valid_values[0],
+                                                           mx.parameters["max_input_gain_db"].valid_values[-1]))
+            return solve_gain(render, lambda a: max_short_term_lufs(a, sr, th.master_short_term_s),
+                              th.master_target_lufs, lo, hi, th.master_tolerance_lu, th.master_max_passes)
+
+    from .plugins import on_plugin_thread
+    gain, y, short, passes = on_plugin_thread(run)
     if abs(short - th.master_target_lufs) > th.master_tolerance_lu * 3:
         raise MasterError("off_target", f"Mastering reached {short:.1f} LUFS at its loudest, not {th.master_target_lufs} (Maximizer at {gain:.1f} dB)")
     y = y[:data.shape[0]]

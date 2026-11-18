@@ -153,7 +153,7 @@ class SerumHost:
             return self._plugin
         if not Path(self.plugin_path).exists():
             raise SerumError(f"Serum 2 not found at {self.plugin_path}")
-        from pedalboard import load_plugin
+        from .plugins import load_plugin  # on the one thread JUCE loads plugins on
         log.info("loading %s", self.plugin_path)
         p = load_plugin(self.plugin_path, plugin_name=self.plugin_name)
         if not p.is_instrument:
@@ -238,7 +238,8 @@ _host_lock = threading.Lock()
 
 def host(plugin_path: str, plugin_name: str) -> SerumHost:
     """The engine's one Serum instance. (Not one per part: a second instance of the same plugin,
-    loaded off the main thread as RPC calls are, fails in pedalboard, or crashes.)"""
+    loaded while the first is alive, fails in pedalboard, or crashes. It's loaded on the plugin
+    thread, plugins.py; renders run on the RPC threads with reset=False.)"""
     global _host
     with _host_lock:
         if _host is None or _host.plugin_path != plugin_path or _host.plugin_name != plugin_name:

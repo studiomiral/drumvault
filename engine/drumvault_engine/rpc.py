@@ -358,5 +358,7 @@ def main(out_factory: Callable[[], TextIO] = protect_stdout) -> int:
     server = RpcServer(out)
     log.info("drumvault engine %s ready (rpc)", __version__)
     server.send({"event": "ready", "version": __version__})
-    server.serve(sys.stdin)
+    # stdin is read on a thread of its own: the main thread loads the plugins (plugins.py).
+    from .plugins import serve_plugins
+    serve_plugins(lambda: server.serve(sys.stdin))
     return 0
