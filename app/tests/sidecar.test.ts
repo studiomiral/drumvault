@@ -122,3 +122,30 @@ describe.skipIf(!uv || !fixturesDir)('Sidecar with the real engine', () => {
     expect(s.status.restarts).toBe(1)
   }, 180_000)
 })
+
+describe.skipIf(!uv || !fixturesDir)('Sidecar asked before the engine is ready', () => {
+  let s: Sidecar
+
+  afterAll(async () => {
+    await s?.stop()
+  })
+
+  it('waits for the engine instead of failing, at start and after a crash', async () => {
+    s = new Sidecar({
+      command: uv!, args: ['run', '--project', engineDir, 'python', '-m', 'drumvault_engine'],
+      cwd: engineDir, env: { PATH: augmentedPath() }, healthIntervalMs: 0,
+    })
+    s.start()
+    // As the app's first screens do: asked while the engine is still starting.
+    expect(s.status.state).toBe('starting')
+    await expect(s.request('reprocess_zip', { zip_id: 'nope' })).rejects.toMatchObject({ code: 'bad_params' })
+    const crashed = waitFor<{ state: string }>(s, 'status', (x) => x.state === 'crashed', 20_000)
+    ;(s as unknown as { proc: { kill(sig: string): void } }).proc.kill('SIGKILL')
+    await crashed
+    await expect(s.request('reprocess_zip', { zip_id: 'nope' })).rejects.toMatchObject({ code: 'bad_params' })
+    expect(s.status.state).toBe('ready')
+    // Stopped: no engine is coming, so it fails at once.
+    await s.stop()
+    await expect(s.request('health')).rejects.toBeInstanceOf(RpcCallError)
+  }, 300_000)
+})

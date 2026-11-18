@@ -132,6 +132,9 @@ export class Sidecar extends EventEmitter {
     if (!proc || this._status.state !== 'ready') {
       // health is also used to *become* ready
       if (!(proc && method === 'health')) {
+        // Asked while the engine starts (the app's first requests race its start) or restarts
+        // after a crash: sent once it's ready, not failed.
+        if (this.comingUp()) return this.whenReady().then(() => this.request<T>(method, params, timeoutMs))
         return Promise.reject(new RpcCallError('engine_unavailable', `Engine is ${this._status.state}`))
       }
     }
@@ -149,6 +152,37 @@ export class Sidecar extends EventEmitter {
   }
 
   // ---- internals ----------------------------------------------------------
+
+  /** Starting, or about to restart after a crash: it will be ready, missing or stopped soon. */
+  private comingUp(): boolean {
+    const { state } = this._status
+    return !this.stopping && (state === 'starting' || (state === 'crashed' && this.opts.autoRestart !== false))
+  }
+
+  /** Resolves once the engine is ready; rejects if it turns out missing or is stopped, or if it
+   * isn't ready within the start timeout (a start that long is killed and restarted anyway). */
+  private whenReady(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const done = (): void => {
+        clearTimeout(timer)
+        this.off('status', onStatus)
+      }
+      const onStatus = (s: EngineStatus): void => {
+        if (s.state === 'ready') {
+          done()
+          resolve()
+        } else if (!this.comingUp()) {
+          done()
+          reject(new RpcCallError('engine_unavailable', s.message || `Engine is ${s.state}`))
+        }
+      }
+      const timer = setTimeout(() => {
+        done()
+        reject(new RpcCallError('engine_unavailable', 'Engine did not start in time'))
+      }, this.opts.startTimeoutMs ?? 600_000)
+      this.on('status', onStatus)
+    })
+  }
 
   private onLine(line: string): void {
     let msg: RpcResponse | EngineEvent | { event: 'ready'; version: string }
