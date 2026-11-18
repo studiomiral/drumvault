@@ -320,11 +320,13 @@ class Thresholds:
     vocal_loop_suggest_bpm: float = 8.0     # the Splice page suggests vocal loops this close to the library tempo
 
     # ---- mastering (master.py): the mixdown through Ozone 11 into mastered.wav -----
-    # The master's loudness is set by its drops: its loudest `master_short_term_s` (short-term
-    # LUFS, a DAW meter's "max S"). An integrated target let drops reach -5.5 and distort; at this
-    # the whole track lands about -8 integrated (House of Tracks: -9 … -5).
-    master_target_lufs: float = -6.8        # the loudest short-term loudness of mastered.wav
-    master_short_term_s: float = 3.0        # BS.1770 short-term window
+    # The master's loudness is set by its loudest moment: no `master_loudness_window_s` of it (BS.1770
+    # momentary, a loudness meter's M, the reading that goes highest) over the target. An integrated
+    # target let the drops reach -5.2 and distort; at this the whole track lands about -8.5 to -9
+    # integrated (House of Tracks: -9 … -5).
+    master_target_lufs: float = -6.5        # the loudest momentary loudness of mastered.wav
+    master_loudness_window_s: float = 0.4   # BS.1770 momentary window
+    master_loudness_hop_s: float = 0.02     # windows this far apart: none of the loudest moments missed
     master_ceiling_db: float = -1.0         # the Maximizer's output ceiling (House of Tracks: -2 … 0 dB): at 0 the
                                             # peaks between the samples went to +1.2 dBTP; here they stay about 0
     master_tolerance_lu: float = 0.1        # the Maximizer's gain is solved until the result is this close

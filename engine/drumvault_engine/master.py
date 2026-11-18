@@ -1,11 +1,11 @@
 """Mastering (SCOPE.md §6.5): the export's mixdown through Ozone 11 into `mastered.wav`, as House of
-Tracks takes it: its drops (the loudest short-term loudness) on the target (`master_target_lufs`),
+Tracks takes it: its loudest moment (momentary loudness, a meter's M) on the target (`master_target_lufs`),
 the limiter's ceiling at `master_ceiling_db`.
 
 The basic chain: the mixdown is first brought to one level (`master_pre_lufs`), so the compressor
 works the same on every track; Ozone 11 Dynamics glues it gently (every band alike, RMS detection);
 the Ozone 11 Maximizer, with some soft clip, takes it the rest of the way. Its input gain is solved
-pass by pass until the result's loudest 3 s measure the target (short-term LUFS, BS.1770). Ozone
+pass by pass until the result's loudest 400 ms measure the target (momentary LUFS, BS.1770). Ozone
 is hosted like Serum (pedalboard), which compensates its look-ahead, so mastered.wav lines up with
 the mixdown sample for sample and has its length. A pass over a six-minute track takes a few seconds.
 """
@@ -39,9 +39,10 @@ def integrated_lufs(data: np.ndarray, sr: int) -> float:
     return float(pyloudnorm.Meter(sr).integrated_loudness(data))
 
 
-def max_short_term_lufs(data: np.ndarray, sr: int, window_s: float, hop_s: float = 0.1) -> float:
-    """The loudest `window_s` of (frames, channels) audio in LUFS (BS.1770 short-term at 3 s: each
-    channel K-weighted, their powers summed, ungated), windows every `hop_s`; -inf when silent."""
+def max_loudness_lufs(data: np.ndarray, sr: int, window_s: float, hop_s: float = 0.1) -> float:
+    """The loudest `window_s` of (frames, channels) audio in LUFS (BS.1770 momentary at 0.4 s,
+    short-term at 3 s: each channel K-weighted, their powers summed, ungated), windows every `hop_s`;
+    -inf when silent."""
     from .audioutil import k_weight
     power = sum(np.square(k_weight(data[:, c], sr)) for c in range(data.shape[1]))
     n = min(len(power), max(1, int(round(window_s * sr))))
@@ -172,17 +173,17 @@ def master_mixdown(settings: Settings, mix_path: str, out_path: str, fmt: str = 
 
         lo, hi = (float(v.replace(",", ".")) for v in (mx.parameters["max_input_gain_db"].valid_values[0],
                                                        mx.parameters["max_input_gain_db"].valid_values[-1]))
-        gain, y, short, passes = solve_gain(render, lambda a: max_short_term_lufs(a, sr, th.master_short_term_s),
+        gain, y, loudest, passes = solve_gain(render, lambda a: max_loudness_lufs(a, sr, th.master_loudness_window_s, th.master_loudness_hop_s),
                                             th.master_target_lufs, lo, hi, th.master_tolerance_lu, th.master_max_passes)
-    if abs(short - th.master_target_lufs) > th.master_tolerance_lu * 3:
-        raise MasterError("off_target", f"Mastering reached {short:.1f} LUFS at its loudest, not {th.master_target_lufs} (Maximizer at {gain:.1f} dB)")
+    if abs(loudest - th.master_target_lufs) > th.master_tolerance_lu * 3:
+        raise MasterError("off_target", f"Mastering reached {loudest:.1f} LUFS at its loudest, not {th.master_target_lufs} (Maximizer at {gain:.1f} dB)")
     y = y[:data.shape[0]]
     lufs = integrated_lufs(y, sr)
     tmp = out.with_name(f".{out.name}.part")
     sf.write(str(tmp), y, sr, subtype=SUBTYPES[fmt], format="WAV")
     tmp.replace(out)
     peak = float(np.max(np.abs(y))) if y.size else 0.0
-    log.info("mastered %s: %.2f LUFS short-term at its loudest, %.2f integrated, peak %.2f dBFS, Maximizer %.2f dB (%d passes)",
-             out.name, short, lufs, 20 * np.log10(max(peak, 1e-12)), gain, passes)
-    return {"lufs": round(float(lufs), 2), "short_term_lufs": round(float(short), 2),
+    log.info("mastered %s: %.2f LUFS at its loudest (momentary), %.2f integrated, peak %.2f dBFS, Maximizer %.2f dB (%d passes)",
+             out.name, loudest, lufs, 20 * np.log10(max(peak, 1e-12)), gain, passes)
+    return {"lufs": round(float(lufs), 2), "max_lufs": round(float(loudest), 2),
             "peak_db": round(20 * float(np.log10(max(peak, 1e-12))), 2), "gain_db": round(float(gain), 2), "passes": passes}
