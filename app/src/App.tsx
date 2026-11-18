@@ -20,14 +20,16 @@ import { SpliceView } from './views/SpliceView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
 import { SettingsView } from './views/SettingsView'
+import { UploadView } from './views/UploadView'
 import { WelcomeView } from './views/WelcomeView'
 
-// Four pages (SCOPE.md §6.1): Create is where the tracks are made; Drums and Sounds hold the
-// material it draws on, each with its tabs.
+// Five pages (SCOPE.md §6.1): Create is where the tracks are made; Drums and Sounds hold the
+// material it draws on, each with its tabs; Upload sends exported tracks to House of Tracks.
 const NAV: { page: Page; label: string }[] = [
   { page: 'create', label: 'Create' },
   { page: 'drums', label: 'Drums' },
   { page: 'sounds', label: 'Sounds' },
+  { page: 'upload', label: 'Upload' },
   { page: 'settings', label: 'Settings' },
 ]
 export function App() {
@@ -116,6 +118,7 @@ export function App() {
         {view === 'vocalloops' && <VocalLoopsView />}
         {view === 'splice' && <SpliceView />}
         {view === 'create' && <CreateView />}
+        {view === 'upload' && <UploadView />}
         {view === 'settings' && <SettingsView />}
         </ErrorBoundary>
       </main>

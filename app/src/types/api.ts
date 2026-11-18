@@ -19,6 +19,8 @@ export interface AppSettings {
   lastProject: string | null
   /** Folder of the last stem export. */
   lastExportDir?: string | null
+  /** The folder the Upload page lists exports from (SCOPE.md §6.5b); else the last export's, else the default. */
+  uploadDir?: string | null
   /**
    * Serum 2's presets folder (SCOPE.md §6.7) the bass picks its folders under.
    */
@@ -31,6 +33,104 @@ export interface AppSettings {
   pads?: { folders: string[] }
   /** Chord stabs (SCOPE.md §6.9): what Generate's step sequencer saved. */
   stabs?: StabsSettings
+}
+
+// ---- Upload to House of Tracks (SCOPE.md §6.5b) ---------------------------
+
+/** The folders of an export that go to House of Tracks zipped. */
+export type ZipPart = 'stems' | 'midi'
+
+export interface UploadZip {
+  path: string
+  size: number
+  /** Newer than every file in the folder it was made of. */
+  fresh: boolean
+}
+
+/** What an export folder holds for the upload (absolute paths; null: not there). */
+export interface UploadCheck {
+  /** masters/mastered.wav, or a master renamed "… mastered.wav". */
+  master: string | null
+  masterInstrumental: string | null
+  mixdown: string | null
+  mixdownInstrumental: string | null
+  /** WAVs in stems/, MIDI files in midi/. */
+  stems: number
+  midi: number
+  info: boolean
+  zips: Record<ZipPart, UploadZip | null>
+}
+
+/** An export folder (it has info.txt at its top). */
+export interface UploadFolder {
+  name: string
+  path: string
+  /** info.txt's text (parsed in the page: parseInfoText). */
+  info: string
+  /** When info.txt was written (ms). */
+  modified: number
+  check: UploadCheck
+}
+
+export interface ZipProgress {
+  path: string
+  part: ZipPart
+  /** Bytes zipped of the folder's total. */
+  done: number
+  total: number
+}
+
+export type UploadStatus = 'none' | 'filled' | 'uploaded'
+
+/** What is remembered of a track's upload, by export folder name (<Library>/.drumvault/uploads.json). */
+export interface UploadRecord {
+  status: UploadStatus
+  /** Euros (PRICES); 299 until chosen. */
+  price?: number
+  /** The form's choices info.txt doesn't hold; their defaults until chosen. */
+  genre?: string
+  instrument?: string
+  vocalCategory?: string
+  /** ISO dates: when the form was last filled, when it was submitted. */
+  filledAt?: string
+  uploadedAt?: string
+}
+
+/** The values the upload form is filled with (as the form shows them; the main process maps them to the page). */
+export interface HotFields {
+  trackName: string
+  bpm: string
+  /** "F# minor" (the form's own name for it is found in the main process). */
+  key: string
+  genre: string
+  description: string
+  tags: string[]
+  price: number
+  instrument: string
+  /** The form's "This track contains". */
+  vocal: 'None' | 'Original' | 'Royalty Free' | 'AI Generated'
+  vocalCategory: string
+  lyrics: string
+}
+
+export interface HotFillRequest {
+  /** The export folder: its masters and zips are attached. */
+  folder: string
+  fields: HotFields
+}
+
+/** One field of the form after filling: what it was set to, and whether that took. */
+export interface HotFillRow {
+  field: string
+  value: string
+  ok: boolean
+  note?: string
+}
+
+export interface HotFillResult {
+  rows: HotFillRow[]
+  /** Why nothing was filled (not logged in, the page didn't load). */
+  error?: string
 }
 
 export interface BassSettings {
@@ -550,6 +650,26 @@ export interface DrumvaultAPI {
   /** A take offered to new tracks again (its export thrown away). */
   unuseVocal(id: string): Promise<void>
   revealPath(path: string): Promise<void>
+
+  /** Folder dialog for the Upload page's exports. */
+  chooseUploadFolder(defaultPath: string | null): Promise<string | null>
+  /** The export folders in `dir`, newest first (SCOPE.md §6.5b). */
+  listExports(dir: string): Promise<UploadFolder[]>
+  checkExport(path: string): Promise<UploadCheck>
+  /** Zip the export's stems/ and midi/ (those without a fresh zip) next to them; progress on onZipProgress. */
+  zipExport(path: string): Promise<UploadCheck>
+  cancelZip(path: string): Promise<void>
+  onZipProgress(cb: (p: ZipProgress) => void): () => void
+  uploadRecords(): Promise<Record<string, UploadRecord>>
+  setUploadRecord(name: string, patch: Partial<UploadRecord>): Promise<UploadRecord>
+  /** House of Tracks' upload page in its own window (its login kept). */
+  hotOpen(): Promise<void>
+  /** Fill the upload form and attach the files. Never submits it. */
+  hotFill(req: HotFillRequest): Promise<HotFillResult>
+  /** Dev only: every field of the page as it is now, written to a JSON file; returns its path. */
+  hotDump(): Promise<string>
+  /** House of Tracks' window: a page loaded (its URL), or the window closed (null). */
+  onHotPage(cb: (url: string | null) => void): () => void
   /** A splice.com page (a pack's) in the browser. */
   openSplice(url: string): Promise<void>
   /** Open a folder in Finder; resolves to an error message, or '' when it opened. */

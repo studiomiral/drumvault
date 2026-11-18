@@ -8,6 +8,7 @@ const artwork: Record<MenuIconName, string> = {
   create: new URL('../assets/menu-flat/generate.svg', import.meta.url).href,
   drums: new URL('../assets/menu-flat/process.svg', import.meta.url).href,
   sounds: new URL('../assets/menu-flat/stabs.svg', import.meta.url).href,
+  upload: new URL('../assets/menu-flat/upload.svg', import.meta.url).href,
   settings: new URL('../assets/menu-flat/settings.svg', import.meta.url).href,
   shortcuts: new URL('../assets/menu-flat/shortcuts.svg', import.meta.url).href,
 }

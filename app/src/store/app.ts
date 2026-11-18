@@ -3,10 +3,10 @@ import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo, SerumPreset } from '../types/api'
 
-export type View = 'create' | 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'strings' | 'basses' | 'ambience' | 'vocalloops' | 'splice' | 'settings'
+export type View = 'create' | 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'strings' | 'basses' | 'ambience' | 'vocalloops' | 'splice' | 'upload' | 'settings'
 
-/** The sidebar's pages: Create, Drums (its tabs: Drumvault, Library; Grid opens from a zip), Sounds, Settings. */
-export type Page = 'create' | 'drums' | 'sounds' | 'settings'
+/** The sidebar's pages: Create, Drums (its tabs: Drumvault, Library; Grid opens from a zip), Sounds, Upload, Settings. */
+export type Page = 'create' | 'drums' | 'sounds' | 'upload' | 'settings'
 
 export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
   create: [{ view: 'create', label: 'Create' }],
@@ -15,6 +15,7 @@ export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
     { view: 'stabs', label: 'Chord Stabs' }, { view: 'hits', label: 'Disco Hits' }, { view: 'strings', label: 'Strings' },
     { view: 'basses', label: 'Bass Samples' }, { view: 'ambience', label: 'Ambience' }, { view: 'vocalloops', label: 'Vocal Loops' }, { view: 'midi', label: 'MIDI' },
   ],
+  upload: [{ view: 'upload', label: 'Upload' }],
   settings: [{ view: 'settings', label: 'Settings' }],
 }
 

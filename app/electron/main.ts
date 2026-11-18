@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
-import type { AppSettings, EngineStatus, JobMethod, SampleMeta } from '../src/types/api'
+import type { AppSettings, EngineStatus, HotFillRequest, JobMethod, SampleMeta, UploadRecord } from '../src/types/api'
 import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
@@ -18,6 +18,8 @@ import {
 import * as eleven from './eleven'
 import { compositionPlan, type VocalAnalysis, type VocalMeta, type VocalRequest } from '../src/vocals/plan'
 import { JobTracker } from './jobs'
+import { dumpHot, fillHot, openHot } from './hotwindow'
+import { checkFolder, INFO_FILE, listExports, readUploads, writeUpload, ZIP_PARTS, zipPart } from './upload'
 import { Sidecar } from './sidecar'
 
 // Tests and parallel profiles can point the app at their own settings folder. Otherwise settings,
@@ -185,6 +187,19 @@ function dragIcon(): Electron.NativeImage {
     }
   }
   return nativeImage.createFromBitmap(buf, { width: size, height: size })
+}
+
+/** An absolute folder (the Upload page's list of exports). */
+function exportFolder(dir: string): string {
+  if (typeof dir !== 'string' || !isAbsolute(dir)) throw new Error(`Bad folder: ${dir}`)
+  return resolve(dir)
+}
+
+/** An export's project folder: absolute, with info.txt at its top. */
+function exportProject(path: string): string {
+  const dir = exportFolder(path)
+  if (!existsSync(join(dir, INFO_FILE))) throw new Error(`Not an export (no info.txt): ${dir}`)
+  return dir
 }
 
 function registerIpc(): void {
@@ -552,6 +567,53 @@ function registerIpc(): void {
     if (!sidecar) throw new Error('Engine is not running')
     return sidecar.request('scan_references', { analyze, settings: engineSettings() }, 1_800_000)
   })
+  // ---- upload to House of Tracks (SCOPE.md §6.5b) --------------------------
+  ipcMain.handle('upload:chooseDir', async (_e, defaultPath: string | null) => {
+    const r = await dialog.showOpenDialog(win!, {
+      title: 'Exports to upload', buttonLabel: 'Choose', defaultPath: defaultPath ?? undefined, properties: ['openDirectory'],
+    })
+    return r.canceled ? null : r.filePaths[0]
+  })
+  ipcMain.handle('upload:list', (_e, dir: string) => listExports(exportFolder(dir)))
+  ipcMain.handle('upload:check', (_e, path: string) => checkFolder(exportProject(path)))
+  // Zip stems/ and midi/ (the ones without a fresh zip) in a child process each, one after the other.
+  const zipping = new Map<string, () => void>()
+  ipcMain.handle('upload:zip', async (_e, path: string) => {
+    const dir = exportProject(path)
+    if (zipping.has(dir)) throw new Error('Already zipping this track')
+    let cancelled = false
+    let cancel = () => { cancelled = true }
+    zipping.set(dir, () => cancel())
+    try {
+      const before = await checkFolder(dir)
+      for (const part of ZIP_PARTS) {
+        if (cancelled) throw new Error('Cancelled')
+        if (before.zips[part]?.fresh || !(part === 'stems' ? before.stems : before.midi)) continue
+        const job = zipPart(dir, part, (done, total) => send('upload-zip', { path: dir, part, done, total }))
+        cancel = () => { cancelled = true; job.cancel() }
+        await job.done
+      }
+      return await checkFolder(dir)
+    } finally {
+      zipping.delete(dir)
+    }
+  })
+  ipcMain.handle('upload:cancelZip', (_e, path: string) => zipping.get(exportProject(path))?.())
+  ipcMain.handle('upload:records', () => readUploads(lib()))
+  ipcMain.handle('upload:setRecord', (_e, name: string, patch: Partial<UploadRecord>) => writeUpload(lib(), name, patch))
+  const hotPage = (url: string | null) => send('hot-page', url)
+  ipcMain.handle('hot:open', () => {
+    openHot(hotPage)
+  })
+  ipcMain.handle('hot:fill', async (_e, req: HotFillRequest) => {
+    const dir = exportProject(req.folder)
+    return fillHot(req.fields, await checkFolder(dir), hotPage)
+  })
+  ipcMain.handle('hot:dump', () => {
+    if (app.isPackaged) throw new Error('Dump form is for development only')
+    return dumpHot(join(app.getPath('userData'), 'houseoftracks'))
+  })
+
   ipcMain.handle('shell:revealPath', (_e, path: string) => shell.showItemInFolder(path))
   ipcMain.handle('shell:openFolder', (_e, path: string) => shell.openPath(path))
   // A Splice pack's page in the browser (only splice.com: nothing else leaves the app this way).
@@ -673,6 +735,7 @@ function buildMenu(): void {
         { label: 'MIDI', click: () => send('menu', 'view:midi') },
         { label: 'Splice', click: () => send('menu', 'view:splice') },
         { type: 'separator' },
+        { label: 'Upload', click: () => send('menu', 'view:upload') },
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'view:settings') },
         { type: 'separator' },
         { role: 'reload' },

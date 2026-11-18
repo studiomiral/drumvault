@@ -90,32 +90,108 @@ export function safeName(s: string): string {
 /** The text file at the top of the export folder: the track's tempo, key and length, and where its vocals come from. */
 export const INFO_FILE = 'info.txt'
 
+/** What info.txt says about a track (SCOPE.md §6.5); the Upload page reads it back (§6.5b). */
+export interface TrackInfo {
+  /** The project folder's name ("Bring It - 129 BPM - F# minor"). */
+  title: string
+  /** As written: "129", "122.50". */
+  bpm: string
+  /** "F# minor", or "none". */
+  key: string
+  /** "5:27 (176 bars)". */
+  length: string
+  /** The "About the track" lines without the Tags line, one per line. */
+  description: string
+  /** Three of House of Tracks' tags (HOT_TAGS). */
+  tags: string[]
+  /** The credits block under "Vocals", one line per line ('' for a track that doesn't sing). */
+  vocals: string
+}
+
 /**
  * info.txt (SCOPE.md §6.5): the track (title, BPM, key, length), a short description of it (describe.ts) and, for each vocal it sings, where
  * it is from: a Splice loop's file, pack, label and the pack's page; a made vocal's ElevenLabs credit.
  */
 export function infoText(project: Project, o: Pick<ExportOptions, 'folder' | 'range'>, takes: VocalMeta[]): string {
+  return formatInfo(trackInfo(project, o, takes))
+}
+
+/** What info.txt holds for this export. */
+export function trackInfo(project: Project, o: Pick<ExportOptions, 'folder' | 'range'>, takes: VocalMeta[]): TrackInfo {
   const bars = Math.round((o.range.endBeat - o.range.startBeat) / BEATS_PER_BAR)
   const seconds = Math.round(((o.range.endBeat - o.range.startBeat) * 60) / project.bpm)
   const key = project.generation?.key
-  const lines = [
-    `Title: ${o.folder}`,
-    `BPM: ${formatBpm(project.bpm)}`,
-    `Key: ${key ? keyName(key) : 'none'}`,
-    `Length: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} (${bars} bars)`,
-  ]
   const sung = vocalTakes(project).map((id) => takes.find((t) => t.id === id)).filter((t): t is VocalMeta => !!t)
-  lines.push('', 'About the track', ...describeTrack(project, sung, bars), `Tags: ${houseTags(project, sung).join(', ')}`)
-  lines.push('', sung.length ? 'Vocals' : 'Vocals: none')
+  const credits: string[] = []
   for (const t of sung) {
     if (t.source === 'splice') {
       const sp = t.splice
-      lines.push(`- ${sp?.file ?? t.id}`, `  Splice pack: ${sp?.pack ?? 'unknown'}${sp?.label ? ` (${sp.label})` : ''}`, `  ${sp?.url ?? 'Link: unknown'}`)
+      credits.push(`- ${sp?.file ?? t.id}`, `  Splice pack: ${sp?.pack ?? 'unknown'}${sp?.label ? ` (${sp.label})` : ''}`, `  ${sp?.url ?? 'Link: unknown'}`)
     } else {
-      lines.push(`- “${t.lines.join(' / ')}”`, `  AI-generated with ElevenLabs (${t.voice ?? 'voice'}, ${t.mood ?? 'mood'}); lyrics written for this app`)
+      credits.push(`- “${t.lines.join(' / ')}”`, `  AI-generated with ElevenLabs (${t.voice ?? 'voice'}, ${t.mood ?? 'mood'}); lyrics written for this app`)
     }
   }
+  return {
+    title: o.folder,
+    bpm: formatBpm(project.bpm),
+    key: key ? keyName(key) : 'none',
+    length: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} (${bars} bars)`,
+    description: describeTrack(project, sung, bars).join('\n'),
+    tags: houseTags(project, sung),
+    vocals: credits.join('\n'),
+  }
+}
+
+/** info.txt's text. */
+export function formatInfo(i: TrackInfo): string {
+  const lines = [`Title: ${i.title}`, `BPM: ${i.bpm}`, `Key: ${i.key}`, `Length: ${i.length}`]
+  lines.push('', 'About the track', ...(i.description ? i.description.split('\n') : []), `Tags: ${i.tags.join(', ')}`)
+  lines.push('', i.vocals ? 'Vocals' : 'Vocals: none', ...(i.vocals ? i.vocals.split('\n') : []))
   return `${lines.join('\n')}\n`
+}
+
+/**
+ * info.txt read back (the Upload page, SCOPE.md §6.5b). Lenient: a field it doesn't find is ''
+ * (tags: none), so an older or hand-edited file still lists.
+ */
+export function parseInfoText(text: string): TrackInfo {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  const field = (name: string) => {
+    const l = lines.find((x) => x.startsWith(`${name}:`))
+    return l ? l.slice(name.length + 1).trim() : ''
+  }
+  // A block runs from its heading to the next blank line (the vocals: to the end).
+  const block = (heading: string, toEnd = false) => {
+    const at = lines.findIndex((x) => x.trim() === heading)
+    if (at < 0) return []
+    const rest = lines.slice(at + 1)
+    const end = toEnd ? rest.length : rest.findIndex((x) => !x.trim())
+    return rest.slice(0, end < 0 ? rest.length : end)
+  }
+  const about = block('About the track')
+  const tagLine = about.find((x) => x.startsWith('Tags:'))
+  const vocals = block('Vocals', true)
+  while (vocals.length && !vocals[vocals.length - 1].trim()) vocals.pop()
+  return {
+    title: field('Title'),
+    bpm: field('BPM'),
+    key: field('Key'),
+    length: field('Length'),
+    description: about.filter((x) => x !== tagLine).join('\n'),
+    tags: tagLine ? tagLine.slice(5).split(',').map((t) => t.trim()).filter(Boolean) : [],
+    vocals: vocals.join('\n'),
+  }
+}
+
+/** The track's own name from its folder's: "Bring It" for "Bring It - 129 BPM - F# minor" (exportFolderName's suffix off). */
+export function trackNameOf(title: string): string {
+  return title.replace(/ - [\d.]+ BPM( - [A-G][#b]? (major|minor))?$/, '').trim() || title
+}
+
+/** Seconds of a Length ("5:27 (176 bars)"), or null. */
+export function lengthSeconds(length: string): number | null {
+  const m = /^(\d+):(\d{2})/.exec(length.trim())
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null
 }
 
 /** "E minor" for "Em", "F# major" for "F#". */

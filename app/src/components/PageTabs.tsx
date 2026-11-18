@@ -1,7 +1,7 @@
 import { PAGE_TABS, pageOf, useApp, type View } from '../store/app'
 import { cx, PageTitle } from './ui'
 
-const TITLES = { create: 'Create', drums: 'Drums', sounds: 'Sounds', settings: 'Settings' } as const
+const TITLES = { create: 'Create', drums: 'Drums', sounds: 'Sounds', upload: 'Upload', settings: 'Settings' } as const
 
 /**
  * A page's title and its tabs (SCOPE.md §6.1): Drums (Drumvault, Library), Sounds (Chord Stabs,
