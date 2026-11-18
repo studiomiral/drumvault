@@ -1,11 +1,11 @@
 """Mastering (SCOPE.md §6.5): the export's mixdown through Ozone 11 into `mastered.wav`, as House of
-Tracks takes it: integrated loudness on the target (`master_target_lufs`), the limiter's ceiling at
-`master_ceiling_db`.
+Tracks takes it: its drops (the loudest short-term loudness) on the target (`master_target_lufs`),
+the limiter's ceiling at `master_ceiling_db`.
 
 The basic chain: the mixdown is first brought to one level (`master_pre_lufs`), so the compressor
 works the same on every track; Ozone 11 Dynamics glues it gently (every band alike, RMS detection);
 the Ozone 11 Maximizer, with some soft clip, takes it the rest of the way. Its input gain is solved
-pass by pass until the result measures the target (integrated LUFS, BS.1770 via pyloudnorm). Ozone
+pass by pass until the result's loudest 3 s measure the target (short-term LUFS, BS.1770). Ozone
 is hosted like Serum (pedalboard), which compensates its look-ahead, so mastered.wav lines up with
 the mixdown sample for sample and has its length. A pass over a six-minute track takes a few seconds.
 """
@@ -37,6 +37,18 @@ def integrated_lufs(data: np.ndarray, sr: int) -> float:
     """Integrated loudness (BS.1770-4, gated) of (frames, channels) audio; -inf when silent."""
     import pyloudnorm
     return float(pyloudnorm.Meter(sr).integrated_loudness(data))
+
+
+def max_short_term_lufs(data: np.ndarray, sr: int, window_s: float, hop_s: float = 0.1) -> float:
+    """The loudest `window_s` of (frames, channels) audio in LUFS (BS.1770 short-term at 3 s: each
+    channel K-weighted, their powers summed, ungated), windows every `hop_s`; -inf when silent."""
+    from .audioutil import k_weight
+    power = sum(np.square(k_weight(data[:, c], sr)) for c in range(data.shape[1]))
+    n = min(len(power), max(1, int(round(window_s * sr))))
+    c = np.concatenate([[0.0], np.cumsum(power)])
+    starts = np.arange(0, len(power) - n + 1, max(1, int(round(hop_s * sr))))
+    loudest = float(np.max(c[starts + n] - c[starts])) / n
+    return -0.691 + 10 * np.log10(loudest) if loudest > 0 else float("-inf")
 
 
 def solve_gain(render: Callable[[float], np.ndarray], loudness: Callable[[np.ndarray], float], target: float,
@@ -160,16 +172,17 @@ def master_mixdown(settings: Settings, mix_path: str, out_path: str, fmt: str = 
 
         lo, hi = (float(v.replace(",", ".")) for v in (mx.parameters["max_input_gain_db"].valid_values[0],
                                                        mx.parameters["max_input_gain_db"].valid_values[-1]))
-        gain, y, lufs, passes = solve_gain(render, lambda a: integrated_lufs(a, sr), th.master_target_lufs,
-                                           lo, hi, th.master_tolerance_lu, th.master_max_passes)
-    if abs(lufs - th.master_target_lufs) > th.master_tolerance_lu * 3:
-        raise MasterError("off_target", f"Mastering reached {lufs:.1f} LUFS, not {th.master_target_lufs} (Maximizer at {gain:.1f} dB)")
+        gain, y, short, passes = solve_gain(render, lambda a: max_short_term_lufs(a, sr, th.master_short_term_s),
+                                            th.master_target_lufs, lo, hi, th.master_tolerance_lu, th.master_max_passes)
+    if abs(short - th.master_target_lufs) > th.master_tolerance_lu * 3:
+        raise MasterError("off_target", f"Mastering reached {short:.1f} LUFS at its loudest, not {th.master_target_lufs} (Maximizer at {gain:.1f} dB)")
     y = y[:data.shape[0]]
+    lufs = integrated_lufs(y, sr)
     tmp = out.with_name(f".{out.name}.part")
     sf.write(str(tmp), y, sr, subtype=SUBTYPES[fmt], format="WAV")
     tmp.replace(out)
     peak = float(np.max(np.abs(y))) if y.size else 0.0
-    log.info("mastered %s: %.2f LUFS, peak %.2f dBFS, Maximizer %.2f dB (%d passes)",
-             out.name, lufs, 20 * np.log10(max(peak, 1e-12)), gain, passes)
-    return {"lufs": round(lufs, 2), "peak_db": round(20 * float(np.log10(max(peak, 1e-12))), 2),
-            "gain_db": round(gain, 2), "passes": passes}
+    log.info("mastered %s: %.2f LUFS short-term at its loudest, %.2f integrated, peak %.2f dBFS, Maximizer %.2f dB (%d passes)",
+             out.name, short, lufs, 20 * np.log10(max(peak, 1e-12)), gain, passes)
+    return {"lufs": round(float(lufs), 2), "short_term_lufs": round(float(short), 2),
+            "peak_db": round(20 * float(np.log10(max(peak, 1e-12))), 2), "gain_db": round(float(gain), 2), "passes": passes}

@@ -131,8 +131,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             )}
             {phase.result?.mastered && (
               <p className="text-muted mb-2">
-                Mastered with Ozone 11: <b className="text-text">{phase.result.mastered.lufs.toFixed(1)} LUFS</b> integrated,
-                peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
+                Mastered with Ozone 11: the drops at <b className="text-text">{phase.result.mastered.short_term_lufs.toFixed(1)} LUFS</b> short-term,
+                the whole track {phase.result.mastered.lufs.toFixed(1)} LUFS integrated, peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
               </p>
             )}
             {phase.result?.preflight && <Preflight result={phase.result.preflight} />}

@@ -201,7 +201,10 @@ export interface CleanRendersResult {
 
 /** master_mixdown's answer (schemas.MasterResult). */
 export interface MasterResult {
+  /** Integrated: the whole track. */
   lufs: number;
+  /** Its loudest 3 s (the drops), short-term: what the master is set by. */
+  short_term_lufs: number;
   peak_db: number;
   gain_db: number;
   passes: number;

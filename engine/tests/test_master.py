@@ -8,7 +8,7 @@ import pytest
 import soundfile as sf
 
 from drumvault_engine.config import Settings
-from drumvault_engine.master import MasterError, integrated_lufs, master_mixdown, solve_gain
+from drumvault_engine.master import MasterError, integrated_lufs, master_mixdown, max_short_term_lufs, solve_gain
 
 SR = 44100
 
@@ -37,6 +37,17 @@ def test_solves_a_limiters_gain_to_the_target():
     # Out of reach: the closest one tried, at the end of the range.
     gain, _, lufs, _ = solve_gain(render, lambda a: integrated_lufs(a, SR), 3.0, 0.0, 20.0, 0.1, 6)
     assert lufs < 3.0 and gain > 15
+
+
+def test_measures_the_loudest_three_seconds():
+    # A quiet intro, then a 4 s drop (steady noise) much louder: the loudest 3 s are the drop's, as a meter reads it alone.
+    x = club_mix(20.0, 0.05)
+    drop = (0.2 * np.random.default_rng(1).standard_normal((SR * 4, 2))).astype(np.float32)
+    x[SR * 10:SR * 14] = drop
+    s = max_short_term_lufs(x, SR, 3.0)
+    assert abs(s - integrated_lufs(drop[SR // 2:SR * 7 // 2], SR)) < 0.3
+    assert s > max_short_term_lufs(x[:SR * 10], SR, 3.0) + 6
+    assert max_short_term_lufs(np.zeros((SR * 4, 2), np.float32), SR, 3.0) == float("-inf")
 
 
 def test_keeps_the_master_next_to_the_mixdown(tmp_path: Path):
@@ -72,8 +83,10 @@ def test_masters_through_ozone_on_target_with_the_ceiling(tmp_path: Path):
     y, sr = sf.read(str(tmp_path / "mastered.wav"), dtype="float32", always_2d=True)
     assert sr == SR and y.shape == x.shape  # the mixdown's length: every file of the export alike
     th = s.thresholds
-    assert abs(integrated_lufs(y, SR) - th.master_target_lufs) <= th.master_tolerance_lu + 0.02
-    assert abs(r["lufs"] - th.master_target_lufs) <= th.master_tolerance_lu
+    # Its loudest 3 s (the drops) on the target; the whole track, with its quieter parts, under it.
+    assert abs(max_short_term_lufs(y, SR, th.master_short_term_s) - th.master_target_lufs) <= th.master_tolerance_lu + 0.02
+    assert abs(r["short_term_lufs"] - th.master_target_lufs) <= th.master_tolerance_lu
+    assert abs(r["lufs"] - integrated_lufs(y, SR)) <= 0.01 and r["lufs"] < r["short_term_lufs"]
     assert np.max(np.abs(y)) <= 10 ** (th.master_ceiling_db / 20) + 1e-4
     # Ozone's look-ahead is compensated: the master lines up with the mixdown.
     a, b = x[SR * 5:SR * 6, 0], y[SR * 5 - 2000:SR * 6 + 2000, 0]
