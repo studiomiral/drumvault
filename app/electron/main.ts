@@ -12,7 +12,7 @@ import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/ty
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
-  augmentedPath, deleteProjectFile, expandSamplePaths, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist,
+  augmentedPath, deleteProjectFile, expandSamplePaths, exportFile, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist,
   readProjectFile, saveSettings, which, writeProjectFile,
 } from './fs'
 import * as eleven from './eleven'
@@ -400,10 +400,6 @@ function registerIpc(): void {
   ipcMain.handle('lib:similar', (_e, id: number, limit: number) => reader.similar(id, limit))
 
   // ---- stem export --------------------------------------------------------
-  const exportFile = (dir: string, name: string) => {
-    if (!isAbsolute(dir) || name !== basename(name) || !/\.(wav|mid)$/i.test(name)) throw new Error(`Bad export path: ${name}`)
-    return join(dir, name)
-  }
   ipcMain.handle('export:defaultDir', () => join(app.getPath('music'), 'Drumvault Exports'))
   ipcMain.handle('export:chooseDir', async (_e, defaultPath: string | null) => {
     const r = await dialog.showOpenDialog(win!, {

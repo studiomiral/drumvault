@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { augmentedPath, expandSamplePaths, expandZipPaths, libraryFile, loadSettings, saveSettings } from '../electron/fs'
+import { augmentedPath, expandSamplePaths, expandZipPaths, exportFile, libraryFile, loadSettings, saveSettings } from '../electron/fs'
 
 describe('fs helpers', () => {
   it('finds zips in dropped folders, skipping junk', async () => {
@@ -33,6 +33,15 @@ describe('fs helpers', () => {
     expect(() => libraryFile('/lib', '../etc/passwd')).toThrow()
     expect(() => libraryFile('/lib', '/etc/passwd')).toThrow()
     expect(() => libraryFile('/lib', '')).toThrow()
+  })
+
+  it('writes the files an export holds, and nothing else', () => {
+    for (const name of ['Kick.wav', 'mixdown.wav', 'mastered instrumental.wav', 'Bass.mid', 'info.txt']) {
+      expect(exportFile('/out/Track/stems', name)).toBe(`/out/Track/stems/${name}`)
+    }
+    expect(() => exportFile('/out', '../x.wav')).toThrow()
+    expect(() => exportFile('out', 'Kick.wav')).toThrow()
+    expect(() => exportFile('/out', 'run.sh')).toThrow()
   })
 
   it('adds Homebrew and uv locations to PATH once', () => {

@@ -87,6 +87,15 @@ async function expandFiles(paths: string[], wanted: (path: string) => boolean): 
   return [...new Set(out)]
 }
 
+/**
+ * Absolute path of a file an export writes (or the engine reads back from it): a plain file name
+ * in an absolute folder, of the kinds an export holds (WAVs, MIDI, info.txt). Anything else is refused.
+ */
+export function exportFile(dir: string, name: string): string {
+  if (!isAbsolute(dir) || name !== basename(name) || !/\.(wav|mid|txt)$/i.test(name)) throw new Error(`Bad export path: ${name}`)
+  return join(dir, name)
+}
+
 /** Absolute path of a library-relative sample path; refuses paths escaping the library. */
 export function libraryFile(library: string, relPath: string): string {
   const abs = resolve(library, relPath)
