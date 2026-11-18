@@ -4,7 +4,7 @@
 
 import { bassPath } from '../audio/schedule'
 import { BEATS_PER_BAR } from '../lib/project'
-import type { SampleListItem } from '../types/api'
+import type { SampleListItem, SpliceCandidate } from '../types/api'
 import type { BassRender } from '../types/project'
 import { takeName, type VocalAnalysis, type VocalMeta } from '../vocals/plan'
 import { parseKey } from './bassline'
@@ -36,6 +36,20 @@ export function loopFits(t: VocalTake, key: string | null, bpm: number): boolean
   if (!k || !key || Math.abs(hitTranspose({ key_label: k }, key)) > LOOP_MAX_SHIFT) return false
   const tempo = t.splice?.bpm
   return tempo == null || Math.abs(tempo - bpm) <= LOOP_MAX_BPM
+}
+
+/**
+ * A vocal loop in the Splice folder, not imported yet, that a track in `key` at `bpm` might sing,
+ * going by its name: its key (a bare root: major or minor) within LOOP_MAX_SHIFT and its tempo
+ * within LOOP_MAX_BPM. A name without a key or a tempo may still fit: the import reads them, and
+ * `loopFits` decides on the take.
+ */
+export function folderLoopFits(c: Pick<SpliceCandidate, 'kind' | 'imported' | 'key_label' | 'key_source' | 'bpm'>, key: string | null, bpm: number): boolean {
+  if (c.kind !== 'vocal' || c.imported || !key) return false
+  if (c.bpm != null && Math.abs(c.bpm - bpm) > LOOP_MAX_BPM) return false
+  if (!c.key_label) return true
+  const keys = c.key_source === 'root' ? [c.key_label.replace(/m$/, ''), `${c.key_label.replace(/m$/, '')}m`] : [c.key_label]
+  return keys.some((k) => Math.abs(hitTranspose({ key_label: k }, key)) <= LOOP_MAX_SHIFT)
 }
 
 /** A take as the generator's pick (kept by Keep, avoided by a re-roll). */

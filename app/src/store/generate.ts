@@ -21,7 +21,7 @@ import { bassPatches, bassSettings, loadBass, saveBassSettings, useBass, type Ba
 import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
-import { LOOP_CHANCE, loopFits, type VocalTake } from '../generate/vocals'
+import { folderLoopFits, LOOP_CHANCE, loopFits, type VocalTake } from '../generate/vocals'
 import { takeName, type VocalRequest } from '../vocals/plan'
 import { hitSampleId, hitTranspose } from '../generate/disco'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type LoopBeats } from '../generate/bassline'
@@ -30,7 +30,7 @@ import { bestOf, bestOfSteps, CANDIDATES } from '../generate/score'
 import { serializeProject } from '../lib/project'
 import { nextGeneratedName, onProjects, openProject, refreshProjectList, saveNow, createProject, deleteCurrentProject } from '../arrange/persistence'
 import { useArrange } from './arrange'
-import type { HitItem, SampleListItem, SavedStabRhythm, TrackArrangement } from '../types/api'
+import type { HitItem, SampleListItem, SavedStabRhythm, SpliceCandidate, TrackArrangement } from '../types/api'
 import type { ReferenceTrack } from '../types/engine'
 import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
 import { attempt, useApp } from './app'
@@ -855,23 +855,88 @@ export function setVocalLoopOptions(patch: Partial<GenerateSettings['vocalLoops'
   if (patch.enabled !== undefined) invalidate()
 }
 
+/** The Splice folder's vocal loops (a scan of names and headers: a few seconds), kept for the session. */
+let folderVocals: Promise<SpliceCandidate[]> | null = null
+function spliceFolderVocals(): Promise<SpliceCandidate[]> {
+  folderVocals ??= api.scanSplice().then((s) => s.candidates.filter((c) => c.kind === 'vocal')).catch((e) => {
+    folderVocals = null
+    throw e
+  })
+  return folderVocals
+}
+/** Folder loops imported this session for a track (they're takes now, or came out without a phrase). */
+const folderTried = new Set<string>()
+/** Folder loops imported at most per click, when their name fits but the take may not. */
+const FOLDER_TRIES = 4
+
+/** The Splice loops a track in `key` at `bpm` could sing that aren't in the library yet (by their names). */
+async function folderLoops(key: string | null, bpm: number): Promise<SpliceCandidate[]> {
+  let all: SpliceCandidate[]
+  try {
+    all = await spliceFolderVocals()
+  } catch {
+    return []  // no engine or no Splice folder: the imported loops only
+  }
+  const taken = new Set(useVocals.getState().vocals.map((v) => v.splice?.original).filter(Boolean))
+  return all.filter((c) => !folderTried.has(c.path) && !taken.has(c.path) && folderLoopFits(c, key, bpm))
+}
+
 /**
- * Another Splice vocal loop for the track on screen (the Vocal Loops module): one that fits its key
- * and tempo and isn't the one it sings, placed as Generate would. It replaces whatever the track
- * sings (a Splice loop or an ElevenLabs take: one vocal per track). False when none fits.
+ * A Splice vocal loop for the track on screen (the Vocals module), drawn at random from all that fit
+ * its key and tempo and aren't the one it sings: the imported loops, and the Splice folder's (by
+ * their names), imported when drawn and sung if the take fits. Placed as Generate would; it replaces
+ * whatever the track sings (one vocal per track). 'none' when nothing fits, 'gone' when the track
+ * left the screen meanwhile.
  */
-export function newVocalLoop(): boolean {
-  const { samples } = useGenerate.getState()
+export async function newVocalLoop(): Promise<{ placed: string; from: 'library' | 'folder' } | 'none' | 'gone' | 'busy'> {
+  if (useVocals.getState().making) return 'busy'
   const g = current()
-  if (!g || !samples) return false
+  if (!g) return 'none'
+  const was = useProject.getState().project.createdAt
   const now = g.picks.vocal?.rel_path
-  const fits = spliceTakes().filter((t) => loopFits(t, g.key, g.project.bpm) && `Vocals/${t.id}/vocal.wav` !== now)
-  if (!fits.length) return false
-  const take = fits[Math.floor(Math.random() * fits.length)]
-  const next = rerollVocal(samples, { ...options(), vocals: { takes: [take] } }, g, randomSeed())
-  if (!next) return false
-  apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.sample.relPath.startsWith('Vocals/') || c.sample.relPath.startsWith('.drumvault/vocals/')).map((c) => c.id), 'New vocal loop')
-  return true
+  const fits = (t: VocalTake) => loopFits(t, g.key, g.project.bpm) && `Vocals/${t.id}/vocal.wav` !== now
+  useVocals.setState({ making: true })
+  try {
+    const pool: ({ take: VocalTake } | { file: SpliceCandidate })[] = [
+      ...spliceTakes().filter(fits).map((take) => ({ take })),
+      ...(await folderLoops(g.key, g.project.bpm)).map((file) => ({ file })),
+    ]
+    const rng = new Rng(randomSeed())
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = rng.int(0, i)
+      ;[pool[i], pool[j]] = [pool[j], pool[i]]
+    }
+    let tries = 0
+    for (const p of pool) {
+      let take = 'take' in p ? p.take : null
+      if ('file' in p) {
+        if (tries++ >= FOLDER_TRIES) continue
+        folderTried.add(p.file.path)
+        const r = await api.importVocalLoops([p.file.path])
+        await loadVocals()
+        const id = r.imported[0]?.id
+        take = (id && spliceTakes().find((t) => t.id === id)) || null
+        if (!take || !fits(take)) continue  // its key or tempo heard otherwise, or no phrase: it stays on the Vocal Loops page
+      }
+      if (!take) continue
+      if (useProject.getState().project.createdAt !== was) return 'gone'
+      const { samples } = useGenerate.getState()
+      const at = current()
+      if (!at || !samples) return 'gone'
+      const next = rerollVocal(samples, { ...options(), vocals: { takes: [take] } }, at, randomSeed())
+      if (!next) continue
+      apply(next, [...at.project.clips, ...next.project.clips].filter((c) => c.sample.relPath.startsWith('Vocals/') || c.sample.relPath.startsWith('.drumvault/vocals/')).map((c) => c.id), now ? 'New vocal loop' : 'Add a vocal')
+      return { placed: takeName(take), from: 'take' in p ? 'library' : 'folder' }
+    }
+    return 'none'
+  } finally {
+    useVocals.setState({ making: false })
+  }
+}
+
+/** How many vocal loops could be drawn for a track in `key` at `bpm`: imported, and in the Splice folder by name. */
+export async function vocalLoopsFitting(key: string | null, bpm: number): Promise<{ library: number; folder: number }> {
+  return { library: spliceTakes().filter((t) => loopFits(t, key, bpm)).length, folder: (await folderLoops(key, bpm)).length }
 }
 
 /** The take the open track sings (its generation's pick), once it's analysed. */

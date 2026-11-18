@@ -8,6 +8,7 @@ import { SERUM_MODULES } from '../components/SerumFolders'
 import { loadBass, useBass } from '../store/bass'
 import { loadReferences } from '../store/generate'
 import { cleanRenders } from '../store/renders'
+import { ELEVENLABS } from '../vocals/plan'
 import type { CleanRendersResult, ReferencesResult } from '../types/engine'
 import type { ElevenStatus, LibraryFacets } from '../types/api'
 import type { Category } from '../types/engine'
@@ -172,7 +173,7 @@ export function SettingsView() {
 
           <StorageSection />
 
-          <ElevenLabsSection />
+          {ELEVENLABS && <ElevenLabsSection />}
 
           <section>
             <SectionTitle right={<Button variant="ghost" onClick={() => void refreshDeps()}>Check again</Button>}>Engine</SectionTitle>

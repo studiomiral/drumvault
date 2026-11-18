@@ -2,6 +2,7 @@
 
 import { create } from 'zustand'
 import { laneRole } from '../generate/generator'
+import { ELEVENLABS } from '../vocals/plan'
 import type { ProjectFileInfo } from '../types/project'
 
 /** What Create's side panel shows: the track (its key, structure, choices), a module, or a lane (by name). */
@@ -11,7 +12,7 @@ export type Panel = { module: 'track' | 'bass' | 'chords' | 'vocals' | 'vocalloo
 export function panelOf(laneName: string): Panel {
   const role = laneRole(laneName)
   return role === 'bass' ? { module: 'bass' } : role === 'stab' || role === 'stab2' || role === 'stab3' ? { module: 'chords' }
-    : role === 'vocal' || role === 'vchop' ? { module: 'vocals' } : role === 'strings' ? { module: 'strings' } : role === 'pad' ? { module: 'pads' } : role === 'bed' ? { module: 'ambience' } : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
+    : role === 'vocal' || role === 'vchop' ? { module: ELEVENLABS ? 'vocals' : 'vocalloops' } : role === 'strings' ? { module: 'strings' } : role === 'pad' ? { module: 'pads' } : role === 'bed' ? { module: 'ambience' } : role === 'disco' || role === 'disco2' ? { module: 'disco' } : { lane: laneName }
 }
 
 export const MIN_PX_PER_BEAT = 0.5  // 192 bars fit in ~400 px
@@ -61,7 +62,9 @@ const PANEL_KEY = 'drumvault.create.panel'
 function savedPanel(): Panel | null {
   try {
     const v = localStorage.getItem(PANEL_KEY)
-    return v == null ? { module: 'track' } : (JSON.parse(v) as Panel | null)
+    const p = v == null ? ({ module: 'track' } as Panel) : (JSON.parse(v) as Panel | null)
+    // The ElevenLabs module hidden: its place goes to the Splice vocals.
+    return p && 'module' in p && p.module === 'vocals' && !ELEVENLABS ? { module: 'vocalloops' } : p
   } catch {
     return { module: 'track' }
   }

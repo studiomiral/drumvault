@@ -2,6 +2,12 @@
 // over by one voice, nearly a cappella, at the library tempo and in a key, long enough for an
 // 8-bar phrase and many chops; its vocal is split from it afterwards.
 
+/**
+ * ElevenLabs vocals shown in the app (the Vocals module, its key in Settings). Hidden for now: tracks
+ * sing Splice vocal loops only (§6.11a). The code stays; tracks that already sing a made take keep it.
+ */
+export const ELEVENLABS = false
+
 export type VocalVoice = 'female' | 'male'
 export const VOCAL_MOODS = ['soulful', 'airy', 'deep', 'uplifting', 'dark', 'gospel'] as const
 export type VocalMood = (typeof VOCAL_MOODS)[number]

@@ -17,6 +17,7 @@ import { PadsPanel } from './PadsPanel'
 import { AmbiencePanel } from './AmbiencePanel'
 import { VocalLoopsPanel } from './VocalLoopsPanel'
 import { VocalPanel } from './VocalPanel'
+import { ELEVENLABS } from '../vocals/plan'
 import { IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
 import { VerbPanel } from './VerbPanel'
 import { cx, Toggle } from './ui'
@@ -43,8 +44,8 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string }[] = 
   { module: 'track', label: 'Track' },
   { module: 'bass', label: 'Bass', on: 'On: G writes a bass for every new generation', off: 'Off: new generations have no bass' },
   { module: 'chords', label: 'Chords', on: 'On: G writes chord stabs for every new generation', off: 'Off: new generations have no chord stabs' },
-  { module: 'vocals', label: 'Vocals' },
-  { module: 'vocalloops', label: 'Vocal Loops', on: 'On: some new generations sing a Splice vocal loop that fits', off: 'Off: new generations sing no Splice vocal loop' },
+  ...(ELEVENLABS ? [{ module: 'vocals' as const, label: 'Vocals' }] : []),
+  { module: 'vocalloops', label: ELEVENLABS ? 'Vocal Loops' : 'Vocals', on: 'On: some new generations sing a Splice vocal loop that fits', off: 'Off: new generations sing no Splice vocal loop' },
   { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
   { module: 'pads', label: 'Pads', on: 'On: new generations may get a pad or a reese in their breakdowns', off: 'Off: new generations have no breakdown layer' },
   { module: 'ambience', label: 'Ambience', on: 'On: most new generations get a very quiet texture under them', off: 'Off: new generations have no ambience bed' },
@@ -121,8 +122,8 @@ export function LanePanel({ g, panel, onPanel }: {
       {'module' in panel && panel.module === 'track' && <TrackPanel g={g} />}
       {'module' in panel && panel.module === 'bass' && <BassPanel g={g} fixed />}
       {'module' in panel && panel.module === 'chords' && <ChordsPanel g={g} fixed />}
-      {'module' in panel && panel.module === 'vocals' && <VocalPanel g={g} fixed />}
-      {'module' in panel && panel.module === 'vocalloops' && <VocalLoopsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'vocals' && ELEVENLABS && <VocalPanel g={g} fixed />}
+      {'module' in panel && (panel.module === 'vocalloops' || (panel.module === 'vocals' && !ELEVENLABS)) && <VocalLoopsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'strings' && <StringsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'pads' && <PadsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'ambience' && <AmbiencePanel g={g} fixed />}

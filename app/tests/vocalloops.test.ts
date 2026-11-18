@@ -11,7 +11,7 @@ import { balanceFrom } from '../src/generate/balance'
 import { generate, rerollVocal, type GenerateOptions, type Generation } from '../src/generate/generator'
 import { Rng } from '../src/generate/rng'
 import { templateFrom, vocalAtWeights, vocalRuleOf } from '../src/generate/template'
-import { LOOP_MAX_BPM, LOOP_MAX_SHIFT, loopFits, type VocalTake } from '../src/generate/vocals'
+import { folderLoopFits, LOOP_MAX_BPM, LOOP_MAX_SHIFT, loopFits, type VocalTake } from '../src/generate/vocals'
 import type { SampleListItem, TrackArrangement } from '../src/types/api'
 import type { Category, SampleKind } from '../src/types/engine'
 import type { Project } from '../src/types/project'
@@ -63,6 +63,22 @@ describe('Splice vocal loops', () => {
     expect(loopFits(loop('a', 'Am'), null, 124)).toBe(false)
     const made = { ...loop('a', 'Am'), source: 'elevenlabs' as const, splice: undefined }
     expect(loopFits(made, 'Am', 124)).toBe(false)                   // a made vocal isn't one of the loops
+  })
+
+  it('in the Splice folder, fit by their names until imported (no key or tempo in the name: maybe)', () => {
+    const file = (key_label: string | null, bpm: number | null = 124, key_source: 'name' | 'root' | null = key_label ? 'name' : null,
+      imported: 'vocal' | null = null) => ({ kind: 'vocal' as const, imported, key_label, key_source, bpm })
+    expect(folderLoopFits(file('Am'), 'Am', 124)).toBe(true)
+    expect(folderLoopFits(file('C'), 'Am', 124)).toBe(true)          // the relative key
+    expect(folderLoopFits(file('Cm'), 'Am', 124)).toBe(false)        // 3 away
+    expect(folderLoopFits(file('Am', 129), 'Am', 124)).toBe(false)   // too fast
+    expect(folderLoopFits(file('Am', null), 'Am', 124)).toBe(true)   // a phrase
+    expect(folderLoopFits(file(null), 'Am', 124)).toBe(true)         // its key is read on import
+    expect(folderLoopFits(file('Eb', 124, 'root'), 'Cm', 124)).toBe(true)   // a bare root: Eb major is Cm's relative
+    expect(folderLoopFits(file('A', 124, 'root'), 'Am', 124)).toBe(true)    // …or A minor
+    expect(folderLoopFits(file('Am', 124, 'name', 'vocal'), 'Am', 124)).toBe(false)  // imported: a take now
+    expect(folderLoopFits({ ...file('Am'), kind: 'stab' as const }, 'Am', 124)).toBe(false)
+    expect(folderLoopFits(file('Am'), null, 124)).toBe(false)
   })
 
   const POOL = [loop('fits', 'Am'), loop('far', 'Ebm'), loop('fast', 'Am', 132), loop('used', 'Am', 124, ['Generated 01'])]
