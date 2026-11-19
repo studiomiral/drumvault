@@ -11,6 +11,9 @@ import type { Clip, Project } from '../types/project'
 import { BEATS_PER_BAR, beatToSec, VELOCITY_GAIN } from '../lib/project'
 import type { Role } from './generator'
 
+/** The stab lanes (generator.ts's STAB_ROLES; not imported from there: it imports this). */
+const STABS = new Set<Role>(['stab', 'stab2', 'stab3'])
+
 /**
  * Where the kick sits (dB, the mono measure): the level the rest is balanced against. Set so a
  * balanced mix is as loud overall as the starting mix was before balancing (median over the
@@ -51,6 +54,8 @@ export interface Balance {
   db: Record<string, number>
   tracks: number
   hits?: Partial<Record<Role, number>>
+  /** The same steps against the kick's hits: for a track without a clap (most organic ones). */
+  hitsVsKick?: Partial<Record<Role, number>>
 }
 
 /**
@@ -71,7 +76,7 @@ export function balanceFrom(arrangements: TrackArrangement[]): Balance {
     db.vocal = Math.round(median(sung) * 2) / 2
     db.vchop = db.vocal + DEFAULT_DB.vchop - DEFAULT_DB.vocal
   }
-  return { db, tracks: refs.length, hits: hitSteps(refs) }
+  return { db, tracks: refs.length, hits: hitSteps(refs), hitsVsKick: hitSteps(refs, 'kick') }
 }
 
 /** The engine's hit part (`levels.hits`) each hit-for-hit lane goes by; a layer goes by its main lane's, as far under it as by default. */
@@ -85,12 +90,14 @@ const HIT_PART: Partial<Record<Role, [string, Role]>> = {
  * loudest hit against the clap's (their loudest 200 ms, as a sample's punch), where at least
  * `MIN_REFERENCES` tracks have both. Parts they don't say keep `HIT_DB`.
  */
-export function hitSteps(refs: TrackArrangement[]): Partial<Record<Role, number>> {
+export function hitSteps(refs: TrackArrangement[], against: 'clap' | 'kick' = 'clap'): Partial<Record<Role, number>> {
   const out: Partial<Record<Role, number>> = {}
   for (const [role, [part, head]] of Object.entries(HIT_PART) as [Role, [string, Role]][]) {
+    // (Against the kick: not the stabs, which go by the kick their own way: STAB_VS_KICK_DB.)
+    if (against === 'kick' && STABS.has(role)) continue
     const rel = refs.flatMap((a) => {
       const h = a.levels?.hits
-      return h?.[part] != null && h.clap != null ? [h[part] - h.clap] : []
+      return h?.[part] != null && h[against] != null ? [h[part] - h[against]!] : []
     })
     if (rel.length >= MIN_REFERENCES) out[role] = Math.round(median(rel) * 2) / 2 + (HIT_DB[role]! - HIT_DB[head]!)
   }
@@ -245,7 +252,13 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
     if (!role || step == null) continue
     const main = mainOf(lane.id)
     const own = hitLoudness(main)
-    const want = clap != null ? clap + step : kick != null ? kick + step + (STAB_VS_KICK_DB - STAB_VS_CLAP_DB) : null
+    // Without a clap: by the kick's hits, as far under them as in the user's tracks (else as a clap sits under
+    // the kick, CLAP_VS_KICK_DB, and its step); a stab by STAB_VS_KICK_DB. Also with a clap when the user's
+    // tracks say the step against the kick but not against the clap (organic: few of its tracks have claps).
+    const learned = balance.hitsVsKick?.[role]
+    const vsKick = STABS.has(role) ? step + (STAB_VS_KICK_DB - STAB_VS_CLAP_DB) : learned ?? step + CLAP_VS_KICK_DB
+    const byClap = clap != null && (balance.hits?.[role] != null || learned == null)
+    const want = byClap ? clap + step : kick != null ? kick + vsKick : null
     if (own == null || want == null) {
       lane.levelDb = starting(role)
       continue
@@ -277,6 +290,8 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
 export const STAB_VS_CLAP_DB = 0.5
 export const STAB_VS_KICK_DB = -6
 export const STAB_UNDER_KICK_DB = 3
+/** Where a clap's hits sit under the kick's (dB; the user's tracks, house and organic: about −10 to −11). */
+export const CLAP_VS_KICK_DB = -10.5
 /** A fill's hits, and the other moments', stay this far under the kick's hits (dB). */
 export const FILL_UNDER_KICK_DB = 1
 export const HIT_UNDER_KICK_DB = 1

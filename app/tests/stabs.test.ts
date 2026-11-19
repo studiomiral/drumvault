@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createEcho } from '../src/audio/reverb'
 import { ECHO_BEATS, eventsInRange } from '../src/audio/schedule'
-import { hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB, STAB_VS_KICK_DB, type Balance } from '../src/generate/balance'
+import { CLAP_VS_KICK_DB, hitLoudness, levelLanes, STAB_UNDER_KICK_DB, STAB_VS_CLAP_DB, STAB_VS_KICK_DB, type Balance } from '../src/generate/balance'
 import { refine, STAB_SHIFT } from '../src/generate/critic'
 import { hitPitch, hitSample } from '../src/generate/disco'
 import { generate, laneRole, setTrackRule, type GenerateOptions, type Generation } from '../src/generate/generator'
@@ -212,6 +212,22 @@ describe('moments are levelled hit for hit too: drop hits, fills, impacts, crash
     const was = p.clips.map((c) => c.gainDb)
     levelLanes(p, all, { db: { clap: -4 }, tracks: 0 }, [[0, 64]], laneRole, () => 0)
     expect(p.clips.map((c) => c.gainDb)).toEqual(was)
+  })
+
+  it('without a clap (most organic tracks), sets the moments by the kick as far under it as a clap would put them', () => {
+    const hit = (p: Project, name: string, x: SampleListItem) => hitLoudness(x)! + levelOf(p, name)
+    // Without one: by the user's tracks' fills against their kick, else as a clap sits under the kick (CLAP_VS_KICK_DB) and the step.
+    const noClap = (hitsVsKick?: Balance['hitsVsKick']) => {
+      const p = { bpm: BPM, lanes: ['Kick', 'Fills'].map(lane), clips: [pat('Kick', kick, [0, 4, 8, 12]), ev('Fills', fillQuiet, 0)] } as unknown as Project
+      levelLanes(p, all, { db: { clap: -4 }, tracks: 0, hits: { fills: -1 }, hitsVsKick }, [[0, 64]], laneRole, () => 0)
+      return hit(p, 'Fills', fillQuiet) - hit(p, 'Kick', kick)
+    }
+    expect(noClap({ fills: -9 })).toBeCloseTo(-9, 0)
+    expect(noClap()).toBeCloseTo(-1 + CLAP_VS_KICK_DB, 0)
+    // With a clap, by the kick too when the tracks say the step against it and not against the clap.
+    const p = run([ev('Fills', fillQuiet, 0)], ['Fills'])
+    levelLanes(p, all, { db: { clap: -4 }, tracks: 0, hitsVsKick: { fills: -9 } }, [[0, 64]], laneRole, () => 0)
+    expect(hit(p, 'Fills', fillQuiet) - hit(p, 'Kick', kick)).toBeCloseTo(-9, 0)
   })
 
   it('follows the clap when the mix check moves it afterwards (hit lanes only)', () => {
