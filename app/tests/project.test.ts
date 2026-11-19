@@ -113,7 +113,10 @@ describe('project model', () => {
     p.clips.push(makeClip(hit, p.lanes[0].id, 0), makeClip(sample('oneshot', 'kick'), p.lanes[2].id, 0))
     const old = JSON.parse(serializeProject(p))
     old.generation = { picks: { disco: hit }, zips: ['S0001', 'Disco Hits'], choices: ['disco hit Brass Hit F on every drop', 'kick: four on the floor'] }
+    delete old.genre
     const back = parseProject(JSON.stringify(old))
+    expect(back.genre).toBe('house')  // from before genres
+    expect(parseProject(serializeProject(newProject('Organic', 120, 'organic'))).genre).toBe('organic')
     expect(back.lanes.slice(0, 3).map((l) => l.name)).toEqual(['Drop Hit', 'Drop Hit 2', p.lanes[2].name])
     expect(back.clips.map((c) => c.sample.relPath)).toEqual(['Drop Hits/brass-hit-f.wav', p.clips[1].sample.relPath])
     expect(back.generation?.picks.disco).toMatchObject({ rel_path: 'Drop Hits/brass-hit-f.wav', source_code: 'Drop Hits' })

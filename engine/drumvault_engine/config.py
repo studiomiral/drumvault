@@ -21,6 +21,17 @@ from typing import Any
 # Category groups
 # --------------------------------------------------------------------------
 
+# Genres: every source (a zip or pack, a MIDI file, a sound on the Sounds pages) belongs to one, set
+# when it is imported (the active genre, Create's top bar); everything from before genres is house.
+# A reference track's genre is its folder: References/<name>/ (any other place: house).
+GENRES = {"house": "House", "organic": "Organic"}
+DEFAULT_GENRE = "house"
+
+
+def genre_or_default(genre: str | None) -> str:
+    return genre if genre in GENRES else DEFAULT_GENRE
+
+
 ONESHOT_CATEGORIES = (
     "kick", "clap", "snare", "hat", "hat_closed", "hat_open",
     "ride", "cymbal", "shaker", "perc",
@@ -392,6 +403,7 @@ class Thresholds:
 @dataclass
 class Settings:
     library_path: str = ""
+    genre: str = DEFAULT_GENRE              # the active genre: what imports are tagged with, what lists show
     splice_db: str = ""                     # Splice's sounds.db; "" = the desktop app's own (vocalloop.splice_dbs)
     library_bpm: float = 124.0
     bpm_min: float = 115.0
@@ -438,6 +450,7 @@ class Settings:
         s.thresholds = Thresholds(**{k: v for k, v in th.items() if k in th_known})
         if isinstance(s.thresholds.oneshot_rank_weights, list):
             s.thresholds.oneshot_rank_weights = tuple(s.thresholds.oneshot_rank_weights)
+        s.genre = genre_or_default(s.genre)
         return s
 
     def to_dict(self) -> dict[str, Any]:
@@ -447,6 +460,7 @@ class Settings:
         """Hash of everything that affects the generated samples."""
         d = self.to_dict()
         d.pop("library_path", None)
+        d.pop("genre", None)
         d.pop("workers", None)
         blob = json.dumps(d, sort_keys=True, default=str).encode()
         return hashlib.sha1(blob).hexdigest()[:16]

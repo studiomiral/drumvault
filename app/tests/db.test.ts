@@ -114,6 +114,25 @@ describe.skipIf(!libraryDir)('LibraryReader on an engine-built library', () => {
     expect(reader.similar(999999)).toEqual([])
   })
 
+  it('shows the active genre only: everything from before genres is house', () => {
+    const house = { zips: reader.listZips().length, samples: reader.querySamples({}).length, facets: reader.facets().total,
+                    arrangements: reader.arrangements().length, midi: reader.listMidi().length, hits: reader.listHits().length }
+    expect(house.zips).toBeGreaterThan(0)
+    expect(house.samples).toBe(house.facets)
+    const organic = new LibraryReader(libraryDir!, () => 'organic')
+    expect(organic.listZips()).toEqual([])
+    expect(organic.querySamples({})).toEqual([])
+    expect(organic.facets()).toMatchObject({ total: 0, categories: [], zips: [] })
+    expect(organic.arrangements()).toEqual([])
+    expect(organic.listMidi()).toEqual([])
+    expect(organic.listHits()).toEqual([])
+    const kick = reader.querySamples({ kind: 'oneshot', categories: ['kick'] })[0]
+    expect(organic.similar(kick.id, 10)).toEqual([])
+    // A saved project still finds its samples by path, whatever the genre.
+    expect(organic.samplesByPath([kick.rel_path]).map((s) => s.id)).toEqual([kick.id])
+    organic.close()
+  })
+
   it('handles a library without a database yet', () => {
     const empty = new LibraryReader(mkdtempSync(join(tmpdir(), 'dv-empty-')))
     expect(empty.listZips()).toEqual([])

@@ -8,7 +8,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AppSettings, EngineStatus, HotFillRequest, JobMethod, SampleMeta, UploadRecord } from '../src/types/api'
-import type { EngineEvent, GridPreview, JobAccepted, Overrides } from '../src/types/engine'
+import { DEFAULT_GENRE, GENRES, type EngineEvent, type Genre, type GridPreview, type JobAccepted, type Overrides } from '../src/types/engine'
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
@@ -84,7 +84,12 @@ function engineCommand(dir: string): { args: string[]; env: NodeJS.ProcessEnv } 
 }
 
 function engineSettings(): Record<string, unknown> {
-  return { ...settings.engine, library_path: settings.libraryPath }
+  return { ...settings.engine, library_path: settings.libraryPath, genre: activeGenre() }
+}
+
+/** The active genre (Create's top bar): house until one is chosen. */
+function activeGenre(): Genre {
+  return settings.genre && GENRES.includes(settings.genre) ? settings.genre : DEFAULT_GENRE
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +167,9 @@ async function applySettings(patch: Partial<AppSettings>): Promise<AppSettings> 
   await saveSettings(settingsFile(), settings)
   if (before.libraryPath !== settings.libraryPath) {
     reader.close()
-    reader = new LibraryReader(settings.libraryPath)
+    reader = new LibraryReader(settings.libraryPath, activeGenre)
+    send('library-changed')
+  } else if (before.genre !== settings.genre) {
     send('library-changed')
   }
   if (before.enginePath !== settings.enginePath || before.uvPath !== settings.uvPath) {
@@ -756,7 +763,7 @@ function buildMenu(): void {
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark' // the UI is dark-only (native menus and dialogs follow)
   settings = await loadSettings(settingsFile())
-  reader = new LibraryReader(settings.libraryPath)
+  reader = new LibraryReader(settings.libraryPath, activeGenre)
   registerIpc()
   buildMenu()
   createWindow()

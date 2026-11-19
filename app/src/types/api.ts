@@ -1,15 +1,17 @@
 // The contract between the Electron main process and the renderer
 // (exposed by electron/preload.ts as `window.drumvault`).
 
-import type { Category, CleanRendersResult, EngineSettings, GridPreview, HealthResult, MasterResult, Overrides, PreflightResult, PreflightSection, ReferencesResult, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
+import type { Category, CleanRendersResult, EngineSettings, Genre, GridPreview, HealthResult, MasterResult, Overrides, PreflightResult, PreflightSection, ReferencesResult, ProcessResult, RpcError, SampleKind, StemRow, ZipRow, ZipStatus } from './engine'
 import type { ProjectFileInfo } from './project'
 import type { VocalMeta, VocalRequest } from '../vocals/plan'
 
-/** Engine settings as stored by the app (the library path is kept separately). */
-export type EngineOptions = Omit<EngineSettings, 'library_path'>
+/** Engine settings as stored by the app (the library path and the genre are kept separately). */
+export type EngineOptions = Omit<EngineSettings, 'library_path' | 'genre'>
 
 export interface AppSettings {
   libraryPath: string | null
+  /** The active genre: what the library lists show, what imports are tagged with; house when not set. */
+  genre?: Genre
   engine: EngineOptions
   /** Override for the engine folder (default: ../engine next to the app). */
   enginePath: string | null

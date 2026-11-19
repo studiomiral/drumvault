@@ -22,7 +22,7 @@ import numpy as np
 import soundfile as sf
 
 from . import key as keymod, mixprofile, tempo
-from .config import Settings, Thresholds
+from .config import DEFAULT_GENRE, GENRES, Settings, Thresholds
 from .db import LibraryDB
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,13 @@ def analyze_file(path: Path, settings: Settings) -> dict:
     return {"bpm": t.bpm, "key_label": key_label, "grid_confidence": round(t.confidence, 3), "profile": profile}
 
 
+def genre_of(rel: str) -> str:
+    """A reference's genre: its first folder's (References/Organic/…), house anywhere else."""
+    parts = Path(rel).parts
+    first = parts[0].lower() if len(parts) > 1 else ""
+    return next((g for g, name in GENRES.items() if name.lower() == first), DEFAULT_GENRE)
+
+
 def _row(r) -> dict:
     return {"rel_path": r["rel_path"], "name": Path(r["rel_path"]).stem, "bpm": r["bpm"], "key_label": r["key_label"],
             "grid_confidence": r["grid_confidence"], "error": r["error"], "analyzed_at": r["analyzed_at"],
@@ -109,7 +116,7 @@ def summary(profiles: list[dict], th: Thresholds) -> dict | None:
 
 
 def scan(settings: Settings, analyze: bool = False, progress: Callable[[str, float], None] | None = None) -> dict:
-    """The references as the library knows them: {"folder", "tracks": [...], "pending": files not
+    """The active genre's references as the library knows them: {"folder", "tracks": [...], "pending": files not
     measured yet (or measured before the profile kept what the generator reads), "summary"}.
     With `analyze`, new and changed files are measured first (a track takes some seconds) and the
     rows of files that are gone are dropped."""
@@ -136,6 +143,8 @@ def scan(settings: Settings, analyze: bool = False, progress: Callable[[str, flo
                     log.warning("reference %s not measured: %s", rel, e)
                     db.set_reference(rel, size=st.st_size, mtime=st.st_mtime, error=f"{type(e).__name__}: {e}")
             rows = {r["rel_path"]: r for r in db.list_references()}
+    # Every file is measured, whatever its genre; the active genre's are the references.
+    found = {rel: p for rel, p in found.items() if genre_of(rel) == settings.genre}
     tracks = [_row(rows[rel]) for rel in found if rel in rows and _fresh(rows[rel], found[rel])]
     stale = sum(1 for t in tracks if not _current(rows[t["rel_path"]]))
     return {"folder": str(root), "tracks": tracks, "pending": len(found) - len(tracks) + stale,

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expandCompatible } from '../src/lib/camelot'
 import { fileName, parseJsonArray } from '../src/lib/format'
-import type { PeaksFile, SampleKind, StemRow } from '../src/types/engine'
+import { DEFAULT_GENRE, type Genre, type PeaksFile, type SampleKind, type StemRow } from '../src/types/engine'
 import type {
   EventShape, HitItem, LibraryFacets, LoopGroove, MidiItem, PeakPoints, RemovedSample, SampleFilter, SampleListItem, TrackArrangement,
   ZipDetail, ZipListItem,
@@ -32,13 +32,17 @@ export function peaksPath(library: string, sampleId: number): string {
   return join(library, '.drumvault', 'peaks', `${sampleId}.json`)
 }
 
-const ZIP_LIST_SQL = `
+const zipListSql = (where = '') => `
   SELECT z.*,
          COALESCE(SUM(s.kind = 'oneshot'), 0) AS oneshots,
          COALESCE(SUM(s.kind = 'loop'), 0) AS loops,
          COALESCE(SUM(s.kind = 'event'), 0) AS events
   FROM zips z LEFT JOIN samples s ON s.zip_id = z.id
+  ${where ? `WHERE ${where}` : ''}
   GROUP BY z.id`
+
+/** A WHERE condition and its parameters. */
+export type Where = { sql: string; params: (string | number)[] }
 
 const SORTS: Record<string, string> = {
   name: 's.rel_path COLLATE NOCASE',
@@ -54,9 +58,14 @@ const SORTS: Record<string, string> = {
  * groove (v7), `shapeCol` the event shape (v9).
  */
 export function buildSampleQuery(f: SampleFilter, bodyCol = 's.body_bars', grooveCol = 's.groove',
-                                 shapeCol = 's.shape', energyCol = 's.energy_db', toneCol = 's.tone', punchCol = 's.punch_db'): { sql: string; params: (string | number)[] } {
+                                 shapeCol = 's.shape', energyCol = 's.energy_db', toneCol = 's.tone', punchCol = 's.punch_db',
+                                 genre?: Where): { sql: string; params: (string | number)[] } {
   const where: string[] = []
   const params: (string | number)[] = []
+  if (genre) {
+    where.push(genre.sql)
+    params.push(...genre.params)
+  }
   const inList = (col: string, values: (string | number)[]) => {
     where.push(`${col} IN (${values.map(() => '?').join(', ')})`)
     params.push(...values)
@@ -128,7 +137,17 @@ export class LibraryReader {
   private db: DatabaseSync | null = null
   private peakCache = new Map<string, PeakPoints>()
 
-  constructor(public readonly library: string | null) {}
+  /** `genre`: the active genre, read at each query: the lists show its sources only. */
+  constructor(public readonly library: string | null, private readonly genre: () => Genre = () => DEFAULT_GENRE) {}
+
+  /**
+   * The active genre's rows of `table` (by `col`, e.g. `z.genre`). Before schema v21 (no column
+   * yet: the engine adds it when it next opens the library) everything is house.
+   */
+  private genreIs(table: string, col: string): Where {
+    if (this.hasColumn(table, 'genre')) return { sql: `COALESCE(${col}, 'house') = ?`, params: [this.genre()] }
+    return { sql: this.genre() === DEFAULT_GENRE ? '1 = 1' : '1 = 0', params: [] }
+  }
 
   /** Opens lazily: a fresh library has no database until the first zip is processed. */
   private conn(): DatabaseSync | null {
@@ -180,10 +199,11 @@ export class LibraryReader {
   /** Imported MIDI files (schema v6), oldest first. */
   listMidi(): MidiItem[] {
     if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'midi_files'").length) return []
+    const g = this.genreIs('midi_files', 'genre')
     return this.all<Omit<MidiItem, 'notes' | 'name'> & { notes: string }>(
       `SELECT id, file_name, rel_path, role, bars, key_label, key_camelot, notes, favorite,
               ${this.hasColumn('midi_files', 'source') ? 'source, source_code' : 'NULL AS source, NULL AS source_code'}
-       FROM midi_files ORDER BY id`)
+       FROM midi_files WHERE ${g.sql} ORDER BY id`, ...g.params)
       .map((r) => ({ ...r, name: r.file_name.replace(/\.midi?$/i, ''), notes: JSON.parse(r.notes) }))
   }
 
@@ -196,18 +216,20 @@ export class LibraryReader {
     const more = this.hasColumn('hits', 'voices') ? 'punch_db, voices' : 'NULL AS punch_db, NULL AS voices'
     const tonal = this.hasColumn('hits', 'tonal') ? 'tonal' : 'NULL AS tonal'
     const bpm = this.hasColumn('hits', 'bpm') ? 'bpm' : 'NULL AS bpm'
+    const g = this.genreIs('hits', 'genre')
     return this.all<Omit<HitItem, 'name' | 'tone'> & { tone: string | null }>(
       `SELECT id, ${kind} AS kind, file_name, rel_path, key_label, key_camelot, key_source, pitch_fix, duration_s, channels, ${energy}, ${tone}, ${more}, ${tonal}, ${bpm}
-       FROM hits ORDER BY id`)
+       FROM hits WHERE ${g.sql} ORDER BY id`, ...g.params)
       .map((r) => ({ ...r, tone: toneOf(r.tone), pitch_fix: r.pitch_fix ?? 0, name: r.file_name.replace(/\.(wav|aiff?|flac)$/i, '') }))
   }
 
   listZips(): ZipListItem[] {
-    return this.all<ZipListItem>(`${ZIP_LIST_SQL} ORDER BY z.id DESC`)
+    const g = this.genreIs('zips', 'z.genre')
+    return this.all<ZipListItem>(`${zipListSql(g.sql)} ORDER BY z.id DESC`, ...g.params)
   }
 
   zipDetail(zipId: number): ZipDetail | null {
-    const [zip] = this.all<ZipListItem>(`${ZIP_LIST_SQL} HAVING z.id = ?`, zipId)
+    const [zip] = this.all<ZipListItem>(`${zipListSql()} HAVING z.id = ?`, zipId)
     if (!zip) return null
     const stems = this.all<StemRow>('SELECT * FROM stems WHERE zip_id = ? ORDER BY file_name COLLATE NOCASE', zipId)
     return {
@@ -249,7 +271,8 @@ export class LibraryReader {
   }
 
   querySamples(filter: SampleFilter): SampleListItem[] {
-    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol(), this.energyCol(), this.toneCol(), this.punchCol())
+    const { sql, params } = buildSampleQuery(filter, this.bodyCol(), this.grooveCol(), this.shapeCol(), this.energyCol(), this.toneCol(), this.punchCol(),
+                                             this.genreIs('zips', 'z.genre'))
     return this.all<SampleRow>(sql, ...params).map(toListItem)
   }
 
@@ -258,9 +281,10 @@ export class LibraryReader {
     if (!this.hasTable('arrangements')) return []
     const detail = this.hasColumn('arrangements', 'detail') ? 'a.detail' : 'NULL AS detail'
     const levels = this.hasColumn('arrangements', 'levels') ? 'a.levels' : 'NULL AS levels'
+    const g = this.genreIs('zips', 'z.genre')
     return this.all<Omit<TrackArrangement, 'parts' | 'detail' | 'levels'> & { parts: string; detail: string | null; levels: string | null }>(
       `SELECT a.zip_id, z.source_code, a.bpm, a.bars, a.parts, ${detail}, ${levels} FROM arrangements a JOIN zips z ON z.id = a.zip_id
-       ORDER BY a.zip_id`).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string>,
+       WHERE ${g.sql} ORDER BY a.zip_id`, ...g.params).map((r) => ({ ...r, parts: JSON.parse(r.parts) as Record<string, string>,
       detail: r.detail ? JSON.parse(r.detail) as TrackArrangement['detail'] : null,
       levels: parsed<NonNullable<TrackArrangement['levels']>>(r.levels, (v) => typeof v.parts === 'object') }))
   }
@@ -342,12 +366,13 @@ export class LibraryReader {
       'SELECT kind, category, bars, fingerprint FROM samples WHERE id = ?', sampleId)
     if (!t?.fingerprint) return []
     const target = toFloats(t.fingerprint)
+    const g = this.genreIs('zips', 'z.genre')
     const rows = this.all<Omit<SampleListItem, 'name'> & { fingerprint: Uint8Array | null }>(
       `SELECT s.id, s.rel_path, s.kind, s.category, s.bpm, s.bars, ${this.bodyCol()} AS body_bars, s.key_label,
               s.key_camelot, s.duration_s, s.channels, s.favorite, s.rating, s.tags, s.zip_id, z.source_code, s.fingerprint
        FROM samples s JOIN zips z ON z.id = s.zip_id
-       WHERE s.kind = ? AND s.category = ? AND s.bars IS ? AND s.id != ?`,
-      t.kind, t.category, t.bars, sampleId)
+       WHERE s.kind = ? AND s.category = ? AND s.bars IS ? AND s.id != ? AND ${g.sql}`,
+      t.kind, t.category, t.bars, sampleId, ...g.params)
     const scored = []
     for (const { fingerprint, ...r } of rows) {
       if (!fingerprint || fingerprint.byteLength !== t.fingerprint.byteLength) continue
@@ -360,15 +385,18 @@ export class LibraryReader {
   }
 
   facets(): LibraryFacets {
-    const total = this.all<{ n: number }>('SELECT COUNT(*) AS n FROM samples')[0]?.n ?? 0
+    // The active genre's samples only (by their zip's genre).
+    const g = this.genreIs('zips', 'z.genre')
+    const from = `FROM samples s JOIN zips z ON z.id = s.zip_id WHERE ${g.sql}`
+    const total = this.all<{ n: number }>(`SELECT COUNT(*) AS n ${from}`, ...g.params)[0]?.n ?? 0
     return {
       total,
-      categories: this.all('SELECT kind, category, COUNT(*) AS count FROM samples GROUP BY kind, category ORDER BY kind, category'),
-      keys: this.all('SELECT key_label AS label, key_camelot AS camelot, COUNT(*) AS count FROM samples GROUP BY key_label'),
-      bars: this.all<{ bars: number }>('SELECT DISTINCT bars FROM samples WHERE bars IS NOT NULL ORDER BY bars').map((r) => r.bars),
+      categories: this.all(`SELECT s.kind, s.category, COUNT(*) AS count ${from} GROUP BY s.kind, s.category ORDER BY s.kind, s.category`, ...g.params),
+      keys: this.all(`SELECT s.key_label AS label, s.key_camelot AS camelot, COUNT(*) AS count ${from} GROUP BY s.key_label`, ...g.params),
+      bars: this.all<{ bars: number }>(`SELECT DISTINCT s.bars ${from} AND s.bars IS NOT NULL ORDER BY s.bars`, ...g.params).map((r) => r.bars),
       zips: this.all(`SELECT z.id, z.source_code, z.file_name, COUNT(s.id) AS count
-                      FROM zips z JOIN samples s ON s.zip_id = z.id GROUP BY z.id ORDER BY z.id`),
-      loopBpms: this.all<{ bpm: number }>("SELECT DISTINCT bpm FROM samples WHERE bpm IS NOT NULL ORDER BY bpm").map((r) => r.bpm),
+                      ${from} GROUP BY z.id ORDER BY z.id`, ...g.params),
+      loopBpms: this.all<{ bpm: number }>(`SELECT DISTINCT s.bpm ${from} AND s.bpm IS NOT NULL ORDER BY s.bpm`, ...g.params).map((r) => r.bpm),
     }
   }
 

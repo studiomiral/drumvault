@@ -177,7 +177,7 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
                 k += 1
                 rel = f"{folder}/{base}-{k}.wav"
             write_wav(lib / rel, y, out_sr, settings.output_format)
-            hid = db.insert_hit(kind=kind, file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
+            hid = db.insert_hit(kind=kind, genre=settings.genre, file_name=name, rel_path=rel, original_path=origin, file_sha1=sha1,
                                 key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                                 key_source=source, pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                                 channels=y.shape[1], peak_db=pk_db, energy_db=k_energy_db(y, out_sr),
@@ -190,12 +190,12 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
 
 
 def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, sr: int, origin: str,
-                bpm: float | None = None) -> str | None:
+                bpm: float | None = None, genre: str | None = None) -> str | None:
     """A texture straight onto the Ambience page (an atmos cut from a stem, SCOPE.md §6.10a): written
     to <Library>/Ambience/ at the library rate, told tonal (a key, from the stem's in its name or its
     sound) or noise (none), measured like an imported one. `bpm`: the tempo it was cut on the grid
     at (the library's), so its bed keeps the rhythm in time. The same audio already there (by its
-    bytes): nothing new, None. Else its path."""
+    bytes): nothing new, None. Else its path. `genre`: its zip's (the active genre when left out)."""
     lib = Path(settings.library_path)
     out_sr = settings.output_sample_rate
     y = resample(np.asarray(data, dtype=np.float32), sr, out_sr)
@@ -212,7 +212,7 @@ def add_texture(db: LibraryDB, settings: Settings, name: str, data: np.ndarray, 
         return None
     peak = float(np.max(np.abs(y))) if y.size else 0.0
     tonal, label, source = texture_key(name, y.mean(axis=1), out_sr, settings)
-    db.insert_hit(kind="ambience", file_name=f"{name}.wav", rel_path=rel, original_path=origin, file_sha1=sha1,
+    db.insert_hit(kind="ambience", genre=genre or settings.genre, file_name=f"{name}.wav", rel_path=rel, original_path=origin, file_sha1=sha1,
                   key_label=label, key_camelot=keymod.camelot(*keymod.parse_label(label)) if label else None,
                   key_source=source, tonal=tonal, bpm=float(bpm or 0.0), pitch_fix=0, duration_s=len(y) / out_sr, sample_rate=out_sr,
                   channels=y.shape[1], peak_db=20 * np.log10(peak) if peak > 0 else -240.0, energy_db=k_energy_db(y, out_sr),

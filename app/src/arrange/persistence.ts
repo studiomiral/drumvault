@@ -9,6 +9,7 @@ import { newProject, parseProject, serializeProject } from '../lib/project'
 import { useApp } from '../store/app'
 import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
+import { DEFAULT_GENRE, type Genre } from '../types/engine'
 import type { Project } from '../types/project'
 import { clearPeaks } from './peaks'
 
@@ -16,6 +17,11 @@ const AUTOSAVE_MS = 1200
 
 function libraryBpm(): number {
   return useApp.getState().settings?.engine.library_bpm ?? 124
+}
+
+/** The active genre: a new project is made in it. */
+function activeGenre(): Genre {
+  return useApp.getState().settings?.genre ?? DEFAULT_GENRE
 }
 
 /** Refresh sample ids/lengths from the library by path; report samples that are gone. */
@@ -115,7 +121,7 @@ export async function openProject(file: string): Promise<void> {
 /** An empty track to build by hand (Create's Saved menu): saved once something is put on it. */
 export async function createProject(name = 'Untitled'): Promise<void> {
   await saveNow()
-  await open(newProject(name, libraryBpm()), null, true)
+  await open(newProject(name, libraryBpm(), activeGenre()), null, true)
 }
 
 /** Delete the open track's file; `then` shows what comes instead (the next saved track, by default). */
@@ -147,7 +153,7 @@ export async function initProjects(): Promise<void> {
   } catch (e) {
     useApp.getState().toast('error', `Could not open project: ${(e as Error).message}`)
   }
-  await open(newProject('Untitled', libraryBpm()), null, true)
+  await open(newProject('Untitled', libraryBpm(), activeGenre()), null, true)
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null

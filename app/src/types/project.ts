@@ -1,6 +1,6 @@
 // Arrange project (.dvproj, JSON). All positions are in beats (4/4, project BPM = library BPM).
 
-import type { Category, SampleKind } from './engine'
+import type { Category, Genre, SampleKind } from './engine'
 import type { Generation } from '../generate/generator'
 
 export interface SampleRef {
@@ -236,6 +236,8 @@ export interface Project {
   format: 'drumvault-project'
   version: 1
   name: string
+  /** The genre it was made in (projects from before genres: house). */
+  genre: Genre
   bpm: number
   lengthBars: number
   lanes: Lane[]

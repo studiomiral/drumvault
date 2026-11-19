@@ -9,7 +9,7 @@
 
 import { expandCompatible } from '../lib/camelot'
 import { BEATS_PER_BAR, makeLane, makeMarker, newProject, replaceSample, sampleRef, STEPS_PER_BAR, uid } from '../lib/project'
-import type { Category, ReferenceTrack, SampleKind } from '../types/engine'
+import type { Category, Genre, ReferenceTrack, SampleKind } from '../types/engine'
 import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
@@ -352,6 +352,8 @@ export interface GenerateOptions {
   bass?: BassOptions | null
   /** Reverb builds on top loops; null or left out = none. */
   verb?: VerbOptions | null
+  /** The genre the track is made in (its project's); house when left out. */
+  genre?: Genre
   /** Drop hits (SCOPE.md §6.8) a track may drop at key moments; null or empty = none. */
   disco?: { hits: HitItem[] } | null
   /**
@@ -2986,7 +2988,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
 
   // ---- the project ----
-  const project = newProject('Generated', bpm)
+  const project = newProject('Generated', bpm, opts.genre)
   project.lengthBars = total
   project.lanes = LANES.map((l, i) => ({ ...makeLane(l.name, i), color: l.color }))
   applyMix(project, opts.mix ?? {})

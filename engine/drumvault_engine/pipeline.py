@@ -357,7 +357,7 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
                 raise PipelineError("midi_zip", f"{zip_path.name} holds MIDI files, not stems: add it on the MIDI page")
             code = naming.source_code(db.next_source_number("S"))
             zid = db.insert_zip(source_code=code, file_name=zip_path.name, file_sha1=sha1,
-                                original_path=str(zip_path.resolve()), status="processing")
+                                original_path=str(zip_path.resolve()), status="processing", genre=settings.genre)
             ov = overrides or Overrides()
         try:
             reviewed = bool(existing is not None and existing["reviewed"])
@@ -574,7 +574,8 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                         from . import hits as hitsmod
                         label = key_of.get(o.name, (k.label, k.camelot))[0] or key_label
                         name = Path(naming.event_rel_path(o.category, settings.library_bpm, label, tag, ev.bars or 0, counts.ambience + 1)).stem
-                        rel = hitsmod.add_texture(db, settings, name, data, ev.sr, f"{tag}:{o.name}", settings.library_bpm)
+                        rel = hitsmod.add_texture(db, settings, name, data, ev.sr, f"{tag}:{o.name}", settings.library_bpm,
+                                                  genre=db.get_zip(zid)["genre"])
                         if rel:
                             written.append(lib / rel)
                             counts.ambience += 1
@@ -643,7 +644,7 @@ def import_samples(settings: Settings, paths: list[str], ctx: JobContext | None 
             if row is None:
                 code = naming.source_code(db.next_source_number("P"), "P")
                 zid = db.insert_zip(source_code=code, file_name=root.name, file_sha1=samplemod.pack_id(root),
-                                    original_path=str(root), status="processing", kind="pack")
+                                    original_path=str(root), status="processing", kind="pack", genre=settings.genre)
                 row = db.get_zip(zid)
                 known: list[str] = []
             else:
@@ -923,7 +924,8 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
                 mid = db.insert_midi(file_name=f"{title}.mid", rel_path=rel, original_path=origin, file_sha1=sha1,
                                      role="bass", bars=info.bars, key_label=key_label,
                                      key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else None,
-                                     notes=json.dumps(notes), source=label, source_code=code, created_at=now_iso())
+                                     notes=json.dumps(notes), source=label, source_code=code, created_at=now_iso(),
+                                     genre=settings.genre)
                 imported.append({"id": mid, "file_name": f"{title}.mid", "role": "bass", "bars": info.bars,
                                  "key_label": key_label})
     return {"imported": imported, "skipped": skipped, "ignored": ignored, "failed": failed}
@@ -1253,7 +1255,7 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
                              file_sha1=zipio.sha1_file(lib / rel), role="bass", bars=bars,
                              key_label=key_label or info.key_label,
                              key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else info.key_camelot,
-                             notes=json.dumps(stored), created_at=now_iso())
+                             notes=json.dumps(stored), created_at=now_iso(), genre=settings.genre)
     return {"id": mid, "rel_path": rel}
 
 
@@ -1393,13 +1395,13 @@ def atmos_to_ambience(settings: Settings) -> dict:
     lib = Path(settings.library_path)
     moved = purged = 0
     with LibraryDB(lib) as db:
-        rows = db.conn.execute("SELECT s.*, z.source_code FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.category = 'fx_atmos'").fetchall()
+        rows = db.conn.execute("SELECT s.*, z.source_code, z.genre FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.category = 'fx_atmos'").fetchall()
         for r in rows:
             path = lib / r["rel_path"]
             if path.exists():
                 a = load(path)
                 if hitsmod.add_texture(db, settings, Path(r["rel_path"]).stem, a.data, a.sr, f"{r['source_code']}:{r['rel_path']}",
-                                       float(r["bpm"] or settings.library_bpm)):
+                                       float(r["bpm"] or settings.library_bpm), genre=r["genre"]):
                     moved += 1
         if rows:
             ids = [r["id"] for r in rows]

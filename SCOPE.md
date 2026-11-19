@@ -487,6 +487,9 @@ Finished tracks the user drops into **`<Library>/References/`** (WAV, AIFF, FLAC
 - **Steering the generator** (§6.6): a reference's structure, read from its kick, full bars and loudness bar by bar, is a template beside the zips' (an even share), and its arc (the drops' lift, the break depth) is what the best of 12 is scored on.
 - *Not done:* the mix balance, the EQ and the rides still come from the user's own zips (they need stems), and the references are not separated into stems.
 
+### 5.18 Genres (`config.GENRES`, schema v21)
+House and organic (organic/progressive house); more can follow. **One genre per source**: a zip or pack (`zips.genre`; its stems, samples and arrangement are of it too), a MIDI file (`midi_files.genre`), a sound on the Sounds pages (`hits.genre`; an atmos cut from a zip takes the zip's). Everything from before genres is house (the column's default). The **active genre** (`AppSettings.genre`, sent to the engine with the settings like the library path, outside the processing hash) is what imports are tagged with and what the library lists show (zips, samples and their facets, arrangements, MIDI, sounds); a saved project still finds its samples by path whatever their genre. A **reference track**'s genre is its folder: `References/Organic/…` is organic, anywhere else house; every file is measured, the active genre's count. A project remembers the genre it was made in (`Project.genre`; projects from before: house). Vocals and vocal loops are files, not rows: shared by every genre for now. Each genre will get its own drums (organic never uses house samples) and, later, its own rules.
+
 ### 5.15 CLI (`cli.py`) — needed for Phase 1
 
 ```

@@ -8,6 +8,11 @@ export type Category =
   | "disco_hit"   // the Drop Hits page's samples (their own table, never a stem's category)
   | "chord_stab"; // the Chord Stabs page's samples (the same table)
 
+/** Mirrors `GENRES` in config.py: every source (a zip or pack, a MIDI file, a sound) belongs to one; everything from before genres is house. */
+export type Genre = "house" | "organic";
+export const GENRES: Genre[] = ["house", "organic"];
+export const DEFAULT_GENRE: Genre = "house";
+
 export type ZipStatus =
   | "queued" | "processing" | "done" | "needs_review" | "error" | "skipped" | "cancelled";
 
@@ -98,6 +103,8 @@ export interface Overrides {
 /** Mirrors `Settings` in engine/drumvault_engine/config.py (snake_case, all optional). */
 export interface EngineSettings {
   library_path: string;
+  /** The active genre (the app's, like the library path): what imports are tagged with, which references count. */
+  genre?: Genre;
   library_bpm?: number;
   bpm_min?: number;
   bpm_max?: number;
@@ -380,6 +387,7 @@ export interface ZipRow {
   processed_at: string | null;
   settings_hash: string | null;
   kind?: 'stems' | 'pack';      // 'pack': loose samples (Splice and other folders), schema v8
+  genre?: Genre;                // schema v21: its samples, stems and arrangement are of it too
 }
 
 export interface StemRow {

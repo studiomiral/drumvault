@@ -1,7 +1,7 @@
 // Pure project helpers: defaults, clip geometry, presets, serialisation.
 
 import type { SampleListItem } from '../types/api'
-import type { Category } from '../types/engine'
+import { DEFAULT_GENRE, GENRES, type Category, type Genre } from '../types/engine'
 import type { AudioClip, Clip, Lane, Marker, PatternClip, Project, SampleRef, Velocity } from '../types/project'
 
 export const BEATS_PER_BAR = 4
@@ -54,10 +54,10 @@ export function makeLane(name: string, index: number): Lane {
   }
 }
 
-export function newProject(name: string, bpm: number): Project {
+export function newProject(name: string, bpm: number, genre: Genre = DEFAULT_GENRE): Project {
   const now = new Date().toISOString()
   return {
-    format: 'drumvault-project', version: 1, name, bpm, lengthBars: DEFAULT_LENGTH_BARS,
+    format: 'drumvault-project', version: 1, name, genre, bpm, lengthBars: DEFAULT_LENGTH_BARS,
     lanes: DEFAULT_LANES.map(makeLane), clips: [], markers: [],
     loop: { start: 0, end: 16, enabled: false }, metronome: false, createdAt: now, updatedAt: now,
   }
@@ -325,7 +325,7 @@ export function parseProject(text: string): Project {
   const now = new Date().toISOString()
   return {
     format: 'drumvault-project', version: 1,
-    name: p.name ?? 'Untitled', bpm: p.bpm ?? 124, lengthBars: p.lengthBars ?? DEFAULT_LENGTH_BARS,
+    name: p.name ?? 'Untitled', genre: p.genre && GENRES.includes(p.genre) ? p.genre : DEFAULT_GENRE, bpm: p.bpm ?? 124, lengthBars: p.lengthBars ?? DEFAULT_LENGTH_BARS,
     lanes: (p.lanes ?? []).map((l, i) => ({ ...makeLane(l.name ?? `Lane ${i + 1}`, i), ...l })),
     clips: p.clips ?? [], markers: p.markers ?? [],
     loop: p.loop ?? { start: 0, end: 16, enabled: false }, metronome: p.metronome ?? false,

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Library folders renamed since libraries were made with them (old → new), moved when a library opens.
 RENAMED_FOLDERS = {"Disco Hits": "Drop Hits"}
@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS zips (
   reviewed INTEGER DEFAULT 0,
   warnings TEXT,
   processed_at TEXT, settings_hash TEXT,
-  kind TEXT DEFAULT 'stems'         -- 'stems' (a zip of one track) | 'pack' (loose samples, v8)
+  kind TEXT DEFAULT 'stems',        -- 'stems' (a zip of one track) | 'pack' (loose samples, v8)
+  genre TEXT DEFAULT 'house'        -- config.GENRES (v21): its samples, stems and arrangement are of it too
 );
 
 CREATE TABLE IF NOT EXISTS stems (
@@ -99,7 +100,8 @@ CREATE TABLE IF NOT EXISTS midi_files (
   favorite INTEGER DEFAULT 0,
   source TEXT,                      -- the MIDI zip it came from ("83686"), null for loose files
   source_code TEXT,                 -- the processed stem zip of the same track (S0001), if any
-  created_at TEXT
+  created_at TEXT,
+  genre TEXT DEFAULT 'house'        -- config.GENRES (v21)
 );
 
 -- Drop hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Drop Hits/ (Disco Hits/ before v20);
@@ -118,7 +120,8 @@ CREATE TABLE IF NOT EXISTS hits (
   voices INTEGER,                   -- how many notes it plays (v16): 1–2 a single note, 3 or more a chord
   tonal INTEGER,                    -- an Ambience texture (v18): 1 a tonal bed (always moved into the key), 0 noise (never), NULL unmeasured
   bpm REAL,                         -- an Ambience texture's tempo (v19): a loop with a rhythm, synced to the track; 0 none (no beat), NULL unchecked
-  created_at TEXT
+  created_at TEXT,
+  genre TEXT DEFAULT 'house'        -- config.GENRES (v21); an atmos cut from a zip: the zip's
 );
 
 -- Reference tracks (schema v17): finished tracks in <Library>/References/, each measured as a whole
@@ -201,6 +204,10 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE zips ADD COLUMN reviewed INTEGER DEFAULT 0")
         if "kind" not in zip_cols:  # v8: packs of loose samples
             self.conn.execute("ALTER TABLE zips ADD COLUMN kind TEXT DEFAULT 'stems'")
+        # v21: genres. Everything from before is house (the default fills the rows already there).
+        for table, cols in (("zips", zip_cols), ("midi_files", midi_cols)):
+            if "genre" not in cols:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN genre TEXT DEFAULT 'house'")
         arr_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(arrangements)")}
         if "detail" not in arr_cols:  # v11: rides, bar by bar (measured again by analyze_library)
             self.conn.execute("ALTER TABLE arrangements ADD COLUMN detail TEXT")
@@ -221,6 +228,8 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE hits ADD COLUMN tonal INTEGER")
         if "bpm" not in hit_cols:  # v19: textures with a rhythm, synced to the track (filled by analyze_library)
             self.conn.execute("ALTER TABLE hits ADD COLUMN bpm REAL")
+        if "genre" not in hit_cols:  # v21: genres, everything from before house
+            self.conn.execute("ALTER TABLE hits ADD COLUMN genre TEXT DEFAULT 'house'")
 
     def _rename_folders(self) -> None:
         """Library folders renamed (v20: Disco Hits → Drop Hits): every file moves to the new folder (as
