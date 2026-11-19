@@ -163,7 +163,7 @@ describe('stab levels: hit for hit', () => {
   })
 })
 
-describe('moments are levelled hit for hit too: disco hits, fills, impacts, crashes, FX', () => {
+describe('moments are levelled hit for hit too: drop hits, fills, impacts, crashes, FX', () => {
   const sample = (kind: SampleKind, category: Category, extra: Partial<SampleListItem>): SampleListItem => ({
     id: nextHit++, rel_path: `${category}${nextHit}.wav`, name: category, kind, category, bpm: null, bars: null, body_bars: null, key_label: null, key_camelot: null,
     duration_s: 0.3, channels: 2, favorite: 0, rating: null, tags: null, zip_id: 1, source_code: 'S0001', energy_db: -15, tone: tone(100), ...extra,
@@ -189,13 +189,13 @@ describe('moments are levelled hit for hit too: disco hits, fills, impacts, cras
   }
   const levelOf = (p: Project, name: string) => p.lanes.find((l) => l.name === name)!.levelDb!
 
-  it('sets a lone disco hit by its own loudness, not by how rarely it plays', () => {
-    const rare = run([pat('Disco Hit', disco, [0], 0, 4)], ['Disco Hit'])
-    const often = run([pat('Disco Hit', disco, [0, 8], 0, 64)], ['Disco Hit'])
-    expect(levelOf(rare, 'Disco Hit')).toBe(levelOf(often, 'Disco Hit'))
-    // One disco hit = one clap hit less 1 dB, and under the kick's gain.
-    expect(Math.abs(-13 + levelOf(rare, 'Disco Hit') - (-11 + levelOf(rare, 'Clap') - 1))).toBeLessThanOrEqual(0.5)
-    expect(levelOf(rare, 'Disco Hit')).toBeLessThanOrEqual(levelOf(rare, 'Kick') - 1)
+  it('sets a lone drop hit by its own loudness, not by how rarely it plays', () => {
+    const rare = run([pat('Drop Hit', disco, [0], 0, 4)], ['Drop Hit'])
+    const often = run([pat('Drop Hit', disco, [0, 8], 0, 64)], ['Drop Hit'])
+    expect(levelOf(rare, 'Drop Hit')).toBe(levelOf(often, 'Drop Hit'))
+    // One drop hit = one clap hit less 1 dB, and under the kick's gain.
+    expect(Math.abs(-13 + levelOf(rare, 'Drop Hit') - (-11 + levelOf(rare, 'Clap') - 1))).toBeLessThanOrEqual(0.5)
+    expect(levelOf(rare, 'Drop Hit')).toBeLessThanOrEqual(levelOf(rare, 'Kick') - 1)
   })
 
   it('brings every fill on the lane to the same hit level: a loud one down, a quiet one up', () => {
@@ -216,7 +216,7 @@ describe('moments are levelled hit for hit too: disco hits, fills, impacts, cras
 
   it('follows the clap when the mix check moves it afterwards (hit lanes only)', () => {
     // (Fills 1 dB under the clap's hits, so they're not at the kick's ceiling and follow the clap.)
-    const p = run([ev('Fills', fillA, 0), pat('Disco Hit', disco, [0], 0, 4)], ['Fills', 'Disco Hit'], { fills: -1 })
+    const p = run([ev('Fills', fillA, 0), pat('Drop Hit', disco, [0], 0, 4)], ['Fills', 'Drop Hit'], { fills: -1 })
     const before = { fills: levelOf(p, 'Fills'), kick: levelOf(p, 'Kick'), clap: levelOf(p, 'Clap') }
     p.lanes.find((l) => l.name === 'Clap')!.levelDb! -= 3      // what checkMix may do to the clap
     levelLanes(p, all, { db: { clap: -4 }, tracks: 0, hits: { fills: -1 } }, [[0, 64]], laneRole, () => 0, undefined, undefined, true)

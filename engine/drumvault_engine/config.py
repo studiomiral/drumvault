@@ -129,7 +129,7 @@ class Thresholds:
     bass_sample_pitch_window_s: float = 1.0
     bass_sample_min_hz: float = 27.0
     bass_sample_max_hz: float = 260.0
-    # Disco hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
+    # Drop hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0
     hit_tail_db: float = -60.0

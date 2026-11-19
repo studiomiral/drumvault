@@ -54,11 +54,11 @@ describe.runIf(!!LIB)('phrasing', () => {
         const m = lengths.get(s.kind) ?? new Map()
         m.set(s.bars, (m.get(s.bars) ?? 0) + 1)
         lengths.set(s.kind, m)
-        // Where the halfway moments fall in drops: a disco hit, the groove switching, a vocal or strings coming or going.
+        // Where the halfway moments fall in drops: a drop hit, the groove switching, a vocal or strings coming or going.
         if (s.kind === 'drop') for (const c of g.project.clips) {
           const role = roleOf.get(c.laneId) ?? ''
           if (!/^(disco|groove|vocal|strings)/.test(role)) continue
-          // (A disco hit is one hit: only where it starts.)
+          // (A drop hit is one hit: only where it starts.)
           for (const [what, edge] of [['in', c.start / 4], ...(/^disco/.test(role) ? [] : [['out', (c.start + c.length) / 4]])] as [string, number][]) {
             const at = Math.round(edge - s.start)
             if (at <= 0 || at >= s.bars || at % 16 === 0) continue
@@ -81,7 +81,7 @@ describe.runIf(!!LIB)('phrasing', () => {
     out(`intros gated: ${gatedIntros} of ${N}; short fills: ${fillsSeen.all}, as recorded ${fillsSeen.asRecorded}, spliced ${fillsSeen.spliced}, reworked alone ${fillsSeen.reworked}; ${fillSources.size} fill samples played as ${variants.size} different fills`)
     for (const a of alone.slice(0, 8)) out(`  ${a}`)
     for (const [k, m] of lengths) out(`${k.padEnd(6)} ${[...m.entries()].sort((a, b) => a[0] - b[0]).map(([b, n]) => `${b}:${n}`).join('  ')}`)
-    out('moments in drops off the 16-bar lines (disco hits, groove, vocal, strings coming in or going): how often:')
+    out('moments in drops off the 16-bar lines (drop hits, groove, vocal, strings coming in or going): how often:')
     for (const [k, n] of [...changes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)) out(`  ${String(n).padStart(4)}  ${k}`)
   })
 })

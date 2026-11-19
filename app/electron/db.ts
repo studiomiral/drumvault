@@ -187,7 +187,7 @@ export class LibraryReader {
       .map((r) => ({ ...r, name: r.file_name.replace(/\.midi?$/i, ''), notes: JSON.parse(r.notes) }))
   }
 
-  /** Disco hits (schema v10) and chord stabs (v12), oldest first. */
+  /** Drop hits (schema v10) and chord stabs (v12), oldest first. */
   listHits(): HitItem[] {
     if (!this.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hits'").length) return []
     const kind = this.all<{ name: string }>('PRAGMA table_info(hits)').some((c) => c.name === 'kind') ? "COALESCE(kind, 'disco')" : "'disco'"
@@ -291,6 +291,9 @@ export class LibraryReader {
     // …and their tempo looked for (v19): a loop is synced to the track.
     if (this.hasTable('hits') && this.hasColumn('hits', 'kind')
         && (this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM hits WHERE kind = 'ambience'${this.hasColumn('hits', 'bpm') ? ' AND bpm IS NULL' : ''}`)[0]?.n ?? 0) > 0) return true
+    // The Disco Hits folder renamed Drop Hits (v20): the engine moves it when it opens the library.
+    if (this.hasTable('hits')
+        && (this.all<{ n: number }>("SELECT COUNT(*) AS n FROM hits WHERE substr(rel_path, 1, 11) = 'Disco Hits/'")[0]?.n ?? 0) > 0) return true
     // Imports from before the library kept its own copy: kept while the zip or folder is still there.
     const lib = this.library
     if (lib && this.all<{ source_code: string; original_path: string | null }>(

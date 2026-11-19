@@ -296,20 +296,20 @@ class SaveMidiParams(BaseModel):
 
 
 class ImportHitsParams(BaseModel):
-    """Add disco hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
+    """Add drop hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
     paths: list[str]
     kind: Literal["disco", "stab", "strings", "bass", "ambience"] = "disco"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScanSpliceParams(BaseModel):
-    """List the sounds in the Splice folder that could go on the Chord Stabs, Disco Hits or Strings page (SCOPE.md §6.12)."""
+    """List the sounds in the Splice folder that could go on the Chord Stabs, Drop Hits or Strings page (SCOPE.md §6.12)."""
     folder: str
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class SetHitMetaParams(BaseModel):
-    """Correct a disco hit's key, or the semitones it plays off from the track key."""
+    """Correct a drop hit's key, or the semitones it plays off from the track key."""
     hit_id: int
     key_label: Optional[str] = None
     clear_key: bool = False

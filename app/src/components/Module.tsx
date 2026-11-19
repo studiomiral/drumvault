@@ -13,7 +13,7 @@ function savedOpen(): Record<string, boolean> {
 }
 
 /**
- * A Generate module (Bass, Chords, Disco Hits, Reverb builds): a panel that folds down to its
+ * A Generate module (Bass, Chords, Drop Hits, Reverb builds): a panel that folds down to its
  * header. The header keeps the module's on/off switch, so it shows at a glance whether G writes a
  * new one, plus a one-line summary while folded. Open or folded is remembered per module; in a
  * lane panel (`fixed`) it is always open, and its switch is on the module's pill instead.

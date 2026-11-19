@@ -76,8 +76,8 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'bed', name: 'Ambience', startDb: -24, color: '#cbd5e1' },
   { role: 'vocal', name: 'Vocal', startDb: -3, color: '#f9a8d4' },
   { role: 'vchop', name: 'Vocal Chops', startDb: -6, color: '#fbcfe8' },
-  { role: 'disco', name: 'Disco Hit', startDb: -6, color: '#f0abfc' },
-  { role: 'disco2', name: 'Disco Hit 2', startDb: -7, color: '#f5d0fe' },
+  { role: 'disco', name: 'Drop Hit', startDb: -6, color: '#f0abfc' },
+  { role: 'disco2', name: 'Drop Hit 2', startDb: -7, color: '#f5d0fe' },
   { role: 'fills', name: 'Fills', startDb: -5, color: '#fb923c' },
   { role: 'fx', name: 'FX', startDb: -9, color: '#a78bfa' },
   { role: 'fx2', name: 'FX 2', startDb: -11, color: '#c4b5fd' },
@@ -352,7 +352,7 @@ export interface GenerateOptions {
   bass?: BassOptions | null
   /** Reverb builds on top loops; null or left out = none. */
   verb?: VerbOptions | null
-  /** Disco hits (SCOPE.md §6.8) a track may drop at key moments; null or empty = none. */
+  /** Drop hits (SCOPE.md §6.8) a track may drop at key moments; null or empty = none. */
   disco?: { hits: HitItem[] } | null
   /**
    * Chord stabs (SCOPE.md §6.9) every track plays: the Chord Stabs page's samples, moved into the
@@ -776,7 +776,7 @@ interface BarPattern {
   sample: SampleListItem
   steps: Steps
   filter?: ClipFilter
-  /** Semitones (a disco hit moved into the track key). */
+  /** Semitones (a drop hit moved into the track key). */
   pitch?: number
   /** A volume ride over the bar (a build-up getting louder): dB at its start, and at its end. */
   gainDb?: number
@@ -1258,7 +1258,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     stabs.forEach((x, i) => (picks[STAB_ROLES[i]] = x))
   }
 
-  // ---- disco hits (SCOPE.md §6.8): the Disco Hits page's samples, moved into the track key. An
+  // ---- drop hits (SCOPE.md §6.8): the Drop Hits page's samples, moved into the track key. An
   // RNG of their own keeps the rest of the track the same with or without them ----
   const drng = new Rng(seed ^ 0x44495343)
   const hpRng = new Rng(seed ^ 0x4d495848)
@@ -1286,7 +1286,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const hitItems = opts.disco?.hits ?? []
   const hitPool = hitItems.map(hitSample)
   // ---- strings (SCOPE.md §6.10): the Strings page's samples close enough to the key. An RNG of
-  // their own, like the disco hits ----
+  // their own, like the drop hits ----
   const trng = new Rng(seed ^ 0x53545247)
   const stringHits = (opts.strings?.hits ?? []).filter((h) => stringsShift(h, key) != null)
   // ---- vocals (SCOPE.md §6.11): the Vocals page's takes. An RNG of their own too ----
@@ -1461,7 +1461,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     // straight after the intro starts leaner, its layers coming in over its first half.
     ioLift: lrng.chance(0.8),
     firstDrop: lrng.weighted([['lean', 3], ['full', 1]] as const),
-    // Disco hits in some tracks: one or two, on the 1 where each drop starts and halfway through
+    // Drop hits in some tracks: one or two, on the 1 where each drop starts and halfway through
     // it, or every 16 or 8 bars of the drops, or also where each breakdown starts.
     discoIn: hitPool.length > 0 && drng.chance(0.6),
     discoCount: drng.weighted([[1, 2], [2, 1]] as const) as number,
@@ -2706,7 +2706,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   })
   const varied = eight.added
 
-  // ---- disco hits on the 1 of key moments, taking turns when there are two (after the 8-bar
+  // ---- drop hits on the 1 of key moments, taking turns when there are two (after the 8-bar
   // variations, so the rest of the track is the same with or without them) ----
   const avoidHits = new Set(keep.avoid)
   const keptHit = (role: Role) => (keep.picks?.[role] ? hitPool.find((s) => s.rel_path === keep.picks![role]!.rel_path) ?? null : null)
@@ -2740,7 +2740,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (disco2) picks.disco2 = disco2
   }
 
-  // ---- strings under the track (after the 8-bar variations, like the disco hits): one sample in
+  // ---- strings under the track (after the 8-bar variations, like the drop hits): one sample in
   // the key, starting again on every 8-bar line, in the drops, all through, or between the intro
   // and the outro ----
   const keptStrings = keep.picks?.strings ? stringHits.find((h) => stringsItem(h).id === keep.picks!.strings!.id) ?? null : null
@@ -3110,7 +3110,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   }
   if (discoHits.length) {
     const where = { drops: 'where drops start and halfway', 16: 'every 16 bars of drops', 8: 'every 8 bars of drops', all: 'where drops and breaks start, halfway through drops' }[rules.discoAt]
-    choices.push(`disco hit${discoHits.length > 1 ? 's' : ''} ${discoHits.map((s) => s.name).join(' and ')} ${where}`)
+    choices.push(`drop hit${discoHits.length > 1 ? 's' : ''} ${discoHits.map((s) => s.name).join(' and ')} ${where}`)
   }
   // (After the structure's line, which stays first.)
   if (character) choices.splice(tpl ? 1 : 0, 0, `${CHARACTER_LABEL[character]}${lead ? `, led by ${LEAD_LABEL[lead]}: teased in the intro, in the clear in the breakdowns` : ''}`)
@@ -3423,7 +3423,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
 
 /**
  * The same track in another key (the Generate view's key menu). The bass part is the same part
- * moved into it the nearest way (its patch octave and any semitones set stay), disco hits and
+ * moved into it the nearest way (its patch octave and any semitones set stay), drop hits and
  * chord stabs are pitched for it, and tonal FX (risers, downlifters, atmos, …) whose key doesn't fit are
  * swapped for ones that do: the same kind, and for those leading into a line the same body length
  * and silence before it, so they still end where they did. The drums stay exactly as they are.
@@ -3544,14 +3544,14 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
 }
 
 /**
- * New disco hits for the same track (the Generate view's Disco Hits module): one or two hits and
+ * New drop hits for the same track (the Generate view's Drop Hits module): one or two hits and
  * where they land drawn again, over the same structure, key and everything else, which stays
  * exactly as it is. Always some hits (the button asks for them); others than the track has when
- * there are. Null when the Disco Hits page has none, or nothing new comes out.
+ * there are. Null when the Drop Hits page has none, or nothing new comes out.
  */
 export function rerollDisco(all: SampleListItem[], opts: GenerateOptions, g: Generation, seed: number): Generation | null {
   if (!opts.disco?.hits.length) return null
-  return rerollGroup(all, opts, g, seed, new Set<Role>(['disco', 'disco2']), new Set(LANE_RULES.disco), { discoIn: true }, 'disco hit')
+  return rerollGroup(all, opts, g, seed, new Set<Role>(['disco', 'disco2']), new Set(LANE_RULES.disco), { discoIn: true }, 'drop hit')
 }
 
 /**

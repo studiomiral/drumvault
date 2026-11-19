@@ -1,4 +1,4 @@
-"""Disco hits (SCOPE.md §6.8): import, key from the name or the sound, corrections, removal."""
+"""Drop hits (SCOPE.md §6.8): import, key from the name or the sound, corrections, removal."""
 
 import sqlite3
 import zipfile
@@ -60,7 +60,7 @@ def test_imports_trims_and_reads_the_key(tmp_path):
     assert by["Orchestra Hit.wav"]["key_source"] == "detected"
     assert by["Orchestra Hit.wav"]["key_label"] in ("F", "Dm")
     for row in by.values():
-        assert row["rel_path"].startswith("Disco Hits/")
+        assert row["rel_path"].startswith("Drop Hits/")
         data, sr = sf.read(str(Path(s.library_path) / row["rel_path"]), always_2d=True)
         assert sr == s.output_sample_rate
         # The silence before the attack and after the tail is gone; peak-normalised.
@@ -120,7 +120,7 @@ def test_chord_stabs_import_into_their_own_folder(tmp_path):
     by = {x["file_name"]: x for x in rows(s)}
     assert (by["Organ Stab Cm.wav"]["kind"], by["Organ Stab Cm.wav"]["key_label"]) == ("stab", "Cm")
     assert by["Organ Stab Cm.wav"]["rel_path"].startswith("Chord Stabs/")
-    assert (by["Brass Hit F.wav"]["kind"], by["Brass Hit F.wav"]["rel_path"].split("/")[0]) == ("disco", "Disco Hits")
+    assert (by["Brass Hit F.wav"]["kind"], by["Brass Hit F.wav"]["rel_path"].split("/")[0]) == ("disco", "Drop Hits")
     assert (Path(s.library_path) / by["Organ Stab Cm.wav"]["rel_path"]).exists()
     # The same file on the other page is already in.
     assert hits.import_hits(s, [str(src / "Organ Stab Cm.wav")])["skipped"] == 1
@@ -143,6 +143,35 @@ def test_hits_from_before_chord_stabs_are_disco_hits(tmp_path):
     with LibraryDB(s.library_path):
         pass
     assert [x["kind"] for x in rows(s)] == ["disco"]
+
+
+def test_the_disco_hits_folder_moves_to_drop_hits(tmp_path):
+    s = settings(tmp_path)
+    lib = Path(s.library_path)
+    write(tmp_path / "src" / "Brass Hit F.wav", stab(F_MAJOR))
+    write(tmp_path / "src" / "Horn Hit F.wav", stab(F_MAJOR, seconds=0.6))
+    hits.import_hits(s, [str(tmp_path / "src")])
+    from drumvault_engine.db import LibraryDB
+    # A library from before v20: the files in Disco Hits/, one name also taken in Drop Hits/, one row's file gone.
+    with LibraryDB(lib) as db:
+        for r in db.list_hits():
+            db.conn.execute("UPDATE hits SET rel_path = ? WHERE id = ?", (r["rel_path"].replace("Drop Hits/", "Disco Hits/"), r["id"]))
+        db.conn.execute("INSERT INTO hits (kind, file_name, rel_path) VALUES ('disco', 'Gone.wav', 'Disco Hits/Gone.wav')")
+    (lib / "Drop Hits").rename(lib / "Disco Hits")
+    write(lib / "Drop Hits" / "brass-hit-f.wav", stab(C_MINOR))
+    with LibraryDB(lib):
+        pass
+    assert not (lib / "Disco Hits").exists()
+    by = {x["file_name"]: x["rel_path"] for x in rows(s)}
+    assert by["Horn Hit F.wav"] == "Drop Hits/horn-hit-f.wav"
+    assert by["Brass Hit F.wav"] == "Drop Hits/brass-hit-f-2.wav"
+    assert by["Gone.wav"] == "Drop Hits/Gone.wav"
+    for rel in (by["Horn Hit F.wav"], by["Brass Hit F.wav"], "Drop Hits/brass-hit-f.wav"):
+        assert (lib / rel).exists()
+    # Opened again: nothing left to move.
+    with LibraryDB(lib):
+        pass
+    assert {x["file_name"]: x["rel_path"] for x in rows(s)} == by
 
 
 def test_a_hit_knows_how_hard_it_hits_and_whether_it_is_a_chord(tmp_path):

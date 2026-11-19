@@ -228,7 +228,7 @@ export function levelLanes(project: Project, samples: Map<string, SampleListItem
     const level = Math.max(-MAX_LEVEL_DB, Math.min(MAX_LEVEL_DB, target - loud))
     lane.levelDb = Math.round(level * 2) / 2
   }
-  // Hit for hit (after the lanes they go by): stabs, and the moments (disco hits, fills, impacts,
+  // Hit for hit (after the lanes they go by): stabs, and the moments (drop hits, fills, impacts,
   // crashes, FX). Each hit as loud as the clap's hits and its part's step (as hard as they hit in
   // the user's tracks, else `HIT_DB`; without a clap, by the kick's), and never near the kick's
   // hits: loudness against loudness (a quiet sample may take more gain than the kick's lane); how
@@ -284,7 +284,7 @@ const underKick = (role: Role) => (role.startsWith('stab') ? STAB_UNDER_KICK_DB 
 /**
  * The lanes levelled hit for hit, and where one of their hits sits against one of the clap's
  * (dB): the stabs and the moments. Few, short sounds: an average over the bar (how the references'
- * parts are measured) says nothing of how loud each one is, and turned a lone disco hit or a short
+ * parts are measured) says nothing of how loud each one is, and turned a lone drop hit or a short
  * fill far up. Where the user's tracks don't say (`hitSteps`); measured on them (45 tracks, each
  * part's loudest hit against the clap's, the median): crashes +1.2, fills +6.3 (a roll is loudest
  * as it lands), risers and sweeps +1.2, impacts and downlifters −0.4. A layer sits as far under its

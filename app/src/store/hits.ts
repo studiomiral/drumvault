@@ -1,4 +1,4 @@
-// Disco hits (SCOPE.md §6.8): the Disco Hits page's samples, shared by that page and Generate.
+// Drop hits (SCOPE.md §6.8): the Drop Hits page's samples, shared by that page and Generate.
 
 import { create } from 'zustand'
 import { api } from '../api'

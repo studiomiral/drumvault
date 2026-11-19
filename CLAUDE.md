@@ -3,7 +3,7 @@
 This repo is **Warehouse** (until recently called Drumvault), a personal macOS desktop app. **Drumvault** is now the name of its stem-processing module (the first tab of the Drums page, formerly "Process"); the repo, the `drumvault_engine` package, the library folder, `window.drumvault` and the `.dvproj` format keep the old name. `SCOPE.md` is the source of truth for what to build — read it before starting any task, and follow its phases in order.
 
 ## Project in one line
-Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out (the Drumvault) → generate whole club house tracks with bass, chord stabs and disco hits and edit them on a mini timeline (both in Create) → export full-length stems for Logic Pro → upload them to House of Tracks. The app has five pages: Create, Drums, Sounds, Upload, Settings (SCOPE.md §6.1); most time is spent in Create. Upload sends exports to House of Tracks (§6.5b).
+Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum sample library out (the Drumvault) → generate whole club house tracks with bass, chord stabs and drop hits and edit them on a mini timeline (both in Create) → export full-length stems for Logic Pro → upload them to House of Tracks. The app has five pages: Create, Drums, Sounds, Upload, Settings (SCOPE.md §6.1); most time is spent in Create. Upload sends exports to House of Tracks (§6.5b).
 
 ## Stack
 - `app/` — Electron + React + Vite (electron-vite) + TypeScript + Tailwind + Zustand. Web Audio for playback/export. Dark matte theme with pastels and a subtle yellow accent (see SCOPE.md §6.1).

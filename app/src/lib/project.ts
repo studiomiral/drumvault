@@ -286,9 +286,40 @@ export function serializeProject(p: Project): string {
   return JSON.stringify({ ...p, updatedAt: new Date().toISOString() }, null, 1)
 }
 
+/** Lanes, folders and choices renamed since projects were saved with them (Disco Hits → Drop Hits). */
+const RENAMED_LANES: Record<string, string> = { 'Disco Hit': 'Drop Hit', 'Disco Hit 2': 'Drop Hit 2' }
+const RENAMED_FOLDERS: [string, string][] = [['Disco Hits/', 'Drop Hits/']]
+const RENAMED_SOURCES: Record<string, string> = { 'Disco Hits': 'Drop Hits' }
+const RENAMED_CHOICES: [string, string][] = [['disco hit', 'drop hit']]
+
+const renamedPath = (path: string) => {
+  const r = RENAMED_FOLDERS.find(([from]) => path.startsWith(from))
+  return r ? r[1] + path.slice(r[0].length) : path
+}
+
+/** A project saved before a rename, in today's names (its lanes keep their modules, its hits are found). */
+function renamed(p: Partial<Project>): Partial<Project> {
+  for (const l of p.lanes ?? []) if (l.name in RENAMED_LANES) l.name = RENAMED_LANES[l.name]
+  for (const c of p.clips ?? []) if (c.sample?.relPath) c.sample.relPath = renamedPath(c.sample.relPath)
+  const g = p.generation
+  if (g) {
+    for (const s of Object.values(g.picks ?? {})) {
+      if (!s) continue
+      s.rel_path = renamedPath(s.rel_path)
+      s.source_code = (s.source_code && RENAMED_SOURCES[s.source_code]) ?? s.source_code
+    }
+    if (g.zips) g.zips = g.zips.map((z) => RENAMED_SOURCES[z] ?? z)
+    if (g.choices) g.choices = g.choices.map((c) => {
+      const r = RENAMED_CHOICES.find(([from]) => c.startsWith(from))
+      return r ? r[1] + c.slice(r[0].length) : c
+    })
+  }
+  return p
+}
+
 /** Parse and validate a .dvproj file; fills in fields added in later versions. */
 export function parseProject(text: string): Project {
-  const p = JSON.parse(text) as Partial<Project>
+  const p = renamed(JSON.parse(text) as Partial<Project>)
   if (p.format !== 'drumvault-project') throw new Error('Not a Warehouse project')
   if (p.version !== 1) throw new Error(`Unsupported project version ${p.version}`)
   const now = new Date().toISOString()

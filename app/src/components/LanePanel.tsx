@@ -33,7 +33,7 @@ const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   ambience: () => ['Ambience'],
   vocals: () => ['Vocal', 'Vocal Chops'],
   vocalloops: () => ['Vocal', 'Vocal Chops'],
-  disco: () => ['Disco Hit', 'Disco Hit 2'],
+  disco: () => ['Drop Hit', 'Drop Hit 2'],
   verb: () => [],
 }
 
@@ -49,7 +49,7 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string }[] = 
   { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
   { module: 'pads', label: 'Pads', on: 'On: new generations may get a pad or a reese in their breakdowns', off: 'Off: new generations have no breakdown layer' },
   { module: 'ambience', label: 'Ambience', on: 'On: most new generations get a very quiet texture under them', off: 'Off: new generations have no ambience bed' },
-  { module: 'disco', label: 'Disco Hits', on: 'On: some new generations drop one or two disco hits', off: 'Off: new generations have no disco hits' },
+  { module: 'disco', label: 'Drop Hits', on: 'On: some new generations get one or two drop hits', off: 'Off: new generations have no drop hits' },
   { module: 'verb', label: 'Reverb', on: 'On: new generations get reverb builds', off: 'Off: new generations have no reverb builds' },
 ]
 
@@ -82,7 +82,7 @@ export function confirmRemake(what: string): boolean {
 
 /**
  * Create's side panel (SCOPE.md §6.6): the track (key, structure, choices), the modules of the
- * track (Bass, Chords, Vocals, Strings, Disco Hits, Reverb builds), one at a time, or a lane's
+ * track (Bass, Chords, Vocals, Strings, Drop Hits, Reverb builds), one at a time, or a lane's
  * sounds and the choices that shape it. Each lane on it can get a new sound where it plays, be
  * made again, and be kept for the next track. Every change is an edit of the track (⌘Z).
  */

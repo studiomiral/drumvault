@@ -5,7 +5,7 @@ const TITLES = { create: 'Create', drums: 'Drums', sounds: 'Sounds', upload: 'Up
 
 /**
  * A page's title and its tabs (SCOPE.md §6.1): Drums (Drumvault, Library), Sounds (Chord Stabs,
- * Disco Hits, Strings, Bass Samples, Ambience, MIDI). A view that isn't a tab (Grid, Splice) shows
+ * Drop Hits, Strings, Bass Samples, Ambience, MIDI). A view that isn't a tab (Grid, Splice) shows
  * its own name, with the way back to the page's tabs.
  */
 export function PageTabs({ view, title }: { view: View; title?: string }) {

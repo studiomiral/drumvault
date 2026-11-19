@@ -184,10 +184,10 @@ export interface ElevenStatus {
   error?: string
 }
 
-/** A disco hit (SCOPE.md §6.8): a stab or brass hit from the Disco Hits page, in <Library>/Disco Hits/. */
+/** A drop hit (SCOPE.md §6.8): a stab or brass hit from the Drop Hits page, in <Library>/Drop Hits/. */
 export interface HitItem {
   id: number
-  /** A disco hit (the Disco Hits page), a chord stab (Chord Stabs), strings (Strings) or a bass one-shot (Bass Samples); older rows are disco hits, 'drone' rows unused. */
+  /** A drop hit (the Drop Hits page), a chord stab (Chord Stabs), strings (Strings) or a bass one-shot (Bass Samples); older rows are drop hits, 'drone' rows unused. */
   kind: 'disco' | 'stab' | 'drone' | 'strings' | 'bass' | 'ambience'
   file_name: string
   name: string
@@ -555,9 +555,9 @@ export interface DrumvaultAPI {
   deleteMidi(midiIds: number[]): Promise<void>
   /** Imported MIDI files. */
   listMidi(): Promise<MidiItem[]>
-  /** Add disco hits from audio files, folders and zips (SCOPE.md §6.8). */
+  /** Add drop hits from audio files, folders and zips (SCOPE.md §6.8). */
   importHits(paths: string[], kind?: HitItem['kind']): Promise<HitImportResult>
-  /** File dialog for disco hits: audio files, folders, zips. */
+  /** File dialog for drop hits: audio files, folders, zips. */
   chooseHits(title?: string): Promise<string[]>
   /** Look through the Splice folder (the saved one, else ~/Splice) for sounds for the music pages. Reads only. */
   scanSplice(): Promise<SpliceScan>

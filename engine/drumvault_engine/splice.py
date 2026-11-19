@@ -1,10 +1,10 @@
-"""The Splice folder (SCOPE.md §6.12): sounds in it that could go on the Chord Stabs, Disco Hits,
+"""The Splice folder (SCOPE.md §6.12): sounds in it that could go on the Chord Stabs, Drop Hits,
 Strings, Bass Samples, Ambience or Vocal Loops page.
 
 A scan reads nothing but file names and audio headers, and changes nothing: each audio file's name
 says what it is ("MALAY_strings_stab_fall_C#min", "RARE_piano_textured_Bmin_chord2"), its header
 how long it is. A file is suggested for one page (or none): a short chord or stab for the Chord
-Stabs, a brass, horn or orchestra hit for the Disco Hits, a long string sound for the Strings, a
+Stabs, a brass, horn or orchestra hit for the Drop Hits, a long string sound for the Strings, a
 bass one-shot for the Bass Samples, a long texture for the Ambience: noise (crackle, hiss,
 room tone, a crowd) or a tonal bed (a drone, a soft pad in a key). Drums, vocals, FX, bass loops and loops of anything but strings
 are left out. Adding one is the page's

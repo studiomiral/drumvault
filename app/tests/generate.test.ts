@@ -1113,14 +1113,14 @@ describe('generator: reverb builds', () => {
   })
 })
 
-describe('generator: disco hits', () => {
+describe('generator: drop hits', () => {
   const hit = (id: number, key: string | null, pitch_fix = 0): HitItem => ({
-    id, kind: 'disco', file_name: `Stab ${id}.wav`, name: `Stab ${id}`, rel_path: `Disco Hits/stab-${id}.wav`, key_label: key, key_camelot: null,
+    id, kind: 'disco', file_name: `Stab ${id}.wav`, name: `Stab ${id}`, rel_path: `Drop Hits/stab-${id}.wav`, key_label: key, key_camelot: null,
     key_source: key ? 'name' : null, pitch_fix, duration_s: 1.5, channels: 2,
   })
   const HITS = [hit(1, 'Cm'), hit(2, 'F'), hit(3, null), hit(4, 'A', 2)]
   const disco = { hits: HITS }
-  const discoLanes = (g: Generation) => new Set(g.project.lanes.filter((l) => /^Disco Hit/.test(l.name)).map((l) => l.id))
+  const discoLanes = (g: Generation) => new Set(g.project.lanes.filter((l) => /^Drop Hit/.test(l.name)).map((l) => l.id))
 
   it('drops one or two hits in some tracks, on the 1 of drops (and breaks), moved into the track key', () => {
     let some = 0
@@ -1149,13 +1149,13 @@ describe('generator: disco hits', () => {
         expect(c.pitch ?? 0).toBe(Math.max(-12, Math.min(12, transposeTo(h.key_label, g.key) + h.pitch_fix)))
       }
       for (const s of starts) expect(clips.some((c) => c.start === s)).toBe(true)
-      expect(g.choices.some((c) => c.startsWith('disco hit'))).toBe(true)
+      expect(g.choices.some((c) => c.startsWith('drop hit'))).toBe(true)
     }
     expect(some).toBeGreaterThan(20)
     expect(some).toBeLessThan(60)
     expect(two).toBeGreaterThan(0)
     expect(where.size).toBeGreaterThan(2)
-    expect(generate(LIB, OPTS, 3001).project.lanes.some((l) => /^Disco/.test(l.name))).toBe(false)
+    expect(generate(LIB, OPTS, 3001).project.lanes.some((l) => /^Drop Hit/.test(l.name))).toBe(false)
   })
 
   it('moves a hit to the relative key across major and minor, plus its own fix', () => {
@@ -1167,22 +1167,22 @@ describe('generator: disco hits', () => {
     expect(hitPitch(hit(1, 'Cm', 20), 'Fm')).toBe(12)
   })
 
-  it('draws new disco hits for the same track, the rest exactly as it is', () => {
+  it('draws new drop hits for the same track, the rest exactly as it is', () => {
     const name = (g: Generation, id: string) => g.project.lanes.find((l) => l.id === id)!.name
-    const rest = (g: Generation) => g.project.clips.filter((c) => !/^Disco/.test(name(g, c.laneId))).map(({ id: _i, laneId, ...c }) => [name(g, laneId), c])
+    const rest = (g: Generation) => g.project.clips.filter((c) => !/^Drop Hit/.test(name(g, c.laneId))).map(({ id: _i, laneId, ...c }) => [name(g, laneId), c])
     for (let i = 0; i < 12; i++) {
       const g = generate(LIB, { ...OPTS, disco }, 3200 + i)
       const r = rerollDisco(LIB, { ...OPTS, disco }, g, 99 + i)!
       expect(r).not.toBeNull()
       expect(rest(r)).toEqual(rest(g))
       expect(r.sections).toEqual(g.sections)
-      const hits = r.project.clips.filter((c) => /^Disco/.test(name(r, c.laneId)))
+      const hits = r.project.clips.filter((c) => /^Drop Hit/.test(name(r, c.laneId)))
       expect(hits.length).toBeGreaterThan(0)             // the button always brings some
       for (const c of hits) expect(r.project.lanes.some((l) => l.id === c.laneId)).toBe(true)
-      expect(r.project.lanes.filter((l) => /^Disco/.test(l.name)).every((l) => hits.some((c) => c.laneId === l.id))).toBe(true)
-      const before = new Set(g.project.clips.filter((c) => /^Disco/.test(name(g, c.laneId))).map((c) => c.sample.relPath))
+      expect(r.project.lanes.filter((l) => /^Drop Hit/.test(l.name)).every((l) => hits.some((c) => c.laneId === l.id))).toBe(true)
+      const before = new Set(g.project.clips.filter((c) => /^Drop Hit/.test(name(g, c.laneId))).map((c) => c.sample.relPath))
       if (before.size && before.size < HITS.length) expect(hits.some((c) => !before.has(c.sample.relPath))).toBe(true)
-      expect(r.choices.filter((c) => c.startsWith('disco hit'))).toHaveLength(1)
+      expect(r.choices.filter((c) => c.startsWith('drop hit'))).toHaveLength(1)
     }
     expect(rerollDisco(LIB, OPTS, generate(LIB, OPTS, 1), 5)).toBeNull()
   })
@@ -1200,12 +1200,12 @@ describe('generator: another key for the same track', () => {
   const bassMidi: MidiItem = { id: 766, file_name: 'Bass.mid', name: 'Bass', rel_path: 'MIDI/Bass/Bass.mid', role: 'bass', bars: 1,
     key_label: 'Am', key_camelot: null, notes: [[0.5, 0.25, 41, 100], [1.5, 0.25, 41, 100]], favorite: 0, source: null, source_code: null }
   const presets = [{ path: '/p.SerumPreset', name: 'P', folder: 'X', tags: [] }]
-  const hits: HitItem[] = [{ id: 1, kind: 'disco', file_name: 'Stab Cm.wav', name: 'Stab Cm', rel_path: 'Disco Hits/stab.wav', key_label: 'Cm', key_camelot: null,
+  const hits: HitItem[] = [{ id: 1, kind: 'disco', file_name: 'Stab Cm.wav', name: 'Stab Cm', rel_path: 'Drop Hits/stab.wav', key_label: 'Cm', key_camelot: null,
     key_source: 'name', pitch_fix: 0, duration_s: 1, channels: 2 }]
   const opts: GenerateOptions = { ...OPTS, bass: { midis: [bassMidi], presets, favorites: [], sidechain: 0.5, octaves: { '/p.SerumPreset': -12 } }, disco: { hits } }
   const TONAL = ['fx_riser', 'fx_downlifter', 'fx_atmos', 'fx']
 
-  it('moves the bass and disco hits, swaps FX out of key, and leaves the drums', () => {
+  it('moves the bass and drop hits, swaps FX out of key, and leaves the drums', () => {
     let swaps = 0
     for (let i = 0; i < 15; i++) {
       const g = generate(LIB, opts, 4000 + i)
@@ -2694,9 +2694,9 @@ describe('generator: phrasing and the kick never alone', () => {
     expect(halfwayBars(24)).toBe(16)
     expect(halfwayBars(16)).toBe(8)   // one round: its phrase line
     expect(halfwayBars(8)).toBe(4)
-    // A disco hit halfway through a drop lands on one of its 16-bar lines.
+    // A drop hit halfway through a drop lands on one of its 16-bar lines.
     for (const g of gens) {
-      const id = laneOf(g, 'Disco Hit')
+      const id = laneOf(g, 'Drop Hit')
       if (!id) continue
       for (const s of g.sections.filter((x) => x.kind === 'drop' && x.bars > 16)) {
         for (const c of g.project.clips.filter((x) => x.laneId === id && x.start > s.start * 4 && x.start < (s.start + s.bars) * 4)) {

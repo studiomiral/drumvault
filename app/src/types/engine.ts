@@ -5,7 +5,7 @@ export type Category =
   | "kick" | "clap" | "snare" | "hat" | "hat_closed" | "hat_open" | "ride" | "cymbal"
   | "shaker" | "perc" | "top" | "groove" | "drums" | "fill" | "roll" | "fx_riser" | "fx_downlifter"
   | "fx_impact" | "fx_sweep" | "fx_atmos" | "fx" | "melodic" | "full_mix" | "ignore"
-  | "disco_hit"   // the Disco Hits page's samples (their own table, never a stem's category)
+  | "disco_hit"   // the Drop Hits page's samples (their own table, never a stem's category)
   | "chord_stab"; // the Chord Stabs page's samples (the same table)
 
 export type ZipStatus =

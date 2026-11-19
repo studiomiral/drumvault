@@ -7,10 +7,13 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
+
+# Library folders renamed since libraries were made with them (old → new), moved when a library opens.
+RENAMED_FOLDERS = {"Disco Hits": "Drop Hits"}
 
 # A sample kind ("oneshot" | "loop" | "event"), several of them, or None for all.
 Kinds = str | tuple[str, ...] | None
@@ -99,11 +102,11 @@ CREATE TABLE IF NOT EXISTS midi_files (
   created_at TEXT
 );
 
--- Disco hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Disco Hits/;
+-- Drop hits (schema v10): one-shot stabs and brass hits for Generate, in <Library>/Drop Hits/ (Disco Hits/ before v20);
 -- chord stabs (v12) the same way, in <Library>/Chord Stabs/.
 CREATE TABLE IF NOT EXISTS hits (
   id INTEGER PRIMARY KEY,
-  kind TEXT DEFAULT 'disco',        -- "disco" (a Disco Hits page sample) | "stab" (Chord Stabs) | "strings" (Strings; "drone": older, unused)
+  kind TEXT DEFAULT 'disco',        -- "disco" (a Drop Hits page sample) | "stab" (Chord Stabs) | "strings" (Strings; "drone": older, unused)
   file_name TEXT, rel_path TEXT UNIQUE, original_path TEXT, file_sha1 TEXT UNIQUE,
   key_label TEXT, key_camelot TEXT,
   key_source TEXT,                  -- "name" (in the file name) | "detected" (from the audio) | "manual"
@@ -164,6 +167,7 @@ class LibraryDB:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
         self._migrate()
+        self._rename_folders()
         self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                           (str(SCHEMA_VERSION),))
 
@@ -203,7 +207,7 @@ class LibraryDB:
         if "levels" not in arr_cols:  # v13: the producer's balance (measured again by analyze_library)
             self.conn.execute("ALTER TABLE arrangements ADD COLUMN levels TEXT")
         hit_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(hits)")}
-        if "kind" not in hit_cols:  # v12: chord stabs beside disco hits
+        if "kind" not in hit_cols:  # v12: chord stabs beside drop hits
             self.conn.execute("ALTER TABLE hits ADD COLUMN kind TEXT DEFAULT 'disco'")
         if "energy_db" not in hit_cols:  # v13: loudness (filled by analyze_library)
             self.conn.execute("ALTER TABLE hits ADD COLUMN energy_db REAL")
@@ -217,6 +221,36 @@ class LibraryDB:
             self.conn.execute("ALTER TABLE hits ADD COLUMN tonal INTEGER")
         if "bpm" not in hit_cols:  # v19: textures with a rhythm, synced to the track (filled by analyze_library)
             self.conn.execute("ALTER TABLE hits ADD COLUMN bpm REAL")
+
+    def _rename_folders(self) -> None:
+        """Library folders renamed (v20: Disco Hits → Drop Hits): every file moves to the new folder (as
+        "name-2.wav" when its name is taken there) and its row with it; a row whose file is gone too."""
+        for old, new in RENAMED_FOLDERS.items():
+            src, dst = self.library / old, self.library / new
+            moved: dict[str, str] = {}
+            if src.is_dir():
+                dst.mkdir(exist_ok=True)
+                for f in sorted(src.iterdir()):
+                    to, k = dst / f.name, 1
+                    while to.exists():
+                        k += 1
+                        to = dst / f"{f.stem}-{k}{f.suffix}"
+                    f.rename(to)
+                    moved[f"{old}/{f.name}"] = f"{new}/{to.name}"
+                try:
+                    src.rmdir()
+                except OSError:
+                    pass
+            with self._lock:
+                for r in self.conn.execute("SELECT id, rel_path FROM hits WHERE substr(rel_path, 1, ?) = ?",
+                                           (len(old) + 1, f"{old}/")).fetchall():
+                    rel = base = moved.get(r["rel_path"], new + r["rel_path"][len(old):])
+                    k = 1
+                    while self.conn.execute("SELECT 1 FROM hits WHERE rel_path = ?", (rel,)).fetchone():
+                        k += 1  # the new path is another hit's (only a row whose file is gone gets here)
+                        b = PurePosixPath(base)
+                        rel = str(b.with_name(f"{b.stem}-{k}{b.suffix}"))
+                    self.conn.execute("UPDATE hits SET rel_path = ? WHERE id = ?", (rel, r["id"]))
 
     def close(self) -> None:
         self.conn.close()

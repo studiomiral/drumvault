@@ -17,7 +17,7 @@ export function WelcomeView() {
         <p className="text-muted mt-2 leading-relaxed">
           Warehouse builds club house tracks from your own material. Its Drumvault turns zips of stems into
           one drum sample library (one-shots and tempo-matched loops, labelled with the source track's key);
-          bass, chord stabs and disco hits join them in Generate. Choose the folder for that library. Everything goes in
+          bass, chord stabs and drop hits join them in Generate. Choose the folder for that library. Everything goes in
           there, including its index, so you can back it up or move it as one folder.
         </p>
         <Button variant="primary" className="mt-6 h-9 px-4 text-[13.5px]" onClick={() => void choose()}>

@@ -10,7 +10,7 @@ import { loadVocals } from '../store/vocals'
 import type { SpliceCandidate, SpliceScan } from '../types/api'
 
 type Kind = SpliceCandidate['kind']
-const PAGE: Record<Kind, string> = { stab: 'Chord Stabs', disco: 'Disco Hits', strings: 'Strings', bass: 'Bass Samples', ambience: 'Ambience', vocal: 'Vocal Loops' }
+const PAGE: Record<Kind, string> = { stab: 'Chord Stabs', disco: 'Drop Hits', strings: 'Strings', bass: 'Bass Samples', ambience: 'Ambience', vocal: 'Vocal Loops' }
 const KINDS: Kind[] = ['stab', 'disco', 'strings', 'bass', 'ambience', 'vocal']
 /** The other pages a sound can go on instead (a vocal is a take, not a hit: only its own page). */
 const OTHERS = (k: Kind) => (k === 'vocal' ? [] : KINDS.filter((x) => x !== k && x !== 'vocal'))
@@ -63,7 +63,7 @@ function usePreview() {
 
 /**
  * Music → Splice (SCOPE.md §6.12): the sounds in the Splice folder that could go on the Chord
- * Stabs, Disco Hits, Strings or Bass Samples page, each with the page suggested for it. Nothing is added until
+ * Stabs, Drop Hits, Strings or Bass Samples page, each with the page suggested for it. Nothing is added until
  * you add it: that is the page's own import, which copies the file into the library.
  */
 export function SpliceView() {
@@ -150,7 +150,7 @@ export function SpliceView() {
         <div className="rounded-2xl border border-line bg-panel-2 px-5 py-4 text-[12px] text-muted">
           <div className="text-text font-medium text-[13px] mb-1">Sounds from your Splice folder for the music pages</div>
           The folder is only read: file names and lengths say which sounds could be chord stabs (short chords and keys one-shots),
-          disco hits (brass and orchestra hits), strings (long string sounds), bass samples (bass one-shots) or ambience (long textures:
+          drop hits (brass and orchestra hits), strings (long string sounds), bass samples (bass one-shots) or ambience (long textures:
           crackle, hiss, room tone). Each one is a
           suggestion. Listen, then add it to a page: the file is copied into the library, trimmed, and its key read as on that
           page. Drums, vocals, FX, bass loops and loops of anything but strings are left out.
@@ -162,7 +162,7 @@ export function SpliceView() {
             Nothing at {scan.folder}. Choose the folder Splice downloads into with Folder…
           </Empty>
         ) : scan && !all.length ? (
-          <Empty title="Nothing to suggest">None of the {scan.files} sounds in the folder looks like a chord stab, a disco hit, strings, a bass one-shot or a texture.</Empty>
+          <Empty title="Nothing to suggest">None of the {scan.files} sounds in the folder looks like a chord stab, a drop hit, strings, a bass one-shot or a texture.</Empty>
         ) : scan ? (
           <>
             <div className="flex items-center gap-4">

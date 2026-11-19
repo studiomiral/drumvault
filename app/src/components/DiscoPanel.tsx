@@ -17,7 +17,7 @@ const WHERE: Record<string, string> = {
   all: 'where drops and breaks start, and halfway through drops',
 }
 
-/** Disco hits (SCOPE.md §6.8): which of the Disco Hits page's samples this track drops, and their pitch. */
+/** Drop hits (SCOPE.md §6.8): which of the Drop Hits page's samples this track drops, and their pitch. */
 export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const opts = useGenerate((s) => s.settings.disco)
   useGenerate((s) => s.history)  // re-render after a pitch change
@@ -31,32 +31,32 @@ export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const where = WHERE[String(g.rules.discoAt)] ?? ''
   const toast = useApp((s) => s.toast)
   const reroll = () => {
-    if (!newDiscoHits()) toast('info', 'No other disco hits came out: add more on the Disco Hits page.')
+    if (!newDiscoHits()) toast('info', 'No other drop hits came out: add more on the Drop Hits page.')
   }
   const newButton = (
     <Button variant="secondary" onClick={reroll}
-            title="Other disco hits and/or other places for them in this track; the rest stays (⌘Z goes back)">
-      {used.length ? 'New disco hits' : 'Add disco hits'}
+            title="Other drop hits and/or other places for them in this track; the rest stays (⌘Z goes back)">
+      {used.length ? 'New drop hits' : 'Add drop hits'}
     </Button>
   )
-  const summary = !opts.enabled ? 'Off: G generates without disco hits'
-    : !hits.length ? 'No disco hits yet: add them on the Disco Hits page'
+  const summary = !opts.enabled ? 'Off: G generates without drop hits'
+    : !hits.length ? 'No drop hits yet: add them on the Drop Hits page'
       : used.length ? <><span className="text-text">{used.map((h) => h.name).join(' and ')}</span> · {where}</>
         : 'On: none in this track (some tracks get one or two)'
 
   return (
-    <Module id="disco" title="Disco Hits" fixed={fixed} enabled={opts.enabled} onEnabled={(enabled) => setDiscoOptions({ enabled })}
-            enabledTitle={opts.enabled ? 'On: some new generations drop one or two disco hits' : 'Off: new generations have no disco hits'}
+    <Module id="disco" title="Drop Hits" fixed={fixed} enabled={opts.enabled} onEnabled={(enabled) => setDiscoOptions({ enabled })}
+            enabledTitle={opts.enabled ? 'On: some new generations get one or two drop hits' : 'Off: new generations have no drop hits'}
             summary={summary}>
-      {!loaded ? <p className="text-muted text-[12.5px]">Loading disco hits…</p>
+      {!loaded ? <p className="text-muted text-[12.5px]">Loading drop hits…</p>
         : !hits.length ? (
-          <p className="text-muted text-[12.5px]">No disco hits yet: drop stabs and brass hits on the Disco Hits page.{' '}
-            <Button variant="ghost" onClick={() => setView('hits')}>Open Disco Hits</Button>
+          <p className="text-muted text-[12.5px]">No drop hits yet: add stabs and brass hits on the Drop Hits page.{' '}
+            <Button variant="ghost" onClick={() => setView('hits')}>Open Drop Hits</Button>
           </p>
         ) : !used.length ? (
           <div className="flex flex-wrap items-center gap-3 text-[12.5px] text-muted">
             {newButton}
-            <span>{opts.enabled ? `No disco hits in this track. Some tracks get one or two, from your ${hits.length} hits.` : 'Disco hits are off for new generations.'}</span>
+            <span>{opts.enabled ? `No drop hits in this track. Some tracks get one or two, from your ${hits.length} hits.` : 'Drop hits are off for new generations.'}</span>
           </div>
         ) : (
           <div className="space-y-2 text-[12.5px]">
@@ -72,7 +72,7 @@ export function DiscoPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   )
 }
 
-/** A disco hit (or chord stab) in the track: play it, and its pitch, remembered on the sample. */
+/** A drop hit (or chord stab) in the track: play it, and its pitch, remembered on the sample. */
 export function HitRow({ hit, g, color = '#f0abfc' }: { hit: HitItem; g: Generation; color?: string }) {
   const dragging = useRef(false)
   const [playing, setPlaying] = useState<number | null>(audition.playingId)

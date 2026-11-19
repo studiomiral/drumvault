@@ -10,7 +10,7 @@ export interface Playable {
   rel_path: string
   kind: SampleKind
   bars?: number | null
-  /** One-shots: played this much faster or slower (a pitched disco hit); 1 when left out. */
+  /** One-shots: played this much faster or slower (a pitched drop hit); 1 when left out. */
   rate?: number
 }
 

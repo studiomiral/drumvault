@@ -12,7 +12,7 @@ export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
   create: [{ view: 'create', label: 'Create' }],
   drums: [{ view: 'process', label: 'Drumvault' }, { view: 'library', label: 'Library' }],
   sounds: [
-    { view: 'stabs', label: 'Chord Stabs' }, { view: 'hits', label: 'Disco Hits' }, { view: 'strings', label: 'Strings' },
+    { view: 'stabs', label: 'Chord Stabs' }, { view: 'hits', label: 'Drop Hits' }, { view: 'strings', label: 'Strings' },
     { view: 'basses', label: 'Bass Samples' }, { view: 'ambience', label: 'Ambience' }, { view: 'vocalloops', label: 'Vocal Loops' }, { view: 'midi', label: 'MIDI' },
   ],
   upload: [{ view: 'upload', label: 'Upload' }],

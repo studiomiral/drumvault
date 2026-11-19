@@ -3,7 +3,7 @@
 //
 // The track on screen is always the open project (useProject): a generation is loaded into it as a
 // scratch track, which is saved only once it's kept (edited by hand, starred, exported). The
-// modules (Bass, Chords, Disco Hits, a lane's sound and choices) act on it through its generation
+// modules (Bass, Chords, Drop Hits, a lane's sound and choices) act on it through its generation
 // (Project.generation); every change is an edit of the project (⌘Z). The history holds the tracks
 // cycled through (← / →), each as it was left.
 
@@ -53,7 +53,7 @@ export interface GenerateSettings {
   bass: { enabled: boolean; sidechain: number; beats: LoopBeats | null; source: BassSource }
   /** Reverb builds on/off, on which parts, also every 8 or 16 bars, and how far the send rises. */
   verb: { enabled: boolean } & VerbOptions
-  /** Disco hits on/off: when on, some tracks get one or two (SCOPE.md §6.8). */
+  /** Drop hits on/off: when on, some tracks get one or two (SCOPE.md §6.8). */
   disco: { enabled: boolean }
   /** Chord stabs on/off: when on, every track plays them (SCOPE.md §6.9). */
   stabs: { enabled: boolean }
@@ -185,7 +185,7 @@ export interface LaneToggles {
 export interface KeepToggles {
   structure: boolean
   key: boolean
-  /** Lanes whose sound is kept: the main sample (kick, clap, …), the stab (its rhythm too), the disco hits. */
+  /** Lanes whose sound is kept: the main sample (kick, clap, …), the stab (its rhythm too), the drop hits. */
   lanes: Role[]
   bassline: boolean
   patch: boolean
@@ -319,7 +319,7 @@ function keepFrom(g: Generation | null, k: KeepToggles): Keep {
   const picks: Keep['picks'] = {}
   const rules: Rules = {}
   for (const role of k.lanes) if (g.picks[role]) picks[role] = g.picks[role]
-  // Kept stabs (all of them) play their rhythm on, taking the same turns; kept disco hits come in again.
+  // Kept stabs (all of them) play their rhythm on, taking the same turns; kept drop hits come in again.
   if (k.lanes.includes('stab') && g.picks.stab && g.rules.stabs) {
     for (const role of STAB_ROLES) if (g.picks[role]) picks[role] = g.picks[role]
     Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits',
@@ -516,7 +516,7 @@ export function newSound(laneId: string): boolean {
 }
 
 /**
- * The current generation in another key (the key menu in Generate): the bass moved, disco hits
+ * The current generation in another key (the key menu in Generate): the bass moved, drop hits
  * and chord stabs pitched, out-of-key FX swapped, the drums as they are. A new step in the history.
  */
 export function changeTrackKey(key: string): boolean {
@@ -592,7 +592,7 @@ const keepRole = (role: Role): Role => (STAB_ROLES.includes(role) ? 'stab' : rol
 export const LOCKABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove', 'bass', ...STAB_ROLES, 'strings', 'disco']
 
 /**
- * New disco hits for the current generation (the Disco Hits module's button): other hits and/or
+ * New drop hits for the current generation (the Drop Hits module's button): other hits and/or
  * other places, the rest of the track as it is. An edit of the track (⌘Z goes back).
  */
 export function newDiscoHits(): boolean {
@@ -601,7 +601,7 @@ export function newDiscoHits(): boolean {
   if (!g || !samples) return false
   const next = rerollDisco(samples, options(), g, randomSeed())
   if (!next) return false
-  apply(next, next.project.clips.filter((c) => c.sample.category === 'disco_hit').map((c) => c.id), 'New disco hits')
+  apply(next, next.project.clips.filter((c) => c.sample.category === 'disco_hit').map((c) => c.id), 'New drop hits')
   return true
 }
 
@@ -982,7 +982,7 @@ export async function makeVocal(req: VocalRequest): Promise<void> {
   }
 }
 
-/** Disco hits on/off: remembered; for new generations. */
+/** Drop hits on/off: remembered; for new generations. */
 export function setDiscoOptions(patch: Partial<GenerateSettings['disco']>): void {
   const { settings, set } = useGenerate.getState()
   const disco = { ...settings.disco, ...patch }
@@ -1035,7 +1035,7 @@ export function setStabOptions(patch: Partial<GenerateSettings['stabs']>): void 
 }
 
 /**
- * A disco hit (or chord stab) plays `pitch` semitones off in the current generation (every clip of it, at once),
+ * A drop hit (or chord stab) plays `pitch` semitones off in the current generation (every clip of it, at once),
  * and the difference from the move into the track key is saved on the hit: the next tracks
  * pitch it the same way (a key read wrong, fixed once).
  */

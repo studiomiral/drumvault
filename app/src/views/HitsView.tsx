@@ -18,8 +18,8 @@ const SOURCE_LABEL: Record<NonNullable<HitItem['key_source']>, string> = {
 /** What the page says, per kind of hit. */
 const TEXT = {
   disco: {
-    title: 'Disco Hits', one: 'disco hit', many: 'disco hits', empty: 'Drop your disco, brass and orchestra hits here.',
-    drop: 'Drop disco hits: audio files, folders or zips',
+    title: 'Drop Hits', one: 'drop hit', many: 'drop hits', empty: 'Drop the hits that mark your drops here: disco, brass and orchestra hits.',
+    drop: 'Drop the hits: audio files, folders or zips',
     about: 'Stabs, brass hits, orchestra hits: one hit per file, trimmed and copied into the library. The key comes from the '
       + 'file name ("Brass Stab Cm", "Hit_F#_maj"), else from the sound. Generate moves each hit into the track key; if it '
       + 'sounds off, fix the key here or the pitch in Create.',
@@ -57,7 +57,7 @@ const TEXT = {
 }
 
 /**
- * Samples → Disco Hits (SCOPE.md §6.8): stabs, brass hits and the like. Generate drops one or
+ * Samples → Drop Hits (SCOPE.md §6.8): stabs, brass hits and the like. Generate drops one or
  * two of them on the 1 at key moments of some tracks, moved into the track key. Samples → Chord
  * Stabs (§6.9) is the same page for the chord stabs every track plays, Samples → Strings (§6.10)
  * for long string samples.

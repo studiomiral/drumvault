@@ -1,7 +1,7 @@
-"""Disco hits (SCOPE.md §6.8) and chord stabs (§6.9): one-shots for Generate.
+"""Drop hits (SCOPE.md §6.8) and chord stabs (§6.9): one-shots for Generate.
 
-Each file dropped on the Disco Hits or Chord Stabs page is one hit: trimmed from its attack to the
-end of its tail, peak-normalised and written to <Library>/Disco Hits/ (or Chord Stabs/). Its key comes from its name ("Brass
+Each file dropped on the Drop Hits or Chord Stabs page is one hit: trimmed from its attack to the
+end of its tail, peak-normalised and written to <Library>/Drop Hits/ (or Chord Stabs/). Its key comes from its name ("Brass
 Stab Cm", "Disco_Hit_F#_maj", a bare "…_A_…"), else from its sound. Generate moves a hit into the
 track key (to the relative key across major and minor) plus its `pitch_fix`, the correction set
 in Generate when the key was read wrong.
@@ -24,7 +24,7 @@ from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDERS = {"disco": "Disco Hits", "stab": "Chord Stabs", "strings": "Strings", "bass": "Bass Samples", "ambience": "Ambience"}
+FOLDERS = {"disco": "Drop Hits", "stab": "Chord Stabs", "strings": "Strings", "bass": "Bass Samples", "ambience": "Ambience"}
 KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
@@ -123,7 +123,7 @@ def texture_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tup
 
 
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
-    """Add disco hits (or chord stabs, strings, bass samples) from files, folders and zips. Files already
+    """Add drop hits (or chord stabs, strings, bass samples) from files, folders and zips. Files already
     imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s."""
     if kind not in FOLDERS:
         raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
@@ -228,7 +228,7 @@ def set_hit_meta(settings: Settings, hit_id: int, key_label: str | None = None, 
     with LibraryDB(settings.library_path) as db:
         row = db.get_hit(hit_id)
         if row is None:
-            raise HitError("not_found", f"No disco hit with id {hit_id}")
+            raise HitError("not_found", f"No drop hit with id {hit_id}")
         fields: dict = {}
         texture = row["kind"] == "ambience"
         if clear_key:

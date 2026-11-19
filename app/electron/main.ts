@@ -346,7 +346,7 @@ function registerIpc(): void {
     const buf = await readFile(resolve(path))
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   })
-  ipcMain.handle('dialog:hits', async (_e, title = 'Add disco hits') => {
+  ipcMain.handle('dialog:hits', async (_e, title = 'Add drop hits') => {
     const r = await dialog.showOpenDialog(win!, {
       title, buttonLabel: 'Add', properties: ['openFile', 'openDirectory', 'multiSelections'],
       filters: [{ name: 'Audio files and zips', extensions: ['wav', 'aif', 'aiff', 'flac', 'zip'] }],
@@ -727,7 +727,7 @@ function buildMenu(): void {
         { label: 'Grid', click: () => send('menu', 'view:grid') },
         { type: 'separator' },
         { label: 'Chord Stabs', accelerator: 'CmdOrCtrl+4', click: () => send('menu', 'view:stabs') },
-        { label: 'Disco Hits', click: () => send('menu', 'view:hits') },
+        { label: 'Drop Hits', click: () => send('menu', 'view:hits') },
         { label: 'Strings', click: () => send('menu', 'view:strings') },
         { label: 'Bass Samples', click: () => send('menu', 'view:basses') },
         { label: 'Ambience', click: () => send('menu', 'view:ambience') },

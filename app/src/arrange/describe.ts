@@ -59,7 +59,7 @@ export function describeTrack(project: Project, sung: VocalMeta[], bars: number)
   const perc = n('Perc')
   parts.push(tops + perc >= 4 ? 'layered tops and percussion' : tops + perc ? 'tight, stripped-back drums' : 'just kick, clap and hats')
   if (has('Ride')) parts.push('a ride lifting the drops')
-  if (n('Disco Hit')) parts.push('disco hits as accents')
+  if (n('Drop Hit')) parts.push('drop hits as accents')
   if (has('Strings')) parts.push(STRINGS[String(g?.rules?.stringsAt)] ?? 'strings underneath')
   if (has('Pad')) {
     const pad = project.clips.find((c) => c.type === 'audio' && c.bass?.role === 'pad')
@@ -133,7 +133,7 @@ export function houseTags(project: Project, sung: VocalMeta[]): HotTag[] {
   if (!minor && g?.key) { add('Happy', 1); add('Uplifting', 1) }
   if (n('Stab') >= 2) add('Melodic', 1)
   if (on.has('Strings')) { add('Melodic', 1.5); add('Euphoric', 1) }
-  if (n('Disco Hit')) add('Funky', 1.5)
+  if (n('Drop Hit')) add('Funky', 1.5)
   const pad = project.clips.find((c) => c.type === 'audio' && c.bass?.role === 'pad')
   if (on.has('Pad') && pad?.type === 'audio' && pad.bass?.midiName === 'Reese') add('Heavy Bass', 1.5)
   const vocal = (on.has('Vocal') || on.has('Vocal Chops')) ? sung[0] : undefined

@@ -24,7 +24,7 @@ export async function resolveSamples(project: Project): Promise<Project> {
   const paths = [...new Set(project.clips.filter((c) => !(c.type === 'audio' && c.bass)).map((c) => c.sample.relPath))]
   const rows = paths.length ? await api.samplesByPath(paths) : []
   const byPath = new Map(rows.map((r) => [r.rel_path, r]))
-  // Disco hits aren't library samples: they're there while the Disco Hits page has them.
+  // Drop hits aren't library samples: they're there while the Drop Hits page has them.
   const hits = paths.some((p) => !byPath.has(p)) ? new Set((await api.listHits()).map((h) => h.rel_path)) : new Set<string>()
   useArrange.getState().set({ missing: new Set(paths.filter((p) => !byPath.has(p) && !hits.has(p))) })
   return produce(project, (d) => {
