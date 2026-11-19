@@ -31,7 +31,7 @@ import { serializeProject } from '../lib/project'
 import { nextGeneratedName, onProjects, openProject, refreshProjectList, saveNow, createProject, deleteCurrentProject } from '../arrange/persistence'
 import { useArrange } from './arrange'
 import type { HitItem, SampleListItem, SavedStabRhythm, SpliceCandidate, TrackArrangement } from '../types/api'
-import type { ReferenceTrack } from '../types/engine'
+import { DEFAULT_GENRE, type Genre, type ReferenceTrack } from '../types/engine'
 import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
 import { attempt, useApp } from './app'
 import { useProject } from './project'
@@ -69,12 +69,19 @@ export interface GenerateSettings {
   locks: Rules
 }
 
+// ---- genres: each its own settings (and its own tracks, below) ----
+
+/** The genre whose settings are loaded: the app's active one (applyGenre). */
+let storeGenre: Genre = DEFAULT_GENRE
+/** A setting's key in the loaded genre's storage: house keeps the keys from before genres. */
+const k = (key: string) => (storeGenre === DEFAULT_GENRE ? key : `${key}.${storeGenre}`)
+
 const BASS_KEY = 'drumvault.generate.bass'
 
 function savedBass(): GenerateSettings['bass'] {
   const base: GenerateSettings['bass'] = { enabled: true, sidechain: 0.6, beats: null, source: 'both' }
   try {
-    const { bars, ...saved } = JSON.parse(localStorage.getItem(BASS_KEY) ?? '{}')
+    const { bars, ...saved } = JSON.parse(localStorage.getItem(k(BASS_KEY)) ?? '{}')
     // (Saved before loops were counted in beats: a bar was 4 beats, longer ones are 8 now.)
     const beats = 'beats' in saved ? saved.beats : bars === 1 ? 4 : bars ? 8 : null
     return { ...base, ...saved, beats }
@@ -87,14 +94,14 @@ const VERB_KEY = 'drumvault.generate.verb'
 const VERB_DEFAULTS: GenerateSettings['verb'] = { enabled: true, tops: true, every: 16, amount: 0.6 }
 
 function savedVerb(): GenerateSettings['verb'] {
-  try { return { ...VERB_DEFAULTS, ...JSON.parse(localStorage.getItem(VERB_KEY) ?? '{}') } }
+  try { return { ...VERB_DEFAULTS, ...JSON.parse(localStorage.getItem(k(VERB_KEY)) ?? '{}') } }
   catch { return VERB_DEFAULTS }
 }
 
 const DISCO_KEY = 'drumvault.generate.disco'
 
 function savedDisco(): GenerateSettings['disco'] {
-  try { return { enabled: true, ...JSON.parse(localStorage.getItem(DISCO_KEY) ?? '{}') } }
+  try { return { enabled: true, ...JSON.parse(localStorage.getItem(k(DISCO_KEY)) ?? '{}') } }
   catch { return { enabled: true } }
 }
 
@@ -106,7 +113,7 @@ const VOCAL_LOOPS_KEY = 'drumvault.generate.vocalLoops'
 
 function savedVocalLoops(): GenerateSettings['vocalLoops'] {
   try {
-    return { enabled: true, ...JSON.parse(localStorage.getItem(VOCAL_LOOPS_KEY) ?? '{}') }
+    return { enabled: true, ...JSON.parse(localStorage.getItem(k(VOCAL_LOOPS_KEY)) ?? '{}') }
   } catch {
     return { enabled: true }
   }
@@ -114,7 +121,7 @@ function savedVocalLoops(): GenerateSettings['vocalLoops'] {
 
 function savedAmbience(): GenerateSettings['ambience'] {
   try {
-    return { enabled: true, ...JSON.parse(localStorage.getItem(AMBIENCE_KEY) ?? '{}') }
+    return { enabled: true, ...JSON.parse(localStorage.getItem(k(AMBIENCE_KEY)) ?? '{}') }
   } catch {
     return { enabled: true }
   }
@@ -122,28 +129,28 @@ function savedAmbience(): GenerateSettings['ambience'] {
 
 function savedPads(): GenerateSettings['pads'] {
   try {
-    return { enabled: true, ...JSON.parse(localStorage.getItem(PADS_KEY) ?? '{}') }
+    return { enabled: true, ...JSON.parse(localStorage.getItem(k(PADS_KEY)) ?? '{}') }
   } catch {
     return { enabled: true }
   }
 }
 
 function savedStrings(): GenerateSettings['strings'] {
-  try { return { enabled: true, sidechain: 0.6, ...JSON.parse(localStorage.getItem(STRINGS_KEY) ?? '{}') } }
+  try { return { enabled: true, sidechain: 0.6, ...JSON.parse(localStorage.getItem(k(STRINGS_KEY)) ?? '{}') } }
   catch { return { enabled: true, sidechain: 0.6 } }
 }
 
 const STABS_KEY = 'drumvault.generate.stabs'
 
 function savedStabs(): GenerateSettings['stabs'] {
-  try { return { enabled: true, ...JSON.parse(localStorage.getItem(STABS_KEY) ?? '{}') } }
+  try { return { enabled: true, ...JSON.parse(localStorage.getItem(k(STABS_KEY)) ?? '{}') } }
   catch { return { enabled: true } }
 }
 
 const LOCKS_KEY = 'drumvault.generate.locks'
 
 function savedLocks(): Rules {
-  try { return JSON.parse(localStorage.getItem(LOCKS_KEY) ?? '{}') as Rules }
+  try { return JSON.parse(localStorage.getItem(k(LOCKS_KEY)) ?? '{}') as Rules }
   catch { return {} }
 }
 
@@ -151,7 +158,7 @@ const TEMPO_KEY = 'drumvault.generate.tempo'
 
 function savedTempo(): GenerateSettings['tempo'] {
   try {
-    return JSON.parse(localStorage.getItem(TEMPO_KEY) ?? 'null') as GenerateSettings['tempo']
+    return JSON.parse(localStorage.getItem(k(TEMPO_KEY)) ?? 'null') as GenerateSettings['tempo']
   } catch {
     return null
   }
@@ -160,7 +167,7 @@ function savedTempo(): GenerateSettings['tempo'] {
 /** Remember the tempo option between sessions. */
 export function saveTempo(tempo: GenerateSettings['tempo']): void {
   try {
-    localStorage.setItem(TEMPO_KEY, JSON.stringify(tempo))
+    localStorage.setItem(k(TEMPO_KEY), JSON.stringify(tempo))
   } catch {
     // not remembered
   }
@@ -170,7 +177,7 @@ const MIX_KEY = 'drumvault.generate.laneMix'
 
 function savedMix(): Mix {
   try {
-    return JSON.parse(localStorage.getItem(MIX_KEY) ?? '{}') as Mix
+    return JSON.parse(localStorage.getItem(k(MIX_KEY)) ?? '{}') as Mix
   } catch {
     return {}
   }
@@ -216,14 +223,21 @@ interface ShortlistItem {
   g: Generation
 }
 
+/** The loaded genre's settings, as remembered. */
+function savedSettings(): GenerateSettings {
+  return { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
+}
+
+const noKeep = (): KeepToggles => ({ structure: false, key: false, lanes: [], bassline: false, patch: false })
+
 export const useGenerate = create<GenerateState>((set) => ({
   samples: null,
   templates: [],
   references: [],
   history: [],
   index: -1,
-  settings: { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() },
-  keep: { structure: false, key: false, lanes: [], bassline: false, patch: false },
+  settings: savedSettings(),
+  keep: noKeep(),
   lanes: { mute: [], solo: [] },
   pending: null,
   detached: true,
@@ -366,7 +380,7 @@ function options(fresh = false): GenerateOptions {
   const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
   const bedHits = hits.filter((h) => h.kind === 'ambience')
   const ambience = settings.ambience.enabled && bedHits.length ? { hits: bedHits } : null
-  return { ...settings, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates, references }
+  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates, references }
 }
 
 /**
@@ -557,7 +571,7 @@ function saveLocks(locks: Rules): void {
   const { settings, set } = useGenerate.getState()
   set({ settings: { ...settings, locks } })
   try {
-    localStorage.setItem(LOCKS_KEY, JSON.stringify(locks))
+    localStorage.setItem(k(LOCKS_KEY), JSON.stringify(locks))
   } catch {
     // not remembered
   }
@@ -659,7 +673,7 @@ export function setLaneVolume(role: Role, volumeDb: number): void {
     for (const l of p.lanes) if (laneRole(l.name) === role) l.volumeDb = volumeDb
   }, `vol-${role}`)
   try {
-    localStorage.setItem(MIX_KEY, JSON.stringify(mix))
+    localStorage.setItem(k(MIX_KEY), JSON.stringify(mix))
   } catch {
     // private window or blocked storage: the mix just isn't remembered
   }
@@ -724,7 +738,7 @@ export function setBassOptions(patch: Partial<GenerateSettings['bass']>): void {
     duckOnScreen('Bass', bass.sidechain)
   }
   try {
-    localStorage.setItem(BASS_KEY, JSON.stringify(bass))
+    localStorage.setItem(k(BASS_KEY), JSON.stringify(bass))
   } catch {
     // not remembered
   }
@@ -767,7 +781,7 @@ export function setStringsOptions(patch: Partial<GenerateSettings['strings']>): 
   }
   if (patch.sidechain !== undefined) duckOnScreen('Strings', strings.sidechain)
   try {
-    localStorage.setItem(STRINGS_KEY, JSON.stringify(strings))
+    localStorage.setItem(k(STRINGS_KEY), JSON.stringify(strings))
   } catch {
     // not remembered
   }
@@ -784,7 +798,7 @@ export function setAmbienceOptions(patch: Partial<GenerateSettings['ambience']>)
   const ambience = { ...settings.ambience, ...patch }
   set({ settings: { ...settings, ambience } })
   try {
-    localStorage.setItem(AMBIENCE_KEY, JSON.stringify(ambience))
+    localStorage.setItem(k(AMBIENCE_KEY), JSON.stringify(ambience))
   } catch {
     // not remembered
   }
@@ -809,7 +823,7 @@ export function setPadsOptions(patch: Partial<GenerateSettings['pads']>): void {
   const pads = { ...settings.pads, ...patch }
   set({ settings: { ...settings, pads } })
   try {
-    localStorage.setItem(PADS_KEY, JSON.stringify(pads))
+    localStorage.setItem(k(PADS_KEY), JSON.stringify(pads))
   } catch {
     // not remembered
   }
@@ -848,7 +862,7 @@ export function setVocalLoopOptions(patch: Partial<GenerateSettings['vocalLoops'
   const vocalLoops = { ...settings.vocalLoops, ...patch }
   set({ settings: { ...settings, vocalLoops } })
   try {
-    localStorage.setItem(VOCAL_LOOPS_KEY, JSON.stringify(vocalLoops))
+    localStorage.setItem(k(VOCAL_LOOPS_KEY), JSON.stringify(vocalLoops))
   } catch {
     // not remembered
   }
@@ -988,7 +1002,7 @@ export function setDiscoOptions(patch: Partial<GenerateSettings['disco']>): void
   const disco = { ...settings.disco, ...patch }
   set({ settings: { ...settings, disco } })
   try {
-    localStorage.setItem(DISCO_KEY, JSON.stringify(disco))
+    localStorage.setItem(k(DISCO_KEY), JSON.stringify(disco))
   } catch {
     // not remembered
   }
@@ -1027,7 +1041,7 @@ export function setStabOptions(patch: Partial<GenerateSettings['stabs']>): void 
   const stabs = { ...settings.stabs, ...patch }
   set({ settings: { ...settings, stabs } })
   try {
-    localStorage.setItem(STABS_KEY, JSON.stringify(stabs))
+    localStorage.setItem(k(STABS_KEY), JSON.stringify(stabs))
   } catch {
     // not remembered
   }
@@ -1071,7 +1085,7 @@ export function setVerbOptions(patch: Partial<GenerateSettings['verb']>): void {
     if (useProject.getState().scratch) onScreen('Reverb builds', scale, 'verb-amount')
   }
   try {
-    localStorage.setItem(VERB_KEY, JSON.stringify(verb))
+    localStorage.setItem(k(VERB_KEY), JSON.stringify(verb))
   } catch {
     // not remembered
   }
@@ -1245,6 +1259,55 @@ export function newEmptyTrack(): Promise<void> {
   return switchTo(() => createProject())
 }
 
+// ---- genres: each its own settings and tracks ----
+
+/** The tracks of the genres not loaded (← and → go through the loaded genre's only). */
+const otherTracks = new Map<Genre, { history: Generation[]; index: number }>()
+
+/**
+ * Load genre `g`'s settings and tracks, the loaded genre's put aside (they come back with it).
+ * False when `g` is loaded already. The library lists follow the app's genre setting.
+ */
+function applyGenre(g: Genre): boolean {
+  if (g === storeGenre) return false
+  const { history, index, set } = useGenerate.getState()
+  otherTracks.set(storeGenre, { history, index })
+  storeGenre = g
+  const back = otherTracks.get(g)
+  set({ settings: savedSettings(), history: back?.history ?? [], index: back?.index ?? -1, pending: null, detached: true,
+        keep: noKeep(), lanes: { mute: [], solo: [] } })
+  return true
+}
+
+// The app's genre setting loaded or changed: its settings and tracks.
+useApp.subscribe((s) => {
+  applyGenre(s.settings?.genre ?? DEFAULT_GENRE)
+})
+
+/** Make `g` the active genre: its settings and tracks, its library. */
+async function adoptGenre(g: Genre): Promise<void> {
+  if (g === storeGenre) return
+  applyGenre(g)
+  await useApp.getState().saveSettings({ genre: g })
+  await loadSamples()
+}
+
+/** Create's genre menu: the genre's settings, library and tracks (its last one on screen, else a new empty track). */
+export function switchGenre(g: Genre): Promise<void> {
+  return switchTo(async () => {
+    if (g === storeGenre) return
+    playback.stop()
+    await adoptGenre(g)
+    const { history, index, set } = useGenerate.getState()
+    if (history[index]) {
+      set({ detached: false })
+      load(history[index])
+    } else {
+      await createProject()
+    }
+  })
+}
+
 /** Delete the track on screen (its file when saved), and show the one before it. */
 export function deleteTrack(): Promise<void> {
   switching = switching.catch(() => {}).then(async () => {
@@ -1262,6 +1325,8 @@ export function deleteTrack(): Promise<void> {
 
 // A saved track opened (at start, from the Saved menu): a generated one joins the history.
 onProjects({
+  // A track of another genre opened (the last one at start): its genre becomes the active one.
+  genre: adoptGenre,
   opened(file) {
     const project = useProject.getState().project
     const g = arrangeTrack(project)

@@ -4,11 +4,12 @@ import { Options } from '../create/Options'
 import { IconPlay, IconSparkle, IconStar, IconStop } from '../components/icons'
 import { Range } from '../components/Range'
 import { Button, cx, inputClass, PageTitle } from '../components/ui'
-import { formatBpm } from '../lib/format'
+import { formatBpm, GENRE_ABOUT, GENRE_LABELS } from '../lib/format'
 import { beatToSec, BEATS_PER_BAR, formatPosition, formatTime } from '../lib/project'
 import { DEFAULT_PX_PER_BEAT, MAX_PX_PER_BEAT, MIN_PX_PER_BEAT, useArrange } from '../store/arrange'
 import { useApp } from '../store/app'
-import { deleteTrack, keepTrack, newEmptyTrack, next, openTrack, previous, useGenerate } from '../store/generate'
+import { deleteTrack, keepTrack, newEmptyTrack, next, openTrack, previous, switchGenre, useGenerate } from '../store/generate'
+import { DEFAULT_GENRE, GENRES } from '../types/engine'
 import { useProject } from '../store/project'
 
 /** Create's top bar (SCOPE.md §6.6): making tracks (‹ Generate ★), the track's name, Saved, Options, Export. */
@@ -26,6 +27,7 @@ export function Toolbar() {
   return (
     <div className="app-drag topbar-art z-30 h-14 shrink-0 flex items-center gap-2.5 px-5 border-b border-line">
       <PageTitle className="mr-2">Create</PageTitle>
+      <GenreMenu />
       <Button variant="secondary" className="h-8 w-8 px-0" onClick={previous} title="Previous track (←)"
               disabled={detached ? !history[index] : index <= 0}>‹</Button>
       <Button variant="primary" className="h-8 px-3.5 text-[13px]" onClick={() => next()} disabled={!samples?.length}
@@ -214,9 +216,41 @@ function TempoField() {
 }
 
 /** The saved tracks (projects): open one, start an empty one, delete the one on screen. */
+/** The genre tracks are made in (SCOPE.md §5.18): its settings, its library, its tracks. */
+function GenreMenu() {
+  const [open, setOpen] = useState(false)
+  const genre = useApp((s) => s.settings?.genre ?? DEFAULT_GENRE)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div className="relative app-no-drag" onMouseDown={(e) => e.stopPropagation()}>
+      <Button variant="secondary" className="h-8 px-3 text-[12.5px]" onClick={() => setOpen(!open)}
+              title="The genre: its own library, settings and saved tracks">{GENRE_LABELS[genre]} ▾</Button>
+      {open && (
+        <div className="absolute left-0 top-9 z-30 w-80 rounded-xl surface-pop py-1">
+          {GENRES.map((g) => (
+            <button key={g} onClick={() => {
+              setOpen(false)
+              void switchGenre(g)
+            }} className={cx('w-full px-3 py-1.5 text-left hover:bg-panel-2', g === genre && 'text-accent')}>
+              <div className="text-[12.5px] font-medium">{GENRE_LABELS[g]}</div>
+              <div className="text-[11.5px] text-faint">{GENRE_ABOUT[g]}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SavedMenu() {
   const [open, setOpen] = useState(false)
-  const { projects } = useArrange()
+  const genre = useApp((s) => s.settings?.genre ?? DEFAULT_GENRE)
+  const projects = useArrange((s) => s.projects).filter((p) => p.genre === genre)
   const file = useProject((s) => s.file)
   useEffect(() => {
     if (!open) return

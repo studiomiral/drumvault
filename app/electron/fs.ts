@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AppSettings } from '../src/types/api'
 import type { ProjectFileInfo } from '../src/types/project'
+import { DEFAULT_GENRE, GENRES } from '../src/types/engine'
 
 export const DEFAULT_SETTINGS: AppSettings = {
   libraryPath: null,
@@ -187,7 +188,8 @@ export async function listProjects(library: string): Promise<ProjectFileInfo[]> 
       const path = join(dir, file)
       const [st, text] = await Promise.all([stat(path), readFile(path, 'utf8')])
       const data = JSON.parse(text)
-      out.push({ file, name: data.name ?? file.replace(/\.dvproj$/, ''), updatedAt: data.updatedAt ?? '', modified: st.mtimeMs })
+      out.push({ file, name: data.name ?? file.replace(/\.dvproj$/, ''), genre: GENRES.includes(data.genre) ? data.genre : DEFAULT_GENRE,
+                 updatedAt: data.updatedAt ?? '', modified: st.mtimeMs })
     } catch {
       // unreadable file: skip
     }

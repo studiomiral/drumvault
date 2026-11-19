@@ -205,6 +205,15 @@ describe('project files', () => {
     expect(projectFileName('  ')).toBe('Untitled.dvproj')
   })
 
+  it('lists each saved track with its genre (from before genres: house)', async () => {
+    const lib = mkdtempSync(join(tmpdir(), 'dv-proj-'))
+    await writeProjectFile(lib, null, 'Old', '{"format":"drumvault-project","name":"Old"}')
+    await writeProjectFile(lib, null, 'Deep', '{"format":"drumvault-project","name":"Deep","genre":"organic"}')
+    await writeProjectFile(lib, null, 'Odd', '{"format":"drumvault-project","name":"Odd","genre":"polka"}')
+    const by = Object.fromEntries((await listProjects(lib)).map((p) => [p.name, p.genre]))
+    expect(by).toEqual({ Old: 'house', Deep: 'organic', Odd: 'house' })
+  })
+
   it('takes saves of one project at the same time (autosave during a save): the last one wins, no temp files left', async () => {
     const lib = mkdtempSync(join(tmpdir(), 'dv-proj-'))
     const first = await writeProjectFile(lib, null, 'Generated 10', '{"v":0}')

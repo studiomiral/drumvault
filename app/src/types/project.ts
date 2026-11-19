@@ -269,6 +269,7 @@ export type GenerationMeta = Omit<Generation, 'project'>
 export interface ProjectFileInfo {
   file: string         // file name inside the projects folder
   name: string
+  genre: Genre         // projects from before genres: house
   updatedAt: string
   modified: number     // mtime (ms)
 }

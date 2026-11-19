@@ -1,4 +1,12 @@
-import type { Category, SampleKind } from '../types/engine'
+import type { Category, Genre, SampleKind } from '../types/engine'
+
+/** The genres as Create's genre menu names them. */
+export const GENRE_LABELS: Record<Genre, string> = { house: 'House', organic: 'Organic' }
+/** …and what each is. */
+export const GENRE_ABOUT: Record<Genre, string> = {
+  house: 'Club house: funky drums, bass, chord stabs and drop hits',
+  organic: 'Organic and progressive house: tight organic drums, its own samples only',
+}
 
 export const CATEGORY_LABELS: Record<Category, string> = {
   kick: 'Kick', clap: 'Clap', snare: 'Snare', hat: 'Hat', hat_closed: 'Closed hat',

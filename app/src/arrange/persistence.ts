@@ -20,7 +20,7 @@ function libraryBpm(): number {
 }
 
 /** The active genre: a new project is made in it. */
-function activeGenre(): Genre {
+export function activeGenre(): Genre {
   return useApp.getState().settings?.genre ?? DEFAULT_GENRE
 }
 
@@ -44,8 +44,11 @@ export async function resolveSamples(project: Project): Promise<Project> {
   })
 }
 
-/** Told when a project file is opened (Create puts a generated one in its history). */
-type Listener = { opened(file: string | null): void }
+/**
+ * Told when a project file is opened (Create puts a generated one in its history); `genre` first
+ * when it's of another genre than the active one (it becomes the active one).
+ */
+type Listener = { opened(file: string | null): void; genre?(g: Genre): Promise<void> }
 const listeners: Listener[] = []
 export function onProjects(l: Listener): void {
   listeners.push(l)
@@ -54,6 +57,7 @@ export function onProjects(l: Listener): void {
 async function open(project: Project, file: string | null, scratch = false): Promise<void> {
   playback.stop()
   clearPeaks()
+  if (project.genre !== activeGenre()) for (const l of listeners) await l.genre?.(project.genre)
   const resolved = await resolveSamples(project)
   useProject.getState().load(resolved, file, { scratch })
   playback.setPosition(0)
@@ -134,7 +138,7 @@ export async function deleteCurrentProject(then?: () => Promise<void> | void): P
     await then()
     return
   }
-  const next = useArrange.getState().projects[0]
+  const next = useArrange.getState().projects.find((p) => p.genre === activeGenre())
   if (next) await open(parseProject(await api.readProject(next.file)), next.file)
   else await createProject()
 }
@@ -144,7 +148,7 @@ export async function initProjects(): Promise<void> {
   await refreshProjectList()
   const last = useApp.getState().settings?.lastProject
   const known = useArrange.getState().projects
-  const file = last && known.some((p) => p.file === last) ? last : known[0]?.file
+  const file = last && known.some((p) => p.file === last) ? last : known.find((p) => p.genre === activeGenre())?.file
   try {
     if (file) {
       await open(parseProject(await api.readProject(file)), file)

@@ -17,6 +17,8 @@ import { useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Marker } from '../types/project'
 import { BEATS_PER_BAR } from '../lib/project'
+import { GENRE_LABELS } from '../lib/format'
+import { DEFAULT_GENRE } from '../types/engine'
 import { deleteSelection, duplicateSelection, shiftSelection, splitSelectionAt } from '../arrange/commands'
 
 /**
@@ -121,14 +123,18 @@ function StartHere() {
   const empty = useProject((s) => !s.project.generation && s.project.clips.length === 0)
   const samples = useGenerate((s) => s.samples)
   const { minMinutes, maxMinutes } = useGenerate((s) => s.settings)
+  const genre = useApp((s) => s.settings?.genre ?? DEFAULT_GENRE)
   if (!empty) return null
   return (
     <div className="absolute inset-y-0 right-0 z-10 flex items-center justify-center pointer-events-none" style={{ left: HEADER_W }}>
       <div className="pointer-events-auto rounded-2xl border border-dashed border-[#3e3f44] bg-panel/90 px-10 py-8 text-center max-w-md">
         {samples && samples.length === 0 ? (
           <>
-            <div className="font-display text-[22px] text-text">Nothing to make tracks from yet</div>
-            <p className="mt-2 text-[12.5px] text-muted">Process some zips first (Drums → Drumvault): Create combines drums and FX from your library.</p>
+            <div className="font-display text-[22px] text-text">{genre === DEFAULT_GENRE ? 'Nothing to make tracks from yet' : `No ${GENRE_LABELS[genre].toLowerCase()} drums yet`}</div>
+            <p className="mt-2 text-[12.5px] text-muted">
+              {genre === DEFAULT_GENRE ? 'Process some zips first (Drums → Drumvault): Create combines drums and FX from your library.'
+                : `Import ${GENRE_LABELS[genre].toLowerCase()} zips and samples on the Drums page while ${GENRE_LABELS[genre]} is chosen here: they're tagged ${GENRE_LABELS[genre]}, and only they go into its tracks.`}
+            </p>
             <Button variant="secondary" className="mt-4" onClick={() => useApp.getState().setView('process')}>Open Drumvault</Button>
           </>
         ) : (
