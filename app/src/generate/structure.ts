@@ -66,6 +66,16 @@ export function pickKickMode(rng: Rng): KickMode {
   return rng.weighted([['out', 6.5], ['thin', 2.5], ['filtered', 1], ['sweep', 1], ['kept', 1]])
 }
 
+/** The big breakdown's kick: a break from the track, a real cooldown, so mostly out. */
+export function pickLongKickMode(rng: Rng): KickMode {
+  return rng.weighted([['out', 8], ['sweep', 1], ['thin', 1]])
+}
+
+/** The short breakdowns' kick (one for all of them): more drums, the groove kept going. */
+export function pickShortKickMode(rng: Rng): KickMode {
+  return rng.weighted([['thin', 4], ['out', 3], ['kept', 2], ['filtered', 1], ['sweep', 1]])
+}
+
 export function pickBuildStyle(rng: Rng): BuildStyle {
   return rng.weighted([['layered', 4], ['all', 1.5], ['doubletime', 3], ['filter', 2]])
 }
@@ -91,11 +101,16 @@ export function makeStructure(rng: Rng, targetBars: number): Section[] {
   s[s.length - 1].peak = true
   s.push({ kind: 'outro', bars: outro })
 
-  // One breakdown is the long one: usually the last (the classic shape), sometimes another.
+  // One breakdown is the big one (SCOPE.md §6.6): a break from the track, the pad and a real
+  // cooldown; usually the last (the classic shape), sometimes another. The others are shorter
+  // copies of it with more drums, the groove kept going: one kick treatment for all of them.
   const breaks = s.filter((x) => x.kind === 'break')
-  if (breaks.length && rng.chance(breaks.length > 1 ? 0.75 : 0.5)) {
+  if (breaks.length) {
     const long = rng.chance(0.8) ? breaks[breaks.length - 1] : rng.pick(breaks)
+    const short = pickShortKickMode(rng)
+    for (const b of breaks) if (b !== long) { b.bars = rng.weighted([[8, 3], [16, 2]] as const); b.kick = short }
     long.long = true
+    long.kick = pickLongKickMode(rng)
     long.bars = Math.min(32, Math.max(16, ...breaks.filter((b) => b !== long).map((b) => b.bars + PHRASE), long.bars))
   }
   fit(rng, s, targetBars)
@@ -136,7 +151,9 @@ export function fit(rng: Rng, s: Omit<Section, 'start' | 'label'>[], target: num
     if (!cands.length) {
       if (!grow) {
         // Too long even at minimum lengths: drop the last break + drop pair.
-        const i = s.map((x) => x.kind).lastIndexOf('break')
+        // (A short one, so the big breakdown stays.)
+        const kinds = s.map((x) => (x.kind === 'break' && !x.long ? 'short' : x.kind))
+        const i = kinds.lastIndexOf('short') > 0 ? kinds.lastIndexOf('short') : kinds.lastIndexOf('break')
         if (i <= 0 || s.filter((x) => x.kind === 'drop').length <= 2) break
         s.splice(i, 2)
         s.filter((x) => x.kind === 'drop').at(-1)!.peak = true

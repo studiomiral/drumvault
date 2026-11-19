@@ -449,7 +449,8 @@ describe('generator: rules every generation keeps', () => {
         layered++
       }
     }
-    expect(layered).toBeGreaterThan(40)
+    // (Fewer since the short breakdowns are mostly 8 bars: a 2-bar riser into the drop after one is often left alone.)
+    expect(layered).toBeGreaterThan(20)
   })
 
   it('ends sweeps that rise on a section line and starts the ones that fall on one', () => {
@@ -2387,20 +2388,45 @@ describe('generator: one groove (the drums carry through breakdowns)', () => {
     expect(opened).toBeGreaterThan(40)
   })
 
-  it('takes every later breakdown further: the perc darker than in the one before', () => {
+  it('takes the big breakdown deepest; the short ones are lighter copies of it with more drums', () => {
     let pairs = 0
-    for (const g of gens.filter((x) => x.rules.gluePerc === 'through' && breaksOf(x).length >= 2)) {
-      const hold = breaksOf(g).map((s) => {
+    let groove = 0
+    for (const g of gens.filter((x) => breaksOf(x).some((s) => s.long) && breaksOf(x).length >= 2)) {
+      // (The perc held darker in the big one, where the track keeps it through breakdowns.)
+      const through = g.rules.gluePerc === 'through'
+      const holdOf = (s: Generation['sections'][number]) => {
         const at = (s.start + Math.min(4, Math.max(1, Math.floor(s.bars / 4)))) * 4 + 1
         return clipsOn(g, 'Perc').find((c) => c.start <= at && c.start + c.length > at)?.filter?.from
-      })
-      for (let k = 1; k < hold.length; k++) {
-        if (hold[k] == null || hold[k - 1] == null) continue
-        expect(hold[k]!).toBeLessThanOrEqual(hold[k - 1]!)
-        pairs++
       }
+      const long = breaksOf(g).find((s) => s.long)!
+      for (const s of breaksOf(g).filter((x) => !x.long)) {
+        // Shorter than the big one.
+        expect(s.bars).toBeLessThan(long.bars)
+        // Hats and perc going all through it (the last bar is the way into the drop) and a soft clap with them.
+        for (let b = s.start; b < s.start + s.bars - 1; b++) {
+          for (const name of ['Hats', 'Perc']) {
+            if (!clipsOn(g, name).length) continue
+            expect(g.project.clips.some((c) => nameOf(g, c) === name && within(c, b, b + 1)), `${g.seed} ${name} ${b}`).toBe(true)
+          }
+        }
+        if (clipsOn(g, 'Clap').length) groove++
+        const [h, hl] = [holdOf(s), holdOf(long)]
+        if (through && h != null && hl != null) { expect(hl).toBeLessThanOrEqual(h); pairs++ }
+      }
+      // (Drawn by the rules; a real track's breakdowns keep their own kicks.)
+      const shorts = breaksOf(g).filter((x) => !x.long)
+      if (!g.template) expect(new Set(shorts.map((x) => x.kick)).size).toBe(1)
     }
     expect(pairs).toBeGreaterThan(10)
+    expect(groove).toBeGreaterThan(10)
+  })
+
+  it('has a big breakdown in every track drawn by the rules, its kick mostly out', () => {
+    const drawn = gens.filter((x) => breaksOf(x).length && !x.template)
+    const longs = drawn.flatMap((g) => breaksOf(g).filter((s) => s.long))
+    expect(drawn.length).toBeGreaterThan(10)
+    for (const g of drawn) expect(breaksOf(g).filter((s) => s.long).length).toBe(1)
+    expect(longs.filter((s) => s.kick === 'out').length).toBeGreaterThan(longs.length * 0.5)
   })
 
   it('can be switched off: each breakdown its own again, the other lanes as they were', () => {

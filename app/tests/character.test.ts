@@ -141,7 +141,9 @@ describe('the breakdown layer: a pad or a reese', () => {
         // (Split where the mix high-pass into the drop rides its last bars.)
         const cs = padClips(g).filter((c) => c.start >= s.start * 4 && c.start < (s.start + s.bars) * 4)
         if (!cs.length) continue
-        expect(Math.min(...cs.map((c) => c.start))).toBe(breakShape(s.start, s.bars).layer * 4)
+        // (The big breakdown has it once stripped; a short one, its shorter copy, from its second part.)
+        const short = breaks.some((x) => x.long) && !s.long
+        expect(Math.min(...cs.map((c) => c.start))).toBe(breakShape(s.start, s.bars)[short ? 'lead' : 'layer'] * 4)
         // To the end of the breakdown (less the beat or two of silence before a drop).
         const end = Math.max(...cs.map((c) => c.start + c.length))
         // (The track's gap before drops may be a bar.)

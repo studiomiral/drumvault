@@ -332,6 +332,8 @@ const PAD_OPEN_HZ = 7000
 const PAD_REESE_OPEN_HZ = 1800
 const PAD_FADE_BARS = 2
 const PAD_RISE_DB = 8
+/** A short breakdown's pad (a shorter copy of the big one's) sits this much lower (dB). */
+const PAD_SHORT_DB = 3
 
 /** Lanes whose main sample can be kept while cycling. */
 export const KEEPABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove']
@@ -2461,15 +2463,19 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       }
     }
     const names: Partial<Record<Role, string>> = { perc: 'perc', hats: 'hats', top: 'tops' }
-    let depth = 0
+    const hasLong = sections.some((x) => x.kind === 'break' && x.long)
+    let reported = false
     sections.forEach((sec, i) => {
       if (sec.kind !== 'break') return
       const a = sec.start
       const z = sec.start + sec.bars
       const n = sec.bars
       const next = sections[i + 1]
-      const d = depth++
-      // Every later breakdown is the first one taken further: darker, lower, the rest out sooner.
+      // The big breakdown is the deep one (a break from the track, a real cooldown): darker, lower,
+      // the rest out sooner. The short ones are shorter copies of it with more drums: lighter, the
+      // hats and the perc kept going.
+      const short = hasLong && !sec.long
+      const d = sec.long ? 1 : 0
       const deeper = GLUE_DEEPER ** d
       const level = rules.glueDb - GLUE_DEEPER_DB * d
       /**
@@ -2505,8 +2511,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       const percStays = () => (lead === 'perc' ? want('perc', perc, percShotGlue, 'open', dark, LEAD_BREAK_DB) : want('perc', perc, percShotGlue, 'lowpass', dark))
       const hatsStay = () => want('hats', hats, steps(OFFBEAT, 2), 'highpass', GLUE_THIN_HZ)
       const topStays = (how: How) => want('top', tops[0] ?? null, [], how, Math.max(GLUE_MIN_HZ, rules.topsBreakHz * deeper))
-      if (rules.gluePerc === 'through') percStays()
-      if (rules.hatsInBreaks) hatsStay()
+      if (rules.gluePerc === 'through' || short) percStays()
+      if (rules.hatsInBreaks || short) hatsStay()
       if (rules.topsBreaks !== 'none') topStays(rules.topsBreaks === 'open' ? 'open' : 'lowpass')
       if (!stay.length) { percStays(); if (!stay.length) hatsStay(); if (!stay.length) topStays('lowpass') }
       const staying = new Set(stay.map((x) => x.role))
@@ -2545,7 +2551,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       if (clap && clapWas) {
         const soft = (v: Velocity, hz: number) => ({ sample: clap, steps: steps(TWO_FOUR, v), filter: { type: 'lowpass', from: hz, to: null, q: 0.7 } as ClipFilter })
         for (let b = a; b < Math.min(z, a + 2); b++) lanes.setBar('clap', b, soft(2, GLUE_LEAVE_HZ))
-        if (d === 0 && n >= PHRASE) for (let b = a + 2; b < a + 4; b++) lanes.setBar('clap', b, soft(1, Math.max(dark, 1200)))
+        // (In a short breakdown it keeps going, soft and dark, the groove with it; in the big one it is gone after 2 bars.)
+        if (short) for (let b = a + 2; b < z - 1; b++) lanes.setBar('clap', b, soft(1, Math.max(dark, 1200)))
+        else if (d === 0 && n >= PHRASE) for (let b = a + 2; b < a + 4; b++) lanes.setBar('clap', b, soft(1, Math.max(dark, 1200)))
       }
       // ---- what comes back: the loops the next part starts with open up into it over the last
       // bars, the main ones first (the opening is the build) ----
@@ -2556,9 +2564,11 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
             if (from < z) run(role, { seg: seg! }, 'lowpass', [[from, dark, -GLUE_FADE_DB], [z, GLUE_LP_OPEN_HZ, 0]])
           })
       }
-      if (d === 0) {
+      if (!reported && !short) {
+        reported = true
         const kept = stay.map((x) => names[x.role]).join(' and ')
         carried.push(`the groove carries through breakdowns: ${kept} ${stay.some((x) => x.how !== 'open') ? 'filtered' : 'quieter'}, the rest fading out over ${rules.glueOut} bars${open ? `, opening up over ${open}` : ''}`)
+        if (hasLong && sections.some((x) => x.kind === 'break' && !x.long)) carried.push('the short breakdowns are shorter copies of the big one, with hats, perc and a soft clap kept going')
       }
     })
   }
@@ -2580,19 +2590,25 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       bars: PAD_BARS, body_bars: null, key_label: key, key_camelot: null, duration_s: (PAD_BARS * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0,
       rating: null, tags: null, zip_id: -1, source_code: 'Serum',
     }
+    // The big breakdown has it in full; a short one (a shorter copy of the big one) from its
+    // second part only, PAD_SHORT_DB lower.
+    const hasLong = sections.some((x) => x.kind === 'break' && x.long)
     sections.forEach((sec, i) => {
       if (sec.kind !== 'break') return
       const next = sections[i + 1]
-      const a = breakShape(sec.start, sec.bars).layer
+      const short = hasLong && !sec.long
+      const shape = breakShape(sec.start, sec.bars)
+      const a = short ? shape.lead : shape.layer
       const z = sec.start + sec.bars
       if (z <= a) return
       const rises = !!next && next.kind !== 'outro'
+      const under = short ? PAD_SHORT_DB : 0
       const [from, to] = padReese ? [Math.round(rules.padHz / 2), PAD_REESE_OPEN_HZ] : [rules.padHz, PAD_OPEN_HZ]
       lanes.add('pad', {
         sample, start: a * BEATS_PER_BAR, length: (z - a) * BEATS_PER_BAR, bass: render,
         filter: { type: 'lowpass', from, to: rises ? to : null, q: 0.8 },
         fadeIn: Math.min(PAD_FADE_BARS, (z - a) / 4) * BEATS_PER_BAR, fadeOut: (rises ? 0.5 : Math.min(PAD_FADE_BARS, (z - a) / 4)) * BEATS_PER_BAR,
-        ...(rises ? { gainDb: -PAD_RISE_DB, gainTo: 0 } : { gainDb: -PAD_RISE_DB / 2 }),
+        ...(rises ? { gainDb: -PAD_RISE_DB - under, gainTo: -under } : { gainDb: -PAD_RISE_DB / 2 - under }),
       })
       padBreaks++
     })
