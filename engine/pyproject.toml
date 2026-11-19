@@ -20,7 +20,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3.8.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -31,3 +34,5 @@ packages = ["drumvault_engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# In parallel, a test file per worker (its session fixtures built once there): ~2.5 min instead of 7.
+addopts = "-n auto --dist loadfile"
