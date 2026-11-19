@@ -200,7 +200,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             <input type="checkbox" className="accent-[#e2c35f]" checked={master} disabled={running} onChange={(e) => setMaster(e.target.checked)} />
             <span className="font-medium">Masters</span>
             <span className="text-[11px] text-faint">
-              mixdown.wav (all unmuted lanes) and mastered.wav (Ozone 11, −6.5 LUFS, 0 dB ceiling){hasVocals(project) ? ', and both without the vocals (instrumental)' : ''}, checked before they go out
+              mixdown.wav (all unmuted lanes) and mastered.wav (Ozone 11, drops at −6.8 LUFS, 0 dB ceiling){hasVocals(project) ? ', and both without the vocals (instrumental)' : ''}, checked before they go out
             </span>
           </label>
           <label className={cx('flex items-center gap-2 col-span-2', !parts.length && 'text-faint')}>
