@@ -467,7 +467,7 @@ function registerIpc(): void {
     await writeFile(join(dir, 'take.mp3'), take.audio)
     const meta: VocalMeta = {
       ...req, id, createdAt: new Date().toISOString(), source: 'elevenlabs', model: 'music_v1', format, headers: take.headers,
-      credits: null, take: `${rel}/take.mp3`, vocal: null, stems: [], durationS: null, keyHeard: null, usedIn: [],
+      credits: null, take: `${rel}/take.mp3`, vocal: null, stems: [], durationS: null, keyHeard: null, usedIn: [], genre: activeGenre(),
     }
     const save = () => writeFile(join(dir, 'meta.json'), JSON.stringify({ ...meta, plan }, null, 2))
     await save()
@@ -541,7 +541,8 @@ function registerIpc(): void {
     for (const d of await readdir(root)) {
       try {
         const { plan: _p, ...m } = JSON.parse(await readFile(join(root, d, 'meta.json'), 'utf8'))
-        out.push(m as VocalMeta)
+        // The active genre's takes only (from before genres: house).
+        if ((m.genre ?? DEFAULT_GENRE) === activeGenre()) out.push(m as VocalMeta)
       } catch {
         // not a take (or one still being made)
       }

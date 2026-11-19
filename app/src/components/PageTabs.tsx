@@ -17,8 +17,8 @@ export function PageTabs({ view, title }: { view: View; title?: string }) {
   const tabs = PAGE_TABS[page]
   const isTab = tabs.some((t) => t.view === view)
   const genre = useApp((s) => s.settings?.genre ?? DEFAULT_GENRE)
-  // The library's pages show the active genre's sources, and what's imported on them is of it (vocals are every genre's).
-  const ofGenre = (page === 'drums' || page === 'sounds') && view !== 'vocalloops'
+  // The library's pages show the active genre's sources, and what's imported on them is of it.
+  const ofGenre = page === 'drums' || page === 'sounds'
   return (
     <div className="flex items-center gap-4 min-w-0">
       <PageTitle>{TITLES[page]}</PageTitle>

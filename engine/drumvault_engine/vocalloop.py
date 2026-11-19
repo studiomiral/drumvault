@@ -218,7 +218,7 @@ def import_one(settings: Settings, path: Path, taken: dict[str, str]) -> dict:
         "source": "splice", "model": "", "format": "wav", "headers": {}, "credits": None,
         "lines": [], "bpm": tempo or bpm, "key": key, "seconds": round(seconds, 3),
         "take": f"{folder}/vocal.wav", "vocal": f"{folder}/vocal.wav", "stems": [], "durationS": round(seconds, 3),
-        "keyHeard": sung, "usedIn": [], "analysis": analysis,
+        "keyHeard": sung, "usedIn": [], "analysis": analysis, "genre": settings.genre,
         "splice": {"file": path.name, "original": str(path), "sha1": sha, "pack": (info or {}).get("pack"),
                    "label": (info or {}).get("label"), "url": link, "bpm": tempo, "loop": looped,
                    "key_source": key_source, "tags": (info or {}).get("tags", [])},

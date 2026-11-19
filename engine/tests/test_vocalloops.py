@@ -81,6 +81,7 @@ def test_a_loop_becomes_a_take_with_splice_s_record_and_its_link(lab):
     assert got["url"] == "https://splice.com/sounds/packs/toolroom-records/toolroom-vocal-all-stars/samples"
     d = Path(s.library_path) / "Vocals" / got["id"]
     meta = json.loads((d / "meta.json").read_text())
+    assert meta["genre"] == "house"   # the active genre (the default)
     assert meta["source"] == "splice" and meta["usedIn"] == [] and meta["vocal"] == f"Vocals/{got['id']}/vocal.wav"
     assert meta["analysis"]["chops"] == [] and not (d / "chops").exists()   # chops are out
     assert {k: meta["splice"][k] for k in ("file", "pack", "label", "bpm", "loop", "key_source")} == {

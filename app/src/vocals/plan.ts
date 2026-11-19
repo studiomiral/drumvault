@@ -2,6 +2,8 @@
 // over by one voice, nearly a cappella, at the library tempo and in a key, long enough for an
 // 8-bar phrase and many chops; its vocal is split from it afterwards.
 
+import type { Genre } from '../types/engine'
+
 /**
  * ElevenLabs vocals shown in the app (the Vocals module, its key in Settings). Hidden for now: tracks
  * sing Splice vocal loops only (§6.11a). The code stays; tracks that already sing a made take keep it.
@@ -69,6 +71,8 @@ export interface VocalMeta extends Omit<VocalRequest, 'voice' | 'mood'> {
   usedIn: string[]
   /** What the engine found in it (vocal.py): the key sung, its phrase loops and chops (library-relative). */
   analysis?: VocalAnalysis
+  /** The genre it was made or imported in (the library lists show the active genre's); takes from before genres: house. */
+  genre?: Genre
 }
 
 export interface VocalAnalysis {
