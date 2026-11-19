@@ -331,7 +331,8 @@ class Thresholds:
     master_target_lufs: float = -6.8        # the loudest short-term loudness of mastered.wav
     master_short_term_s: float = 3.0        # BS.1770 short-term window
     master_ceiling_db: float = 0.0          # the Maximizer's output ceiling (House of Tracks: -2 … 0 dB); Lars's choice
-                                            # (at 0 the peaks between the samples once reached +1.2 dBTP; -1 kept them about 0)
+    master_true_peak: bool = True           # the Maximizer's "Prevent intersample clipping": the ceiling holds between
+                                            # the samples too (real mixdowns: +0.5 … +1.0 dBTP without, about 0 with)
     master_tolerance_lu: float = 0.1        # the Maximizer's gain is solved until the result is this close
     master_max_passes: int = 10             # passes through the chain to get there
     master_pre_lufs: float = -14.0          # the mixdown is brought here first: the chain sees one level

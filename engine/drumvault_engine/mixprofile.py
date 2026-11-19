@@ -44,7 +44,10 @@ def integrated_lufs(data: np.ndarray, sr: int) -> float | None:
 
 def true_peak_db(data: np.ndarray, th: Thresholds, block: int = 4096) -> float | None:
     """The peak between the samples too (dBTP): the blocks peaking within
-    `profile_true_peak_window_db` of the highest sample, oversampled. None when silent."""
+    `profile_true_peak_window_db` of the highest sample, oversampled. None when silent.
+    Each block is oversampled with some of its neighbours, but only its own samples are read: the
+    filter takes what's past the ends of what it's given as silence, so where that cuts into a loud
+    signal it rings (a limited master read up to +1.1 dBTP that way while it peaked at 0)."""
     from scipy.signal import resample_poly
     peak = float(np.max(np.abs(data))) if data.size else 0.0
     if peak <= 0:
@@ -55,12 +58,14 @@ def true_peak_db(data: np.ndarray, th: Thresholds, block: int = 4096) -> float |
     body = np.abs(data[:n - pad]).max(axis=1).reshape(-1, block).max(axis=1) if n >= block else np.zeros(0)
     hot = list(np.flatnonzero(body >= floor)[np.argsort(-body[body >= floor])][:64]) if body.size else []
     best = peak
-    spans = [(max(0, int(i) * block - 64), min(n, (int(i) + 1) * block + 64)) for i in hot] or [(0, n)]
+    cores = [(int(i) * block, (int(i) + 1) * block) for i in hot] or [(0, n)]
     if pad and float(np.max(np.abs(data[n - pad:]))) >= floor:
-        spans.append((max(0, n - pad - 64), n))
-    for a, z in spans:
-        up = resample_poly(data[a:z].astype(np.float64), th.profile_true_peak_oversample, 1, axis=0)
-        best = max(best, float(np.max(np.abs(up))))
+        cores.append((n - pad, n))
+    k, margin = th.profile_true_peak_oversample, 64
+    for ca, cz in cores:
+        a, z = max(0, ca - margin), min(n, cz + margin)
+        up = resample_poly(data[a:z].astype(np.float64), k, 1, axis=0)
+        best = max(best, float(np.max(np.abs(up[(ca - a) * k:(cz - a) * k]))))
     return round(20 * float(np.log10(best)), 2)
 
 

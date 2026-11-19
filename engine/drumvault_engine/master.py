@@ -1,6 +1,6 @@
 """Mastering (SCOPE.md §6.5): the export's mixdown through Ozone 11 into `mastered.wav`, as House of
 Tracks takes it: its drops (the loudest short-term loudness) on the target (`master_target_lufs`),
-the limiter's ceiling at `master_ceiling_db`.
+the limiter's ceiling at `master_ceiling_db`, held between the samples too (`master_true_peak`).
 
 The basic chain: the mixdown is first brought to one level (`master_pre_lufs`), so the compressor
 works the same on every track; Ozone 11 Dynamics glues it gently (every band alike, RMS detection);
@@ -13,7 +13,10 @@ the mixdown sample for sample and has its length. A pass over a six-minute track
 from __future__ import annotations
 
 import logging
+import re
+import struct
 import threading
+import zlib
 from pathlib import Path
 from typing import Callable
 
@@ -94,6 +97,65 @@ def _set(plugin, name: str, value) -> None:
     setattr(plugin, name, vals[int(np.argmin([abs(x - value) for x in nums]))])
 
 
+_JUCE_B64 = ".ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+"
+
+
+def juce_b64_decode(text: str) -> bytes:
+    """JUCE's MemoryBlock::fromBase64Encoding: "<size>.<chars>", six bits a char, least significant first."""
+    size_s, data = text.split(".", 1)
+    size = int(size_s)
+    out = bytearray(size)
+    pos = 0
+    for ch in data:
+        v = _JUCE_B64.index(ch)
+        for b in range(6):
+            if pos >= size * 8:
+                break
+            if v >> b & 1:
+                out[pos // 8] |= 1 << (pos % 8)
+            pos += 1
+    return bytes(out)
+
+
+def juce_b64_encode(data: bytes) -> str:
+    """JUCE's MemoryBlock::toBase64Encoding (the inverse of `juce_b64_decode`)."""
+    bits = len(data) * 8
+    chars = []
+    for i in range(0, bits, 6):
+        v = 0
+        for k in range(6):
+            p = i + k
+            if p < bits and data[p // 8] >> (p % 8) & 1:
+                v |= 1 << k
+        chars.append(_JUCE_B64[v])
+    return f"{len(data)}." + "".join(chars)
+
+
+def set_ozone_state_bool(raw: bytes, key: str, value: bool) -> bytes:
+    """`raw` (a VST3 plugin's pedalboard raw_state: "VC2!", the XML's length, the XML) with the Ozone
+    setting `key` set to `value`. Ozone keeps some settings only there, not as parameters: in the
+    XML's IComponent, JUCE base64 of a header (magic, version, the bytes after these three fields,
+    the JSON's length) and the zlib'd JSON. Raises ValueError when the setting isn't found."""
+    if raw[:4] != b"VC2!":
+        raise ValueError("not a VST3 state")
+    xml = raw[8:8 + struct.unpack("<I", raw[4:8])[0]].decode("utf-8")
+    m = re.search(r"<IComponent>(.*?)</IComponent>", xml, re.S)
+    if not m:
+        raise ValueError("no IComponent in the state")
+    blob = juce_b64_decode(m.group(1).strip())
+    magic, version = struct.unpack("<2I", blob[:8])
+    doc = zlib.decompress(blob[16:]).decode("utf-8")
+    doc, n = re.subn(rf'("{re.escape(key)}" : \{{\s*"Type" : "Bool",\s*"Value" : )(?:true|false)',
+                     lambda mm: mm.group(1) + ("true" if value else "false"), doc)
+    if n != 1:
+        raise ValueError(f"{key!r} found {n} times in the state")
+    js = doc.encode("utf-8")
+    z = zlib.compress(js)
+    blob = struct.pack("<4I", magic, version, len(z) + 4, len(js)) + z
+    xb = (xml[:m.start(1)] + juce_b64_encode(blob) + xml[m.end(1):]).encode("utf-8")
+    return raw[:4] + struct.pack("<I", len(xb)) + xb
+
+
 class _Chain:
     """Ozone's Dynamics and Maximizer, loaded once for the engine's lifetime; renders are serialised."""
 
@@ -127,6 +189,11 @@ def _chain_for(settings: Settings) -> _Chain:
 
 
 def _configure(dyn, mx, th: Thresholds) -> None:
+    # First: a state loaded afterwards would undo the parameters set below.
+    try:
+        mx.raw_state = set_ozone_state_bool(mx.raw_state, "Prevent Intersample Clipping", th.master_true_peak)
+    except ValueError as e:
+        raise MasterError("ozone_state", f"Couldn't set the Maximizer's true-peak limiting ({e})") from e
     _set(dyn, "dyn_stereo_main_level_detection_method", "RMS")
     for b in range(1, 5):
         for k, v in (("comp_threshold", th.master_glue_threshold_db), ("comp_ratio", th.master_glue_ratio),

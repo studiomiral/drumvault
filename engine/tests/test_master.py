@@ -1,14 +1,21 @@
 """Mastering: the Maximizer gain solved to the loudness target, paths kept to the export folder,
-and (where Ozone 11 is installed) a real master on the target with the ceiling held."""
+Ozone's saved state edited, and (where Ozone 11 is installed) a real master on the target with the
+ceiling held, between the samples too."""
 
 from pathlib import Path
+
+import re
+import struct
+import zlib
 
 import numpy as np
 import pytest
 import soundfile as sf
 
 from drumvault_engine.config import Settings
-from drumvault_engine.master import MasterError, integrated_lufs, master_mixdown, max_short_term_lufs, solve_gain
+from drumvault_engine.master import (MasterError, integrated_lufs, juce_b64_decode, juce_b64_encode, master_mixdown,
+                                     max_short_term_lufs, set_ozone_state_bool, solve_gain)
+from drumvault_engine.mixprofile import true_peak_db
 
 SR = 44100
 
@@ -50,6 +57,42 @@ def test_measures_the_loudest_three_seconds():
     assert max_short_term_lufs(np.zeros((SR * 4, 2), np.float32), SR, 3.0) == float("-inf")
 
 
+def ozone_state(doc: str) -> bytes:
+    """A VST3 raw_state shaped like Ozone's: its settings as zlib'd JSON in JUCE base64 inside the XML."""
+    js = doc.encode()
+    z = zlib.compress(js)
+    blob = struct.pack("<4I", 0x688ADE, 4, len(z) + 4, len(js)) + z
+    xml = f'<?xml version="1.0" encoding="UTF-8"?> <VST3PluginState><IComponent>{juce_b64_encode(blob)}</IComponent></VST3PluginState>'
+    return b"VC2!" + struct.pack("<I", len(xml)) + xml.encode()
+
+
+def state_doc(raw: bytes) -> str:
+    xml = raw[8:8 + struct.unpack("<I", raw[4:8])[0]].decode()
+    return zlib.decompress(juce_b64_decode(re.search(r"<IComponent>(.*?)</IComponent>", xml).group(1))[16:]).decode()
+
+
+def test_sets_a_setting_in_ozones_state():
+    for n in (0, 1, 2, 3, 100, 1631):
+        b = bytes(np.random.default_rng(n).integers(0, 256, n, dtype=np.uint8))
+        assert juce_b64_decode(juce_b64_encode(b)) == b
+    doc = """{
+   "Margin" : {
+      "Type" : "Float",
+      "Value" : 0
+   },
+   "Prevent Intersample Clipping" : {
+      "Type" : "Bool",
+      "Value" : false
+   }
+}
+"""
+    raw = set_ozone_state_bool(ozone_state(doc), "Prevent Intersample Clipping", True)
+    assert state_doc(raw) == doc.replace("false", "true")
+    assert state_doc(set_ozone_state_bool(raw, "Prevent Intersample Clipping", False)) == doc
+    with pytest.raises(ValueError):
+        set_ozone_state_bool(raw, "Missing Setting", True)
+
+
 def test_keeps_the_master_next_to_the_mixdown(tmp_path: Path):
     mix = tmp_path / "mixdown.wav"
     sf.write(str(mix), club_mix(2.0), SR, subtype="PCM_24")
@@ -77,6 +120,10 @@ def test_says_so_when_ozone_is_missing(tmp_path: Path):
 def test_masters_through_ozone_on_target_with_the_ceiling(tmp_path: Path):
     mix = tmp_path / "mixdown.wav"
     x = club_mix(30.0)
+    # Noisy offbeat hats: limited without true-peak limiting, this master peaks at +2.4 dBTP between the samples.
+    t = np.arange(len(x)) / SR
+    hat = np.random.default_rng(3).standard_normal(len(x)) * np.exp(-((t + 60 / 248) % (60 / 124)) * 60) * 0.08
+    x = (x + np.stack([hat, hat], axis=1)).astype(np.float32)
     sf.write(str(mix), x, SR, subtype="PCM_24")
     s = Settings(library_path=str(tmp_path))
     r = master_mixdown(s, str(mix), str(tmp_path / "mastered.wav"))
@@ -88,6 +135,7 @@ def test_masters_through_ozone_on_target_with_the_ceiling(tmp_path: Path):
     assert abs(r["short_term_lufs"] - th.master_target_lufs) <= th.master_tolerance_lu
     assert abs(r["lufs"] - integrated_lufs(y, SR)) <= 0.01 and r["lufs"] < r["short_term_lufs"]
     assert np.max(np.abs(y)) <= 10 ** (th.master_ceiling_db / 20) + 1e-4
+    assert true_peak_db(y, th) <= th.master_ceiling_db + 0.1  # between the samples too
     # Ozone's look-ahead is compensated: the master lines up with the mixdown.
     a, b = x[SR * 5:SR * 6, 0], y[SR * 5 - 2000:SR * 6 + 2000, 0]
     assert int(np.argmax(np.correlate(b, a, "valid"))) - 2000 == 0
