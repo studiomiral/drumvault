@@ -117,6 +117,31 @@ export function makeStructure(rng: Rng, targetBars: number): Section[] {
   return layout(s)
 }
 
+/**
+ * Organic (SCOPE.md §5.18), as its tracks are built: one long arc around a single big breakdown in
+ * the middle. A long intro (the kick from bar 1), a build the music grows in, a long first drop,
+ * the big breakdown (usually 32 bars), a long second drop, now and then a short breakdown and a
+ * last drop after it, a long outro.
+ */
+export function makeOrganicStructure(rng: Rng, targetBars: number): Section[] {
+  const intro = rng.weighted([[24, 1], [32, 4]] as const)
+  const outro = rng.weighted([[24, 1], [32, 4]] as const)
+  const s: Omit<Section, 'start' | 'label'>[] = [
+    { kind: 'intro', bars: intro },
+    { kind: 'build', bars: rng.weighted([[16, 3], [24, 1], [32, 1]] as const), build: rng.weighted([['filter', 3], ['layered', 2]] as const) },
+    { kind: 'drop', bars: rng.weighted([[32, 1], [48, 3]] as const), switchHalfway: rng.chance(0.4) },
+    { kind: 'break', bars: rng.weighted([[24, 1], [32, 4]] as const), long: true, kick: pickLongKickMode(rng) },
+    { kind: 'drop', bars: rng.weighted([[32, 1], [48, 3]] as const), switchHalfway: rng.chance(0.4) },
+  ]
+  if (rng.chance(0.3)) {
+    s.push({ kind: 'break', bars: 8, kick: pickShortKickMode(rng) }, { kind: 'drop', bars: rng.weighted([[16, 1], [32, 1]] as const) })
+  }
+  s[s.length - 1].peak = true
+  s.push({ kind: 'outro', bars: outro })
+  fit(rng, s, targetBars)
+  return layout(s)
+}
+
 /** Sections in order with their start bars and names ("Drop 2"). */
 export function layout(s: Omit<Section, 'start' | 'label'>[]): Section[] {
   let start = 0

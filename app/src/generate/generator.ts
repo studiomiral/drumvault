@@ -23,7 +23,7 @@ import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perB
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
 import { Rng } from './rng'
-import { barsFor, BUILD_LABEL, halfwayBars, KICK_MODE_LABEL, makeStructure, PHRASE, type Section } from './structure'
+import { barsFor, BUILD_LABEL, halfwayBars, KICK_MODE_LABEL, makeOrganicStructure, makeStructure, PHRASE, type Section } from './structure'
 import { mainBuildOf, mainBuilds, readReference, templateFrom, templateFromReference, vocalAtWeights, type Arc, type Template } from './template'
 import { checkMix, kickBass, REGIONS, type MixCheck } from './mix'
 import {
@@ -410,6 +410,43 @@ export interface GenerateOptions {
 
 /** Share of generations built on a real track's structure when there are templates. */
 const TEMPLATE_CHANCE = 0.8
+
+// ---- organic (SCOPE.md §5.18): measured on its tracks, its rules over house's ----
+
+/** A seed's bits mixed (murmur3's finalizer): nearby seeds (a press's candidates) give streams that don't follow each other. */
+function scramble(x: number): number {
+  x ^= x >>> 16
+  x = Math.imul(x, 0x85ebca6b)
+  x ^= x >>> 13
+  x = Math.imul(x, 0xc2b2ae35)
+  return (x ^ (x >>> 16)) >>> 0
+}
+
+/** The characters an organic track can be (no bright disco one). */
+const ORGANIC_CHARACTERS: Character[] = ['dub', 'drums', 'deep']
+/** How many organic tracks have a clap (most of its tracks have none; where there is one it sits where its tracks put it). */
+const ORGANIC_CLAP_CHANCE = 0.35
+
+/**
+ * Organic's rules, over what the track drew and its character (a real track's own decisions still
+ * go over them): the bass stays in the breakdowns and comes in early, the top loops leave the
+ * breakdowns half the time, few build-ups (textures and filters instead of snare rolls), no clap
+ * rolls or builds, the FX busier. An RNG of its own, so house's streams never depend on it.
+ */
+function organicRules(r: Rng, drawn: { buildup: Buildup }): Record<string, unknown> {
+  return {
+    bassBreaks: r.weighted([['filtered', 9], ['none', 1]] as const),
+    bassIO: r.weighted([['filtered', 2], ['none', 1]] as const),
+    bassBuild: r.weighted([['filtered', 3], ['sweep', 1]] as const),
+    topsBreaks: r.weighted([['filtered', 2], ['open', 1], ['none', 3]] as const),
+    buildup: drawn.buildup === 'none' ? 'none' : r.weighted([['none', 6], ['snareRoll', 1], ['kickRoll', 1]] as const),
+    buildupCrash: r.weighted([['none', 5], ['last4', 1]] as const),
+    bigBuild: r.weighted([['usual', 3], ['big', 1]] as const),
+    bigDrums: 'snare',
+    fx: r.weighted([['normal', 2], ['busy', 2], ['sparse', 1]] as const),
+    clapRolls: 'none', clapGhost: null, ioClaps: false,
+  }
+}
 /** With both, the share of templates taken from the reference tracks (the rest from the zips). */
 const REFERENCE_SHARE = 0.5
 
@@ -1108,7 +1145,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const readable = (opts.references ?? []).filter((r) => r.profile && readReference(r.profile))
   const tpl = !keep.structure && (opts.templates?.length || readable.length) && rng.chance(TEMPLATE_CHANCE)
     ? pickTemplate(rng, opts.templates ?? [], readable, barsFor(opts.minMinutes, bpm), barsFor(opts.maxMinutes, bpm)) : null
-  const sections = keep.structure ? structuredClone(keep.structure) : tpl?.sections ?? makeStructure(rng, barsFor(minutes, bpm))
+  const organic = opts.genre === 'organic'
+  const sections = keep.structure ? structuredClone(keep.structure)
+    : tpl?.sections ?? (organic ? makeOrganicStructure : makeStructure)(rng, barsFor(minutes, bpm))
   const total = sections.reduce((n, s) => n + s.bars, 0)
   const key = keep.key !== undefined ? keep.key : chooseKey(rng, samples)
   // A replay (one of the track's rules changed) goes on from where the track's own RNG was here.
@@ -1159,7 +1198,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const madeBefore = (rule: string) => !!keep.rules && 'dropGaps' in keep.rules && !(rule in keep.rules)
   const xrng = new Rng(seed ^ 0x47455354)
   const gaterng = new Rng(seed ^ 0x47415445)
-  const drawnCharacter = crng.pick(CHARACTERS)
+  const drawnCharacter = crng.pick(organic ? ORGANIC_CHARACTERS : CHARACTERS)
   // (A track made again carries its own, also when it has none: one made before characters.)
   const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
   const charRules = characterRules(drawnCharacter, crng, KICK_PHRASE_ENDS)
@@ -1184,9 +1223,13 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   let feelSrc = [groove, top0].find(hasFeel) ?? null
   const fits = (s: SampleListItem) => feelFit(s.groove, feelSrc?.groove)
   const clapShots = pool(of('oneshot', 'clap', 'snare'))
-  const clap = keptOr('clap', () => picker.pick(clapShots, { score: sits }))
+  // (Organic: a clap in some tracks only, never layered. An RNG of its own.)
+  const orng = new Rng(scramble(seed ^ 0x4f524741))
+  const clapPool = !organic || orng.chance(ORGANIC_CLAP_CHANCE) ? clapShots : []
+  const clap = keptOr('clap', () => picker.pick(clapPool, { score: sits }))
   // Layered claps (never a second kick): played together on the backbeat in drops.
-  const claps = layers(clap, clapShots, rng.weighted([[1, 2], [2, 3], [3, 2]] as const), undefined, sits)
+  const clapLayers = rng.weighted([[1, 2], [2, 3], [3, 2]] as const)
+  const claps = layers(clap, clapPool, organic ? 1 : clapLayers, undefined, sits)
   const hatLoops = loopsOf('hat', 'hat_closed', 'hat_open', 'shaker')
   const hats = addLoop(keptOr('hats', () => picker.pick(hatLoops, { weight: preferShort, fit: fits, score: sits })
     ?? picker.pick(pool(of('oneshot', 'hat_closed', 'hat', 'hat_open')), { score: sits })))
@@ -1566,6 +1609,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // decisions, what is kept and what is locked go over those.
   const charOwn = character && stabLoopEarly ? Object.fromEntries(Object.entries(charRules).filter(([k]) => k !== 'stabsOpen')) : charRules
   const rules: typeof drawn = { ...drawn, ...(character ? charOwn as Partial<typeof drawn> : undefined), ...(leadRules(lead) as Partial<typeof drawn>),
+    ...(organic ? organicRules(orng, drawn) as Partial<typeof drawn> : undefined),
     ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,

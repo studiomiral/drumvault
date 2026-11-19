@@ -75,6 +75,11 @@ export interface GenerateSettings {
 let storeGenre: Genre = DEFAULT_GENRE
 /** A setting's key in the loaded genre's storage: house keeps the keys from before genres. */
 const k = (key: string) => (storeGenre === DEFAULT_GENRE ? key : `${key}.${storeGenre}`)
+/** What a genre's new tracks start from until it's set otherwise (SCOPE.md §5.18; house's: as before genres). */
+const GENRE_START: Record<Genre, { tempo: { min: number; max: number } | null; minutes: [number, number] }> = {
+  house: { tempo: null, minutes: [4, 6] },
+  organic: { tempo: { min: 120, max: 123 }, minutes: [6.5, 7.5] },
+}
 
 const BASS_KEY = 'drumvault.generate.bass'
 
@@ -158,9 +163,10 @@ const TEMPO_KEY = 'drumvault.generate.tempo'
 
 function savedTempo(): GenerateSettings['tempo'] {
   try {
-    return JSON.parse(localStorage.getItem(k(TEMPO_KEY)) ?? 'null') as GenerateSettings['tempo']
+    const saved = localStorage.getItem(k(TEMPO_KEY))
+    return saved == null ? GENRE_START[storeGenre].tempo : JSON.parse(saved) as GenerateSettings['tempo']
   } catch {
-    return null
+    return GENRE_START[storeGenre].tempo
   }
 }
 
@@ -225,7 +231,8 @@ interface ShortlistItem {
 
 /** The loaded genre's settings, as remembered. */
 function savedSettings(): GenerateSettings {
-  return { minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
+  const [minMinutes, maxMinutes] = GENRE_START[storeGenre].minutes
+  return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
 }
 
 const noKeep = (): KeepToggles => ({ structure: false, key: false, lanes: [], bassline: false, patch: false })

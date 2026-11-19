@@ -2785,3 +2785,53 @@ describe('generator: intros gated, fills made anew', () => {
     expect(gens.filter((x) => x.rules.introGate).length).toBeGreaterThan(gens.length * 0.4)
   })
 })
+
+describe('organic (SCOPE.md §5.18)', () => {
+  const ORG: GenerateOptions = { ...OPTS, genre: 'organic', minMinutes: 6.5, maxMinutes: 7.5, tempo: { min: 120, max: 123 } }
+  const gens = Array.from({ length: 40 }, (_, i) => generate(LIB, ORG, 5000 + i))
+  const share = (f: (g: Generation) => boolean) => gens.filter(f).length / gens.length
+
+  it('is one long arc around one big breakdown in the middle, at 120–123 BPM and about 7 minutes', () => {
+    for (const g of gens) {
+      expect(g.project.bpm).toBeGreaterThanOrEqual(120)
+      expect(g.project.bpm).toBeLessThanOrEqual(123)
+      const total = g.sections.reduce((n, s) => n + s.bars, 0)
+      const minutes = (total * 4) / g.project.bpm
+      expect(minutes).toBeGreaterThan(6)
+      expect(minutes).toBeLessThan(8)
+      const long = g.sections.filter((s) => s.long)
+      expect(long).toHaveLength(1)
+      expect(long[0].start / total).toBeGreaterThan(0.3)
+      expect(long[0].start / total).toBeLessThan(0.65)
+      expect(g.sections.filter((s) => s.kind === 'break').length).toBeLessThanOrEqual(2)
+      expect(g.sections[0]).toMatchObject({ kind: 'intro' })
+      expect(g.sections[0].bars).toBeGreaterThanOrEqual(24)
+    }
+  })
+
+  it('has a clap in some tracks only, never layered, and is never the disco character', () => {
+    const playing = (g: Generation, name: string) => {
+      const lane = g.project.lanes.find((l) => l.name === name)
+      return !!lane && g.project.clips.some((c) => c.laneId === lane.id)
+    }
+    const clapped = share((g) => playing(g, 'Clap'))
+    expect(clapped).toBeGreaterThan(0.1)
+    expect(clapped).toBeLessThan(0.65)
+    expect(gens.some((g) => playing(g, 'Clap 2') || playing(g, 'Clap 3'))).toBe(false)
+    expect(gens.some((g) => g.rules.character === 'disco')).toBe(false)
+  })
+
+  it('keeps the bass in its breakdowns, and has few build-ups and no clap rolls', () => {
+    expect(share((g) => g.rules.bassBreaks === 'filtered')).toBeGreaterThan(0.75)
+    expect(share((g) => (g.rules.buildup ?? 'none') === 'none')).toBeGreaterThan(0.6)
+    expect(gens.every((g) => g.rules.clapRolls === 'none' && g.rules.buildup !== 'claps')).toBe(true)
+  })
+
+  it('leaves house as it was', () => {
+    const house = Array.from({ length: 40 }, (_, i) => generate(LIB, OPTS, 5000 + i))
+    expect(house.some((g) => g.rules.character === 'disco')).toBe(true)
+    expect(house.some((g) => g.rules.clapRolls !== 'none')).toBe(true)
+    const same = (g: Generation) => ({ rules: g.rules, sections: g.sections, clips: g.project.clips.length, choices: g.choices })
+    expect(same(generate(LIB, { ...OPTS, genre: 'house' }, 77))).toEqual(same(generate(LIB, OPTS, 77)))
+  })
+})
