@@ -15,7 +15,8 @@ Drag zips of dance-track stems in → get a tempo-matched, key-labeled drum samp
 - Work phase by phase (SCOPE.md §7). Don't start UI work before Phase 1 passes its acceptance criteria.
 - Every audio analysis threshold goes in `engine/drumvault_engine/config.py` — never hard-code thresholds inline.
 - One-shots are never time-stretched. Loops are cut sample-exact on the grid, with no end fades.
-- Write tests against the synthetic fixtures (`engine/tests/make_fixtures.py`) for every engine module; run `uv run pytest` before calling a task done.
+- Write tests against the synthetic fixtures (`engine/tests/make_fixtures.py`) for every engine module.
+- Testing: after each change, run only the type check (`cd app && npm run typecheck`, ~15 s). Run the test suites (`uv run pytest`, ~7 min; `npm test`, ~40 s) only when Lars asks for a test run, usually after several changes. Commit each finished change locally; push once a test run passes.
 - Never block the Electron main process; heavy work belongs in the sidecar.
 - Share scheduling logic between live playback and offline export — don't duplicate it.
 - Keep the Python schemas (`schemas.py`) and TS types (`app/src/types/`) in sync when changing either.
