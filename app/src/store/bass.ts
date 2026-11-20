@@ -54,11 +54,15 @@ export function bassSettings(): BassSettings {
   return { ...s, folders: genreFolders('bass') ?? s.folders }
 }
 
-let loading: Promise<void> | null = null
+/** The load running, and what it loads (the genre's folders): a call for the same waits for it, any other loads after it. */
+let loading: { what: string; p: Promise<void> } | null = null
 
-/** (Re)load basslines and presets; call after imports or when the chosen folders change. */
+/** (Re)load basslines and presets; call after imports or when the chosen folders (or the genre) change. */
 export function loadBass(): Promise<void> {
-  loading ??= (async () => {
+  const what = JSON.stringify([genre(), bassSettings().folders, padsSettings().folders, plucksSettings().folders])
+  if (loading?.what === what) return loading.p
+  const before = loading?.p ?? Promise.resolve()
+  const p: Promise<void> = before.catch(() => {}).then(async () => {
     try {
       const s = bassSettings()
       const pf = padsSettings().folders
@@ -78,10 +82,11 @@ export function loadBass(): Promise<void> {
     } catch (e) {
       useBass.setState({ loaded: true, error: (e as Error).message })
     } finally {
-      loading = null
+      if (loading?.p === p) loading = null
     }
-  })()
-  return loading
+  })
+  loading = { what, p }
+  return p
 }
 
 /** The Pads module's folders under the Serum 2 presets folder. */

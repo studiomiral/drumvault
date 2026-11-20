@@ -7,11 +7,17 @@ vi.mock('../src/api', () => ({
   api: {
     saveSettings: async (patch: Partial<AppSettings>) => (saved = { ...saved, ...patch }),
     onLibraryChanged: () => {},
+    listMidi: async () => [],
+    // Each folder's one patch, the house ones slow (a load still running when the genre switches).
+    serumPresets: async (_root: string, folders: string[]) => {
+      if (folders.includes('House Bass')) await new Promise((ok) => setTimeout(ok, 50))
+      return { folders: [], presets: folders.map((f) => ({ path: `/serum/${f}/p.SerumPreset`, name: f, folder: f, tags: [], samples: [] })) }
+    },
   },
 }))
 
 const { useApp } = await import('../src/store/app')
-const { bassSettings, padsSettings, plucksSettings, saveBassSettings, savePadsSettings, savePlucksSettings } = await import('../src/store/bass')
+const { bassSettings, loadBass, padsSettings, plucksSettings, saveBassSettings, savePadsSettings, savePlucksSettings, useBass } = await import('../src/store/bass')
 
 const use = (s: AppSettings) => {
   saved = s
@@ -36,6 +42,13 @@ describe('Serum 2 folders per genre (SCOPE.md §5.18)', () => {
     expect([saved.bass?.folders, saved.pads?.folders]).toEqual([['House Bass'], ['House Pads']])
     use({ ...saved, genre: 'house' })
     expect([bassSettings().folders, padsSettings().folders]).toEqual([['House Bass'], ['House Pads']])
+  })
+
+  it("loads the genre's own patches, also when it switches while the other genre's are still loading", async () => {
+    const house = loadBass()
+    use({ ...saved, genre: 'organic', genreFolders: { organic: { bass: ['Saw Bass'] } } })
+    await Promise.all([house, loadBass()])
+    expect(useBass.getState().presets.map((p) => p.folder)).toEqual(['Saw Bass'])
   })
 
   it('shares the starred patches between the genres', async () => {
