@@ -1,7 +1,7 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → tail → [bus gain] → master
+// source → [clip filter] → [loop crossfade] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → tail → [bus gain] → master
 //                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
 // A drum bus lane's tail also feeds the bus's detector (live), whose gain drives every bus lane's bus gain.
 
@@ -335,7 +335,10 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
                           when: number, cutAt?: number): AudioBufferSourceNode | null {
   const sr = ctx.sampleRate
   when = Math.round(when * sr) / sr
-  const offset = Math.round(Math.max(0, ev.offset) * buffer.sampleRate) / buffer.sampleRate
+  const xf = ev.crossfade ?? 0
+  // A seamless loop's repetition plays on round the loop: its offset may come round too.
+  let offset = Math.round(Math.max(0, ev.offset) * buffer.sampleRate) / buffer.sampleRate
+  if (xf) offset %= buffer.duration
   if (offset >= buffer.duration) return null
   // `duration` is project time; a pitched event plays `rate` seconds of the buffer per second.
   const rate = ev.rate ?? 1
@@ -348,7 +351,23 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
   const g = ctx.createGain()
   g.gain.value = ev.gain
   let head: AudioNode = g
-  if (ev.declick && duration > 0.006) {
+  // A filtered loop starts that much earlier, silent: its new filter has settled when it's heard
+  // (one started on the beat would pass the wave's jump from silence as a click). Not in the past.
+  const pre = xf && ev.filter ? Math.max(0, Math.min(FILTER_PREROLL_S, Math.floor((when - ctx.currentTime - 0.005) * sr) / sr)) : 0
+  if (xf) {
+    // Crossfade: in over `xf` from the start, out over `xf` past the end (the loop goes on round).
+    src.loop = true
+    const d = ctx.createGain()
+    // Silent until the first ramp, also on a first frame the source plays before `when` by rounding.
+    d.gain.value = 0
+    d.gain.setValueAtTime(0, when - pre)
+    d.gain.setValueAtTime(0, when)
+    d.gain.linearRampToValueAtTime(1, when + xf)
+    d.gain.setValueAtTime(1, when + duration)
+    d.gain.linearRampToValueAtTime(0, when + duration + xf)
+    d.connect(g)
+    head = d
+  } else if (ev.declick && duration > 0.006) {
     // Tempo slices: 1 ms in, 3 ms out, so cutting a loop into 16ths doesn't click.
     const d = ctx.createGain()
     d.gain.setValueAtTime(0, when)
@@ -379,6 +398,7 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
     const f = ctx.createBiquadFilter()
     f.type = ev.filter.type
     f.Q.value = ev.filter.q
+    f.frequency.setValueAtTime(ev.filter.f0, when - pre)
     f.frequency.setValueAtTime(ev.filter.f0, when)
     if (ev.filter.f1 !== ev.filter.f0) f.frequency.exponentialRampToValueAtTime(ev.filter.f1, when + duration)
     src.connect(f).connect(head)
@@ -411,6 +431,15 @@ export function playEvent(ctx: BaseAudioContext, ev: ScheduledEvent, buffer: Aud
     s.gain.value = ev.echo.send
     out.connect(s).connect(laneEcho(ctx, lane, ev.echo.time, ev.echo.feedback).input)
   }
-  src.start(when, offset, duration * rate)  // Web Audio's duration is buffer time
+  if (pre) {
+    // Round the loop back from the offset, by whole frames.
+    const back = ((offset - pre) % buffer.duration + buffer.duration) % buffer.duration
+    src.start(when - pre, Math.round(back * buffer.sampleRate) / buffer.sampleRate, (pre + duration + xf) * rate)
+  } else {
+    src.start(when, offset, (duration + xf) * rate)  // Web Audio's duration is buffer time
+  }
   return src
 }
+
+/** How long a filtered seamless loop plays silent before it's heard, for its filter to settle (seconds). */
+const FILTER_PREROLL_S = 0.05

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bassPath, clipSounds, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, soundPath, tempoMode, tempoPath, verbSend } from '../src/audio/schedule'
+import { bassPath, clipSounds, eventsInRange, fadeAt, fadeBreakpoints, kickHits, metronomeTicks, sampleBpm, SEAM_XFADE_S, soundPath, tempoMode, tempoPath, verbSend } from '../src/audio/schedule'
 import { bassNotes, notesMidi } from '../src/lib/midi'
 import { newProject, splitClip } from '../src/lib/project'
 import type { AudioClip, PatternClip, Project, SampleRef, Velocity } from '../src/types/project'
@@ -233,6 +233,18 @@ describe('bass clips and the sidechain', () => {
     const ev = eventsInRange({ ...newProject('t', 128), clips: [c] }, 0, 1000)
     expect(ev.length).toBe(2)                                   // two 8-beat repetitions
     expect(ev.every((e) => e.relPath === bassPath(render, 128) && !e.declick)).toBe(true)
+  })
+
+  it('crossfades a seamless render at every repetition (no click at bar lines), but not strings or plain loops', () => {
+    const ev = eventsInRange({ ...newProject('t', BPM), clips: [bassClip(0, 16), { ...bassClip(16, 4, 2), id: 'c' }] }, 0, 1000, { includeOngoing: true })
+    expect(ev.length).toBe(3)
+    expect(ev.every((e) => e.crossfade === SEAM_XFADE_S)).toBe(true)
+    expect(ev.slice(0, 2).map((e) => e.duration)).toEqual([8 * BEAT, 8 * BEAT])  // the crossfade runs past the end, not into it
+    // Started mid-repetition: it fades in from there too.
+    const mid = eventsInRange({ ...newProject('t', BPM), clips: [bassClip(0, 16)] }, 3 * BEAT, 1000, { includeOngoing: true })
+    expect(mid[0].crossfade).toBe(SEAM_XFADE_S)
+    const strings = { ...bassClip(0, 8), bass: { ...render, role: 'strings' as const } }
+    expect(eventsInRange({ ...newProject('t', BPM), clips: [strings, audio(0, 8)] }, 0, 1000).some((e) => e.crossfade)).toBe(false)
   })
 
   it("names an edited bassline's render after its notes, and exports the edited notes", () => {

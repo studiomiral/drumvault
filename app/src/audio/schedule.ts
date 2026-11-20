@@ -34,6 +34,13 @@ export interface ScheduledEvent {
   declick?: boolean
   /** A gated hit: it fades out over its last this many seconds. */
   release?: number
+  /**
+   * A repetition of a seamless rendered loop (a bass line, stab, pad…): it fades in over this many
+   * seconds from its start and plays on as long past its end (round the loop) fading out, so it
+   * crossfades with whatever comes next (the same loop again: unchanged; another clip, or
+   * silence: no click). See SEAM_XFADE_S.
+   */
+  crossfade?: number
   /** A delay throw: the send (0…1), the delay time (seconds) and how much of each repeat comes round again. */
   echo?: { send: number; time: number; feedback: number }
 }
@@ -44,6 +51,15 @@ export const ECHO_FEEDBACK = 0.42
 /** A gated hit fades out over this share of its length, at most this long (seconds). */
 const GATE_RELEASE_SHARE = 0.3
 const GATE_RELEASE_MAX_S = 0.06
+
+/**
+ * Crossfade (seconds) between repetitions of a seamless rendered loop. A sustained bass is
+ * mid-wave at every bar line: cut there, against another clip's audio, silence or a clip filter
+ * starting afresh, it ticks. Short enough not to blur a note, long enough to leave no click.
+ */
+export const SEAM_XFADE_S = 0.008
+/** Rendered parts whose files are seamless loops (the engine renders two cycles and keeps the second). */
+const SEAMLESS_ROLES = new Set<string>(['bass', 'keys', 'stab', 'drone', 'pad', 'ambience'])
 
 // ---------------------------------------------------------------------------
 // Tempo (SCOPE.md §6.4a): samples are cut at the library BPM; a project may run at another.
@@ -240,9 +256,10 @@ function withEcho(ev: ScheduledEvent, clip: Clip, bpm: number): ScheduledEvent {
 
 function push(out: ScheduledEvent[], clip: Clip, bpm: number, start: number, offset: number, duration: number | null,
               gain: number, from: number, to: number, includeOngoing: boolean, soundLength: number,
-              relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number; release?: number } = {}): void {
+              relPath = clip.sample.relPath, opts: { declick?: boolean; rate?: number; release?: number; crossfade?: number } = {}): void {
   const rate = opts.rate ?? 1
-  const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}), ...(opts.release ? { release: opts.release } : {}) }
+  const extra = { ...(opts.declick ? { declick: true } : {}), ...(rate !== 1 ? { rate } : {}), ...(opts.release ? { release: opts.release } : {}),
+    ...(opts.crossfade ? { crossfade: opts.crossfade } : {}) }
   if (start >= from - EPS && start < to - EPS) {
     out.push(withEcho(withRide(withVerb(withFade(withFilter({ laneId: clip.laneId, clipId: clip.id, relPath, start, offset, duration, gain, ...extra }, clip, bpm), clip, bpm), clip, bpm), clip, bpm), clip, bpm))
   } else if (includeOngoing && start < from - EPS && start + soundLength > from + EPS) {
@@ -267,6 +284,7 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
   const sb = sampleBpm(clip.sample)
   const rel = soundPath(clip, bpm)
   const gain = dbToGain(clip.gainDb)
+  const seamless = mode === 'rendered' && SEAMLESS_ROLES.has(clip.bass!.role ?? 'bass')
   const fromBeat = (from * bpm) / 60
   const toBeat = (to * bpm) / 60
   if (end <= fromBeat - L || clip.start >= toBeat + 1) return
@@ -307,7 +325,7 @@ function audioEvents(clip: AudioClip, bpm: number, from: number, to: number, ong
     // Native or stretched: the file runs at the project tempo, one event per repetition.
     const startSec = beatToSec(s, bpm)
     const durSec = beatToSec(e - s, bpm)
-    push(out, clip, bpm, startSec, beatToSec(off, bpm), durSec, gain, from, to, ongoing, durSec, rel)
+    push(out, clip, bpm, startSec, beatToSec(off, bpm), durSec, gain, from, to, ongoing, durSec, rel, seamless ? { crossfade: SEAM_XFADE_S } : {})
   }
 }
 
