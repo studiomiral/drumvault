@@ -4,7 +4,8 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { BASS_DEFAULTS } from '../lib/defaults'
-import type { BassSettings, HitItem, MidiItem, SerumPreset } from '../types/api'
+import type { BassSettings, HitItem, MidiItem, SerumPool, SerumPreset } from '../types/api'
+import { DEFAULT_GENRE, type Genre } from '../types/engine'
 import { playable, serumPresetRoot, useApp } from './app'
 import { patchPool, type BassSource } from '../generate/basspatch'
 import { useHits } from './hits'
@@ -17,11 +18,14 @@ interface BassState {
   /** The breakdown layer's patches (SCOPE.md §6.7b): pads and reeses from the Pads folders, and those left out. */
   padPresets: SerumPreset[]
   padSkipped: number
+  /** Organic's arps and plucks (SCOPE.md §5.18): the patches in the Plucks folders, and those left out. */
+  pluckPresets: SerumPreset[]
+  pluckSkipped: number
   loaded: boolean
   error: string | null
 }
 
-export const useBass = create<BassState>(() => ({ basslines: [], presets: [], skipped: 0, padPresets: [], padSkipped: 0, loaded: false, error: null }))
+export const useBass = create<BassState>(() => ({ basslines: [], presets: [], skipped: 0, padPresets: [], padSkipped: 0, pluckPresets: [], pluckSkipped: 0, loaded: false, error: null }))
 
 export { samplePatch, type BassSource } from '../generate/basspatch'
 
@@ -31,8 +35,23 @@ export function bassPatches(source: BassSource = 'both', presets: SerumPreset[] 
   return patchPool(source, presets, hits)
 }
 
+const genre = (): Genre => useApp.getState().settings?.genre ?? DEFAULT_GENRE
+
+/** The active genre's folders of a pool: house's as before genres (`bass`, `pads`), every other genre its own. */
+function genreFolders(pool: SerumPool): string[] | null {
+  const g = genre()
+  return g === DEFAULT_GENRE && pool !== 'plucks' ? null : useApp.getState().settings?.genreFolders?.[g]?.[pool] ?? []
+}
+
+async function saveGenreFolders(pool: SerumPool, folders: string[]): Promise<void> {
+  const all = useApp.getState().settings?.genreFolders ?? {}
+  const g = genre()
+  await useApp.getState().saveSettings({ genreFolders: { ...all, [g]: { ...all[g], [pool]: folders } } })
+}
+
 export function bassSettings(): BassSettings {
-  return { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot() }
+  const s = { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot() }
+  return { ...s, folders: genreFolders('bass') ?? s.folders }
 }
 
 let loading: Promise<void> | null = null
@@ -43,14 +62,18 @@ export function loadBass(): Promise<void> {
     try {
       const s = bassSettings()
       const pf = padsSettings().folders
-      const [midis, pool, pads] = await Promise.all([
+      const kf = plucksSettings().folders
+      const none = Promise.resolve({ folders: [], presets: [] as SerumPreset[] })
+      const [midis, pool, pads, plucks] = await Promise.all([
         api.listMidi(),
-        s.folders.length ? api.serumPresets(s.presetRoot, s.folders) : Promise.resolve({ folders: [], presets: [] }),
-        pf.length ? api.serumPresets(s.presetRoot, pf) : Promise.resolve({ folders: [], presets: [] }),
+        s.folders.length ? api.serumPresets(s.presetRoot, s.folders) : none,
+        pf.length ? api.serumPresets(s.presetRoot, pf) : none,
+        kf.length ? api.serumPresets(s.presetRoot, kf) : none,
       ])
       useBass.setState({
         basslines: midis.filter((m) => m.role === 'bass'), presets: playable(pool.presets), skipped: pool.presets.length - playable(pool.presets).length,
-        padPresets: playable(pads.presets), padSkipped: pads.presets.length - playable(pads.presets).length, loaded: true, error: null,
+        padPresets: playable(pads.presets), padSkipped: pads.presets.length - playable(pads.presets).length,
+        pluckPresets: playable(plucks.presets), pluckSkipped: plucks.presets.length - playable(plucks.presets).length, loaded: true, error: null,
       })
     } catch (e) {
       useBass.setState({ loaded: true, error: (e as Error).message })
@@ -63,15 +86,32 @@ export function loadBass(): Promise<void> {
 
 /** The Pads module's folders under the Serum 2 presets folder. */
 export function padsSettings(): { folders: string[] } {
-  return { folders: [], ...useApp.getState().settings?.pads }
+  return { folders: genreFolders('pads') ?? useApp.getState().settings?.pads?.folders ?? [] }
 }
 
 export async function savePadsSettings(patch: { folders?: string[] }): Promise<void> {
-  await useApp.getState().saveSettings({ pads: { ...padsSettings(), ...patch } })
+  if (patch.folders && genreFolders('pads')) return saveGenreFolders('pads', patch.folders)
+  await useApp.getState().saveSettings({ pads: { ...useApp.getState().settings?.pads, folders: patch.folders ?? padsSettings().folders } })
+}
+
+/** The Plucks folders (organic's arps and plucks; the active genre's). */
+export function plucksSettings(): { folders: string[] } {
+  return { folders: genreFolders('plucks') ?? [] }
+}
+
+export async function savePlucksSettings(patch: { folders?: string[] }): Promise<void> {
+  if (patch.folders) await saveGenreFolders('plucks', patch.folders)
 }
 
 export async function saveBassSettings(patch: Partial<BassSettings>): Promise<void> {
-  await useApp.getState().saveSettings({ bass: { ...bassSettings(), ...patch } })
+  // (A genre other than house keeps its folders in `genreFolders`; the favourites and octaves are shared, by path.)
+  const { folders, ...rest } = patch
+  const ownFolders = genreFolders('bass') != null
+  if (folders && ownFolders) await saveGenreFolders('bass', folders)
+  const shared = ownFolders ? rest : patch
+  if (Object.keys(shared).length) {
+    await useApp.getState().saveSettings({ bass: { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot(), ...shared } })
+  }
 }
 
 export function toggleFavoritePreset(path: string): void {

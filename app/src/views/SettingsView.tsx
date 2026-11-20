@@ -221,8 +221,9 @@ export function SettingsView() {
 function SerumSettingsSection() {
   const { libraryVersion, toast, setView } = useApp()
   const rootNow = serumPresetRoot()
-  const pools = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length) }
-  const parts = { bass: useBass((s) => s.basslines.length), pads: null }
+  const pools = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length), plucks: useBass((s) => s.pluckPresets.length) }
+  const parts = { bass: useBass((s) => s.basslines.length), pads: null, plucks: null }
+  const organic = useApp((s) => s.settings?.genre === 'organic')
   useEffect(() => {
     void loadBass()
   }, [libraryVersion])
@@ -252,7 +253,7 @@ function SerumSettingsSection() {
           <Button variant="ghost" onClick={() => void openRoot()} title="Open the presets folder in Finder">Show in Finder</Button>
         </span>
       </Field>
-      {SERUM_MODULES.map((m) => (
+      {SERUM_MODULES.filter((m) => m.id !== 'plucks' || organic).map((m) => (
         <Field key={m.id} label={m.label} hint="MIDI and patch folders on the MIDI page">
           <span className="text-[12.5px] flex items-center gap-2">
             {parts[m.id] != null && `${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from · `}

@@ -18,6 +18,7 @@ const COLOR = '#fda4af'
  */
 export function MidiView() {
   const { libraryVersion, engine, toast } = useApp()
+  const genre = useApp((s) => s.settings?.genre ?? 'house')
   const [items, setItems] = useState<MidiItem[] | null>(null)
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -106,8 +107,10 @@ export function MidiView() {
           </span>
         </button>
 
-        <SerumFolders module="bass" />
-        <SerumFolders module="pads" />
+        {/* Each genre its own folders (keyed: switching genre shows its choice). */}
+        <SerumFolders key={`bass-${genre}`} module="bass" />
+        <SerumFolders key={`pads-${genre}`} module="pads" />
+        {genre === 'organic' && <SerumFolders key={`plucks-${genre}`} module="plucks" />}
 
         {bassModel && <Learned model={bassModel} />}
 

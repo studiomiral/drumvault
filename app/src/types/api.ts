@@ -33,6 +33,11 @@ export interface AppSettings {
   spliceFolder?: string | null
   /** The breakdown layer (SCOPE.md §6.7b): the Serum 2 folders with pad and reese patches. */
   pads?: { folders: string[] }
+  /**
+   * The Serum 2 folders of the genres other than house (SCOPE.md §5.18), each its own: its bass and
+   * pad patches, and its plucks (organic's arps and plucks). House's are `bass.folders` and `pads.folders`.
+   */
+  genreFolders?: Partial<Record<Genre, Partial<Record<SerumPool, string[]>>>>
   /** Chord stabs (SCOPE.md §6.9): what Generate's step sequencer saved. */
   stabs?: StabsSettings
 }
@@ -137,6 +142,9 @@ export interface HotFillResult {
   /** Why nothing was filled (not logged in, the page didn't load). */
   error?: string
 }
+
+/** The Serum 2 patch pools a genre chooses folders for. */
+export type SerumPool = 'bass' | 'pads' | 'plucks'
 
 export interface BassSettings {
   /** The Serum 2 presets folder: the shared `serumPresetRoot` (stored here by older versions). */
