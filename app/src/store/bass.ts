@@ -4,7 +4,7 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { BASS_DEFAULTS } from '../lib/defaults'
-import type { BassSettings, HitItem, MidiItem, SerumPool, SerumPreset } from '../types/api'
+import type { AppSettings, BassSettings, HitItem, MidiItem, SerumPool, SerumPreset } from '../types/api'
 import { DEFAULT_GENRE, type Genre } from '../types/engine'
 import { playable, serumPresetRoot, useApp } from './app'
 import { patchPool, type BassSource } from '../generate/basspatch'
@@ -49,9 +49,19 @@ async function saveGenreFolders(pool: SerumPool, folders: string[]): Promise<voi
   await useApp.getState().saveSettings({ genreFolders: { ...all, [g]: { ...all[g], [pool]: folders } } })
 }
 
+/**
+ * The octaves saved for bass patches in the settings' genre: each genre its own (house's as before
+ * genres), since a genre's lines sit in a register of their own (organic's far under house's).
+ */
+export function octavesOf(settings: AppSettings | null | undefined): Record<string, number> {
+  const g = settings?.genre ?? DEFAULT_GENRE
+  return (g === DEFAULT_GENRE ? settings?.bass?.octaves : settings?.genreOctaves?.[g]) ?? {}
+}
+
 export function bassSettings(): BassSettings {
-  const s = { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot() }
-  return { ...s, folders: genreFolders('bass') ?? s.folders }
+  const settings = useApp.getState().settings
+  const s = { ...BASS_DEFAULTS, ...settings?.bass, presetRoot: serumPresetRoot() }
+  return { ...s, folders: genreFolders('bass') ?? s.folders, octaves: octavesOf(settings) }
 }
 
 /** The load running, and what it loads (the genre's folders): a call for the same waits for it, any other loads after it. */
@@ -109,11 +119,16 @@ export async function savePlucksSettings(patch: { folders?: string[] }): Promise
 }
 
 export async function saveBassSettings(patch: Partial<BassSettings>): Promise<void> {
-  // (A genre other than house keeps its folders in `genreFolders`; the favourites and octaves are shared, by path.)
-  const { folders, ...rest } = patch
+  // (A genre other than house keeps its folders in `genreFolders` and its octaves in `genreOctaves`; the
+  // favourites are shared, by path.)
+  const { folders, octaves, ...rest } = patch
   const ownFolders = genreFolders('bass') != null
   if (folders && ownFolders) await saveGenreFolders('bass', folders)
-  const shared = ownFolders ? rest : patch
+  if (octaves && genre() !== DEFAULT_GENRE) {
+    const all = useApp.getState().settings?.genreOctaves ?? {}
+    await useApp.getState().saveSettings({ genreOctaves: { ...all, [genre()]: octaves } })
+  }
+  const shared = { ...(ownFolders ? rest : { ...rest, ...(folders ? { folders } : {}) }), ...(octaves && genre() === DEFAULT_GENRE ? { octaves } : {}) }
   if (Object.keys(shared).length) {
     await useApp.getState().saveSettings({ bass: { ...BASS_DEFAULTS, ...useApp.getState().settings?.bass, presetRoot: serumPresetRoot(), ...shared } })
   }

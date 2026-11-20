@@ -51,6 +51,17 @@ describe('Serum 2 folders per genre (SCOPE.md §5.18)', () => {
     expect(useBass.getState().presets.map((p) => p.folder)).toEqual(['Saw Bass'])
   })
 
+  it('keeps each genre its own patch octaves (a patch can sit in another octave in organic)', async () => {
+    use({ ...saved, bass: { ...saved.bass!, octaves: { '/serum/House Bass/a.SerumPreset': 12 } } })
+    use({ ...saved, genre: 'organic' })
+    expect(bassSettings().octaves).toEqual({})
+    await saveBassSettings({ octaves: { '/serum/House Bass/a.SerumPreset': -12 } })
+    expect(bassSettings().octaves).toEqual({ '/serum/House Bass/a.SerumPreset': -12 })
+    expect(saved.bass?.octaves).toEqual({ '/serum/House Bass/a.SerumPreset': 12 })
+    use({ ...saved, genre: 'house' })
+    expect(bassSettings().octaves).toEqual({ '/serum/House Bass/a.SerumPreset': 12 })
+  })
+
   it('shares the starred patches between the genres', async () => {
     use({ ...saved, genre: 'organic' })
     await saveBassSettings({ favorites: ['/serum/Saw Bass/b.SerumPreset'] })

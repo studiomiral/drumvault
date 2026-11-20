@@ -38,6 +38,8 @@ export interface AppSettings {
    * pad patches, and its plucks (organic's arps and plucks). House's are `bass.folders` and `pads.folders`.
    */
   genreFolders?: Partial<Record<Genre, Partial<Record<SerumPool, string[]>>>>
+  /** The octaves a genre other than house saved for its bass patches (by path); house's are `bass.octaves`. */
+  genreOctaves?: Partial<Record<Genre, Record<string, number>>>
   /** Chord stabs (SCOPE.md §6.9): what Generate's step sequencer saved. */
   stabs?: StabsSettings
 }
