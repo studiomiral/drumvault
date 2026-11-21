@@ -354,7 +354,7 @@ def process_zip(zip_path: Path | str | None, settings: Settings, *, reprocess: b
             db.update_zip(zid, status="processing")
         else:
             if zipio.is_midi_zip(zip_path):
-                raise PipelineError("midi_zip", f"{zip_path.name} holds MIDI files, not stems: add it on the MIDI page")
+                raise PipelineError("midi_zip", f"{zip_path.name} holds MIDI files, not stems: add it on the Bass or Piano tab of Sounds")
             code = naming.source_code(db.next_source_number("S"))
             zid = db.insert_zip(source_code=code, file_name=zip_path.name, file_sha1=sha1,
                                 original_path=str(zip_path.resolve()), status="processing", genre=settings.genre)
@@ -844,11 +844,15 @@ def _track_key(db: LibraryDB, label: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def import_midi(settings: Settings, paths: list[str]) -> dict:
-    """Add basslines to learn from (the MIDI page, SCOPE.md §6.7) from loose .mid files, MIDI zips
-    (a track's parts) and folders of either. Every file added is a bassline (copied to MIDI/Bass/,
-    indexed with bars and key); from a zip with several parts only the ones named for the bass are
-    kept ("Bass", "Sub"), the others are counted as ignored. Files already imported are skipped.
+MIDI_ROLES = {"bass": "Bass", "piano": "Piano"}
+
+
+def import_midi(settings: Settings, paths: list[str], role: str = "bass") -> dict:
+    """Add MIDI parts to learn from (the Bass and Piano tabs, SCOPE.md §6.7) from loose .mid files,
+    MIDI zips (a track's parts) and folders of either. Every file added has the `role` of the tab
+    (copied to MIDI/Bass/ or MIDI/Piano/, indexed with bars and key); from a zip with several parts
+    only the ones named for it are kept (bass: "Bass", "Sub"; piano: "Piano", "Keys", "Rhodes",
+    "Organ", not "Chords"), the others are counted as ignored. Files already imported are skipped.
 
     A zip's part is named after the zip ("83686 Bass") and gets the key of the processed
     stem zip with the same name if there is one, else the key all the zip's parts together
@@ -856,6 +860,9 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
     import tempfile
     import zipfile
     from . import midi as midimod
+    if role not in MIDI_ROLES:
+        raise PipelineError("bad_role", f"Unknown MIDI role: {role}")
+    folder = MIDI_ROLES[role]
     lib = Path(settings.library_path)
     th = settings.thresholds
     # Sources: (label for names, [(display name, bytes, original path)])
@@ -904,7 +911,7 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
                 if not info.notes:
                     failed.append(f"{name}: no notes")
                     continue
-                if label and len(members) > 1 and midimod.named_role(name) != "bass":
+                if label and len(members) > 1 and not (midimod.named_role(name) == "bass" if role == "bass" else midimod.is_piano_part(name)):
                     ignored += 1   # the zip's other parts (leads, strings, …) only help find its key
                     continue
                 sha1 = hashlib.sha1(data).hexdigest()
@@ -914,19 +921,19 @@ def import_midi(settings: Settings, paths: list[str]) -> dict:
                 key_label = midimod.make_label(*named) if named else track_key or info.key_label
                 title = f"{label} {name}" if label else name
                 base = naming.slugify(title, 60) or "midi"
-                rel, k = f"MIDI/Bass/{base}.mid", 1
+                rel, k = f"MIDI/{folder}/{base}.mid", 1
                 while db.midi_path_taken(rel) or (lib / rel).exists():
                     k += 1
-                    rel = f"MIDI/Bass/{base}-{k}.mid"
+                    rel = f"MIDI/{folder}/{base}-{k}.mid"
                 (lib / rel).parent.mkdir(parents=True, exist_ok=True)
                 (lib / rel).write_bytes(data)
                 notes = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
                 mid = db.insert_midi(file_name=f"{title}.mid", rel_path=rel, original_path=origin, file_sha1=sha1,
-                                     role="bass", bars=info.bars, key_label=key_label,
+                                     role=role, bars=info.bars, key_label=key_label,
                                      key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else None,
                                      notes=json.dumps(notes), source=label, source_code=code, created_at=now_iso(),
                                      genre=settings.genre)
-                imported.append({"id": mid, "file_name": f"{title}.mid", "role": "bass", "bars": info.bars,
+                imported.append({"id": mid, "file_name": f"{title}.mid", "role": role, "bars": info.bars,
                                  "key_label": key_label})
     return {"imported": imported, "skipped": skipped, "ignored": ignored, "failed": failed}
 

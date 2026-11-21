@@ -3,7 +3,7 @@ import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo, SerumPreset } from '../types/api'
 
-export type View = 'create' | 'process' | 'library' | 'grid' | 'midi' | 'hits' | 'stabs' | 'strings' | 'basses' | 'ambience' | 'vocalloops' | 'splice' | 'upload' | 'settings'
+export type View = 'create' | 'process' | 'library' | 'grid' | 'hits' | 'stabs' | 'strings' | 'basses' | 'pads' | 'piano' | 'plucks' | 'ambience' | 'vocalloops' | 'splice' | 'upload' | 'settings'
 
 /** The sidebar's pages: Create, Drums (its tabs: Drumvault, Library; Grid opens from a zip), Sounds, Upload, Settings. */
 export type Page = 'create' | 'drums' | 'sounds' | 'upload' | 'settings'
@@ -13,10 +13,18 @@ export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
   drums: [{ view: 'process', label: 'Drumvault' }, { view: 'library', label: 'Library' }],
   sounds: [
     { view: 'stabs', label: 'Chord Stabs' }, { view: 'hits', label: 'Drop Hits' }, { view: 'strings', label: 'Strings' },
-    { view: 'basses', label: 'Bass Samples' }, { view: 'ambience', label: 'Ambience' }, { view: 'vocalloops', label: 'Vocal Loops' }, { view: 'midi', label: 'MIDI' },
+    { view: 'basses', label: 'Bass' }, { view: 'pads', label: 'Pads' }, { view: 'piano', label: 'Piano' },
+    // Plucks: organic's only (PageTabs leaves it out for the other genres).
+    { view: 'plucks', label: 'Plucks' },
+    { view: 'ambience', label: 'Ambience' }, { view: 'vocalloops', label: 'Vocal Loops' },
   ],
   upload: [{ view: 'upload', label: 'Upload' }],
   settings: [{ view: 'settings', label: 'Settings' }],
+}
+
+/** A page's tabs for a genre: Plucks only for organic (its arps and plucks, SCOPE.md §5.18). */
+export function tabsOf(page: Page, genre: string | undefined): { view: View; label: string }[] {
+  return PAGE_TABS[page].filter((t) => t.view !== 'plucks' || genre === 'organic')
 }
 
 /** The page a view is on (Grid with the drums, Splice with the sounds). */
@@ -28,16 +36,17 @@ export function pageOf(v: View): Page {
 
 const TABS_KEY = 'drumvault.pageTabs'
 
+/** Views from before Create and before the MIDI tab was split into Bass and Pads (the old menu's commands, a remembered tab). */
+const viewOf = (v: string): View => (v === 'generate' || v === 'arrange' ? 'create' : v === 'midi' ? 'basses' : v) as View
+
 function savedTabs(): Partial<Record<Page, View>> {
   try {
-    return JSON.parse(localStorage.getItem(TABS_KEY) ?? '{}') as Partial<Record<Page, View>>
+    const saved = JSON.parse(localStorage.getItem(TABS_KEY) ?? '{}') as Partial<Record<Page, string>>
+    return Object.fromEntries(Object.entries(saved).map(([p, v]) => [p, viewOf(v)])) as Partial<Record<Page, View>>
   } catch {
     return {}
   }
 }
-
-/** Views from before Create (the old menu's commands, a remembered tab). */
-const viewOf = (v: string): View => (v === 'generate' || v === 'arrange' ? 'create' : v) as View
 
 export interface Toast {
   id: number
@@ -122,7 +131,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
   openPage: (page) => {
     const tab = get().tabs[page]
-    get().setView(tab && PAGE_TABS[page].some((t) => t.view === tab) ? tab : PAGE_TABS[page][0].view)
+    const tabs = tabsOf(page, get().settings?.genre)
+    get().setView(tab && tabs.some((t) => t.view === tab) ? tab : tabs[0].view)
   },
   openGrid: (gridZipId) => set({ gridZipId, view: 'grid' }),
   setModal: (modal) => set({ modal }),

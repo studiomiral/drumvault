@@ -303,10 +303,10 @@ function registerIpc(): void {
     if (!sidecar) throw new Error('Engine is not running')
     await sidecar.request('stretch_samples', { rel_paths: relPaths, bpm, settings: engineSettings() }, 600_000)
   })
-  ipcMain.handle('midi:import', async (_e, paths: string[]) => {
+  ipcMain.handle('midi:import', async (_e, paths: string[], role: 'bass' | 'piano' = 'bass') => {
     if (!sidecar) throw new Error('Engine is not running')
     // The engine searches folders and opens MIDI zips itself.
-    const r = await sidecar.request('import_midi', { paths, settings: engineSettings() }, 600_000)
+    const r = await sidecar.request('import_midi', { paths, role, settings: engineSettings() }, 600_000)
     send('library-changed')
     return r
   })
@@ -328,7 +328,7 @@ function registerIpc(): void {
     send('library-changed')
   })
   ipcMain.handle('lib:midi', () => reader.listMidi())
-  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' | 'bass' | 'ambience' = 'disco') => {
+  ipcMain.handle('hits:import', async (_e, paths: string[], kind: 'disco' | 'stab' | 'strings' | 'bass' | 'piano' | 'ambience' = 'disco') => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request('import_hits', { paths, kind, settings: engineSettings() }, 600_000)
     send('library-changed')
@@ -737,10 +737,11 @@ function buildMenu(): void {
         { label: 'Chord Stabs', accelerator: 'CmdOrCtrl+4', click: () => send('menu', 'view:stabs') },
         { label: 'Drop Hits', click: () => send('menu', 'view:hits') },
         { label: 'Strings', click: () => send('menu', 'view:strings') },
-        { label: 'Bass Samples', click: () => send('menu', 'view:basses') },
+        { label: 'Bass', click: () => send('menu', 'view:basses') },
+        { label: 'Pads', click: () => send('menu', 'view:pads') },
+        { label: 'Piano', click: () => send('menu', 'view:piano') },
         { label: 'Ambience', click: () => send('menu', 'view:ambience') },
         { label: 'Vocal Loops', click: () => send('menu', 'view:vocalloops') },
-        { label: 'MIDI', click: () => send('menu', 'view:midi') },
         { label: 'Splice', click: () => send('menu', 'view:splice') },
         { type: 'separator' },
         { label: 'Upload', click: () => send('menu', 'view:upload') },

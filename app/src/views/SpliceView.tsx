@@ -10,10 +10,12 @@ import { loadVocals } from '../store/vocals'
 import type { SpliceCandidate, SpliceScan } from '../types/api'
 
 type Kind = SpliceCandidate['kind']
-const PAGE: Record<Kind, string> = { stab: 'Chord Stabs', disco: 'Drop Hits', strings: 'Strings', bass: 'Bass Samples', ambience: 'Ambience', vocal: 'Vocal Loops' }
+/** Where a sound can go: a suggested page, or Piano (never suggested: picked by hand). */
+type Target = Kind | 'piano'
+const PAGE: Record<Target, string> = { stab: 'Chord Stabs', disco: 'Drop Hits', strings: 'Strings', bass: 'Bass', piano: 'Piano', ambience: 'Ambience', vocal: 'Vocal Loops' }
 const KINDS: Kind[] = ['stab', 'disco', 'strings', 'bass', 'ambience', 'vocal']
 /** The other pages a sound can go on instead (a vocal is a take, not a hit: only its own page). */
-const OTHERS = (k: Kind) => (k === 'vocal' ? [] : KINDS.filter((x) => x !== k && x !== 'vocal'))
+const OTHERS = (k: Kind): Target[] => (k === 'vocal' ? [] : [...KINDS.filter((x) => x !== k && x !== 'vocal'), 'piano'])
 type Filter = 'all' | Kind
 
 /** One voice for listening to a file in the Splice folder (it isn't in the library, so not the library's audition). */
@@ -94,7 +96,7 @@ export function SpliceView() {
     if (folder) void rescan()
   }
 
-  const add = async (c: SpliceCandidate, kind: Kind) => {
+  const add = async (c: SpliceCandidate, kind: Target) => {
     if (kind === 'vocal') {
       setAdding(c.path)
       const v = await attempt(() => api.importVocalLoops([c.path]))
@@ -199,7 +201,7 @@ export function SpliceView() {
                       </Button>
                       {OTHERS(c.kind).length > 0 && <select className={cx(inputClass, 'w-[104px] h-8 text-[12px]')} value="" disabled={!ready || adding != null}
                               title="Add it to another page instead"
-                              onChange={(e) => e.target.value && void add(c, e.target.value as Kind)}>
+                              onChange={(e) => e.target.value && void add(c, e.target.value as Target)}>
                         <option value="">Other page…</option>
                         {OTHERS(c.kind).map((k) => <option key={k} value={k}>{PAGE[k]}</option>)}
                       </select>}

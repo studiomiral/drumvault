@@ -220,7 +220,7 @@ function DropZone({ onClick }: { onClick: () => void }) {
       </span>
       <span>
         <span className="block text-text font-medium">Drop stem zips, samples or folders</span>
-        <span className="block mt-1 text-[12px]">or click to browse. Zips are tracks; loose WAV/AIFF/FLAC samples join a pack per Splice pack or folder. MIDI goes on the MIDI page.</span>
+        <span className="block mt-1 text-[12px]">or click to browse. Zips are tracks; loose WAV/AIFF/FLAC samples join a pack per Splice pack or folder. MIDI goes on the Bass or Piano tab of Sounds.</span>
       </span>
     </button>
   )

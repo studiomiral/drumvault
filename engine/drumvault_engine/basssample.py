@@ -28,16 +28,17 @@ def is_sample(preset: str) -> bool:
     return preset.startswith(f"{FOLDER}/")
 
 
-def sample_pitch_class(mono: np.ndarray, sr: int, settings: Settings) -> int | None:
-    """The note a bass one-shot plays (pitch class 0–11), from its sound: the median of its
-    fundamental over where it is voiced. None when no pitch is found."""
+def sample_pitch_class(mono: np.ndarray, sr: int, settings: Settings, piano: bool = False) -> int | None:
+    """The note a bass one-shot (or, `piano`, a Piano tab one-shot) plays (pitch class 0–11), from
+    its sound: the median of its fundamental over where it is voiced. None when no pitch is found."""
     import librosa
 
     th = settings.thresholds
     y = np.asarray(mono, dtype=np.float32)[: int(th.bass_sample_pitch_window_s * sr)]
     if len(y) < 2048 or not np.any(y):
         return None
-    f0, voiced, _ = librosa.pyin(y, fmin=th.bass_sample_min_hz, fmax=th.bass_sample_max_hz, sr=sr, frame_length=4096)
+    lo, hi = (th.piano_sample_min_hz, th.piano_sample_max_hz) if piano else (th.bass_sample_min_hz, th.bass_sample_max_hz)
+    f0, voiced, _ = librosa.pyin(y, fmin=lo, fmax=min(hi, sr / 2 - 1), sr=sr, frame_length=4096)
     f = f0[voiced & np.isfinite(f0)] if voiced is not None else np.array([])
     if not f.size:
         return None

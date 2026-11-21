@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { serumPresetRoot, useApp } from '../store/app'
-import { bassSettings, loadBass, padsSettings, plucksSettings, saveBassSettings, savePadsSettings, savePlucksSettings, useBass } from '../store/bass'
+import { bassSettings, loadBass, padsSettings, pianoSettings, plucksSettings, saveBassSettings, savePadsSettings, savePianoSettings, savePlucksSettings, useBass } from '../store/bass'
 import { IconChevron } from './icons'
 import { cx } from './ui'
 
@@ -12,6 +12,8 @@ export const SERUM_MODULES = [
   { id: 'pads', label: 'Pads', what: 'pad and reese', settings: padsSettings, save: savePadsSettings, load: loadBass },
   // Organic's arps and plucks (SCOPE.md §5.18).
   { id: 'plucks', label: 'Plucks', what: 'arp and pluck', settings: plucksSettings, save: savePlucksSettings, load: loadBass },
+  // The Piano tab's patches (not played by Generate yet).
+  { id: 'piano', label: 'Piano', what: 'piano', settings: pianoSettings, save: savePianoSettings, load: loadBass },
 ] as const
 
 export type SerumModule = (typeof SERUM_MODULES)[number]['id']
@@ -21,13 +23,15 @@ export type SerumModule = (typeof SERUM_MODULES)[number]['id']
  * folders under the presets folder (Settings) it draws its patches from, saved at once. A folder
  * counts with all its sub-folders. Folded once it has patches.
  */
-export function SerumFolders({ module }: { module: SerumModule }) {
+export function SerumFolders({ module, defaultOpen = false }: { module: SerumModule; defaultOpen?: boolean }) {
   const m = SERUM_MODULES.find((x) => x.id === module)!
   const root = serumPresetRoot()
   const setView = useApp((s) => s.setView)
-  const pool = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length), plucks: useBass((s) => s.pluckPresets.length) }[module]
-  const skipped = { bass: useBass((s) => s.skipped), pads: useBass((s) => s.padSkipped), plucks: useBass((s) => s.pluckSkipped) }[module]
-  const [open, setOpen] = useState(false)
+  const pool = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length), plucks: useBass((s) => s.pluckPresets.length),
+    piano: useBass((s) => s.pianoPresets.length) }[module]
+  const skipped = { bass: useBass((s) => s.skipped), pads: useBass((s) => s.padSkipped), plucks: useBass((s) => s.pluckSkipped),
+    piano: useBass((s) => s.pianoSkipped) }[module]
+  const [open, setOpen] = useState(defaultOpen)
   const [folders, setFolders] = useState<{ folder: string; count: number }[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [chosen, setChosen] = useState(() => new Set(m.settings().folders))
@@ -76,7 +80,8 @@ export function SerumFolders({ module }: { module: SerumModule }) {
         <div className="px-4 py-3">
           <p className="text-[12px] text-muted mb-2">
             Folders under <span className="text-text">{root}</span> that {m.label} draws its patches from (a folder counts with all its
-            sub-folders). Star patches in Create to hear them more often.{' '}
+            sub-folders).{' '}
+            {module === 'piano' ? 'Generate doesn\'t play piano yet: these wait for it.' : 'Star patches in Create to hear them more often.'}{' '}
             <button className="text-accent hover:underline" onClick={() => setView('settings')}>Presets folder…</button>
           </p>
           {error ? <p className="text-bad text-[12px]">{error}</p> : !folders ? <p className="text-faint text-[12px]">Reading presets…</p>

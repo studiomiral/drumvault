@@ -140,6 +140,11 @@ class Thresholds:
     bass_sample_pitch_window_s: float = 1.0
     bass_sample_min_hz: float = 27.0
     bass_sample_max_hz: float = 260.0
+    # A Piano tab one-shot (one note per file, like a bass sample): its note is read between these
+    # frequencies (A0 to about C8), and it keeps up to piano_sample_max_len_s of its ring.
+    piano_sample_min_hz: float = 27.5
+    piano_sample_max_hz: float = 4200.0
+    piano_sample_max_len_s: float = 12.0
     # Drop hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0

@@ -1,5 +1,5 @@
 import { GENRE_LABELS } from '../lib/format'
-import { PAGE_TABS, pageOf, useApp, type View } from '../store/app'
+import { pageOf, tabsOf, useApp, type View } from '../store/app'
 import { DEFAULT_GENRE } from '../types/engine'
 import { cx, PageTitle } from './ui'
 
@@ -7,16 +7,17 @@ const TITLES = { create: 'Create', drums: 'Drums', sounds: 'Sounds', upload: 'Up
 
 /**
  * A page's title and its tabs (SCOPE.md §6.1): Drums (Drumvault, Library), Sounds (Chord Stabs,
- * Drop Hits, Strings, Bass Samples, Ambience, MIDI). A view that isn't a tab (Grid, Splice) shows
- * its own name, with the way back to the page's tabs.
+ * Drop Hits, Strings, Bass, Pads, Piano, Plucks for organic, Ambience, Vocal Loops). A view that
+ * isn't a tab (Grid, Splice) shows its own name, with the way back to the page's tabs.
  */
 export function PageTabs({ view, title }: { view: View; title?: string }) {
   const setView = useApp((s) => s.setView)
   const openPage = useApp((s) => s.openPage)
   const page = pageOf(view)
-  const tabs = PAGE_TABS[page]
-  const isTab = tabs.some((t) => t.view === view)
   const genre = useApp((s) => s.settings?.genre ?? DEFAULT_GENRE)
+  // (The tab open stays in the row, should the genre change under it.)
+  const tabs = tabsOf(page, view === 'plucks' ? 'organic' : genre)
+  const isTab = tabs.some((t) => t.view === view)
   // The library's pages show the active genre's sources, and what's imported on them is of it.
   const ofGenre = page === 'drums' || page === 'sounds'
   return (

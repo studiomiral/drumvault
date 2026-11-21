@@ -1253,7 +1253,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (s) picks[role] = s
   }
 
-  // ---- bass (SCOPE.md §6.7): a new riff learned from the MIDI page, through a Serum patch, in the
+  // ---- bass (SCOPE.md §6.7): a new riff learned from the Bass tab's MIDI, through a Serum patch, in the
   // track key ----
   const bo = opts.bass
   const model = bo?.midis.length && bo.presets.length ? bassModel(bo.midis) : null

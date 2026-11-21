@@ -24,7 +24,8 @@ from .config import Settings
 from .db import LibraryDB, now_iso
 from .samples import name_key
 
-FOLDERS = {"disco": "Drop Hits", "stab": "Chord Stabs", "strings": "Strings", "bass": "Bass Samples", "ambience": "Ambience"}
+FOLDERS = {"disco": "Drop Hits", "stab": "Chord Stabs", "strings": "Strings", "bass": "Bass Samples", "piano": "Piano Samples",
+           "ambience": "Ambience"}
 KINDS = tuple(FOLDERS)
 # A bare note name between separators ("Brass_A_Hit"): the root, its scale from the sound.
 _KEY_BARE = re.compile(r"(?:^|[\s_-])([A-G][#b]?)(?=[\s_.-]|$)")
@@ -90,17 +91,17 @@ def trim_hit(data: np.ndarray, sr: int, settings: Settings, max_len_s: float | N
 
 def hit_key(name: str, mono: np.ndarray, sr: int, settings: Settings, kind: str = "disco") -> tuple[str | None, str | None]:
     """(key label, "name" | "detected"): the name's key, a bare note in it with the sound's scale,
-    else the sound's key. A bass sample (one note) has no scale: its note from the name ("…_A"),
-    else from its pitch, as that note's major key (only its root is used)."""
+    else the sound's key. A bass or piano sample (one note) has no scale: its note from the name
+    ("…_A"), else from its pitch, as that note's major key (only its root is used)."""
     named = name_key(name)
     if named:
         return named[0], "name"
     m = _KEY_BARE.search(Path(name).stem)
-    if kind == "bass":
+    if kind in ("bass", "piano"):
         if m:
             return keymod.make_label(keymod.normalize_pitch(m.group(1)), "major"), "name"
         from . import basssample
-        pc = basssample.sample_pitch_class(mono, sr, settings)
+        pc = basssample.sample_pitch_class(mono, sr, settings, piano=kind == "piano")
         return (keymod.make_label(pc, "major"), "detected") if pc is not None else (None, None)
     detected = keymod.detect_key_audio(mono, sr, settings.thresholds)
     if m:
@@ -123,8 +124,9 @@ def texture_key(name: str, mono: np.ndarray, sr: int, settings: Settings) -> tup
 
 
 def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> dict:
-    """Add drop hits (or chord stabs, strings, bass samples) from files, folders and zips. Files already
-    imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s."""
+    """Add drop hits (or chord stabs, strings, bass or piano samples) from files, folders and zips. Files
+    already imported (on any of the pages) are skipped. A string sample keeps up to strings_max_len_s,
+    a piano one-shot piano_sample_max_len_s."""
     if kind not in FOLDERS:
         raise HitError("bad_kind", f"Unknown kind of hit: {kind}")
     folder = FOLDERS[kind]
@@ -159,7 +161,9 @@ def import_hits(settings: Settings, paths: list[str], kind: str = "disco") -> di
                 hit = ambience.whole_bars(audio.data, audio.sr, bpm, settings.thresholds.strings_max_len_s)
                 hit = hit if np.any(hit) else None
             else:
-                hit = trim_hit(audio.data, audio.sr, settings, settings.thresholds.strings_max_len_s if kind in ("strings", "ambience") else None)
+                th = settings.thresholds
+                hit = trim_hit(audio.data, audio.sr, settings, th.strings_max_len_s if kind in ("strings", "ambience")
+                               else th.piano_sample_max_len_s if kind == "piano" else None)
             if hit is None:
                 failed.append(f"{name}: silent")
                 continue

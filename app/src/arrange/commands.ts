@@ -298,7 +298,7 @@ export async function newClipBassline(): Promise<void> {
   const { basslines } = useBass.getState()
   const model = bassModel(basslines)
   if (!model) {
-    useApp.getState().toast('info', 'No bass MIDI to learn from yet: add your MIDI zips on the MIDI page.')
+    useApp.getState().toast('info', 'No bass MIDI to learn from yet: add your MIDI zips on the Bass tab.')
     return
   }
   const first = selectedClips().find((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === 'bass')
@@ -328,7 +328,7 @@ export async function stepBass(what: 'patch' | 'bassline', dir: 1 | -1 | 'random
   }
   if (what === 'patch') {
     if (!presets.length) {
-      useApp.getState().toast('info', 'No Serum 2 patches or bass samples: tick folders under Settings → Serum 2, or add one-shots on the Bass Samples page.')
+      useApp.getState().toast('info', 'No Serum 2 patches or bass samples: tick folders on the Bass tab, or add one-shots there.')
       return
     }
     await changeBass('Change bass patch', (b) => {

@@ -146,7 +146,7 @@ export interface HotFillResult {
 }
 
 /** The Serum 2 patch pools a genre chooses folders for. */
-export type SerumPool = 'bass' | 'pads' | 'plucks'
+export type SerumPool = 'bass' | 'pads' | 'plucks' | 'piano'
 
 export interface BassSettings {
   /** The Serum 2 presets folder: the shared `serumPresetRoot` (stored here by older versions). */
@@ -176,8 +176,9 @@ export interface MidiItem {
   file_name: string
   name: string
   rel_path: string
-  /** 'keys': a keys or chord part imported before keys parts were removed (never used). */
-  role: 'bass' | 'keys' | 'other'
+  /** The Sounds tab it was added on: a bassline (Bass) or a piano part (Piano). 'keys': a keys or chord
+   * part imported before keys parts were removed (never used). */
+  role: 'bass' | 'piano' | 'keys' | 'other'
   bars: number
   key_label: string | null
   key_camelot: string | null
@@ -199,8 +200,8 @@ export interface ElevenStatus {
 /** A drop hit (SCOPE.md §6.8): a stab or brass hit from the Drop Hits page, in <Library>/Drop Hits/. */
 export interface HitItem {
   id: number
-  /** A drop hit (the Drop Hits page), a chord stab (Chord Stabs), strings (Strings) or a bass one-shot (Bass Samples); older rows are drop hits, 'drone' rows unused. */
-  kind: 'disco' | 'stab' | 'drone' | 'strings' | 'bass' | 'ambience'
+  /** A drop hit (the Drop Hits tab), a chord stab (Chord Stabs), strings (Strings), a bass or a piano one-shot (the Bass and Piano tabs); older rows are drop hits, 'drone' rows unused. */
+  kind: 'disco' | 'stab' | 'drone' | 'strings' | 'bass' | 'piano' | 'ambience'
   file_name: string
   name: string
   rel_path: string
@@ -251,7 +252,7 @@ export interface SpliceCandidate {
   kind: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | 'vocal'
   why: string
   /** The page it is on already. */
-  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'ambience' | 'vocal' | null
+  imported: 'stab' | 'disco' | 'strings' | 'bass' | 'piano' | 'ambience' | 'vocal' | null
 }
 
 export interface SpliceScan {
@@ -280,7 +281,7 @@ export interface SerumPreset {
   /** Mono with legato and portamento: an overlapping next note glides (a bassline may slide on it). */
   glide?: boolean
   /**
-   * Not a Serum preset but a Bass Samples page one-shot (SCOPE.md §6.7a): `path` is its
+   * Not a Serum preset but a bass one-shot from the Bass tab (SCOPE.md §6.7a): `path` is its
    * library-relative file, and the engine plays the bassline with it like a sampler.
    */
   sample?: boolean
@@ -556,10 +557,10 @@ export interface DrumvaultAPI {
   /** Stretch samples to a project tempo (cached per tempo); resolves when the files exist. */
   stretchSamples(relPaths: string[], bpm: number): Promise<void>
   /**
-   * Add basslines to learn from (the MIDI page) from .mid files, MIDI zips and folders: every
-   * file is a bassline (from a zip of several parts, the ones named for the bass).
+   * Add basslines (the Bass tab) or piano parts (the Piano tab) to learn from, from .mid files, MIDI
+   * zips and folders: every file has that role (from a zip of several parts, the ones named for it).
    */
-  importMidi(paths: string[]): Promise<MidiImportResult>
+  importMidi(paths: string[], role?: 'bass' | 'piano'): Promise<MidiImportResult>
   /** File dialog for MIDI zips, .mid files and folders. */
   chooseMidi(): Promise<string[]>
   /** Correct a bassline's key (null: no key, so it isn't transposed). */

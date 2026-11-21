@@ -20,10 +20,10 @@ export function PadsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const kind = render?.midiName === 'Reese' ? 'a reese' : 'a pad'
   const what = render ? `${kind} ${render.midiName === 'Reese' ? `on ${g.key?.replace(/m$/, '') ?? 'the root'}` : `holding ${g.key ?? 'the key'}`}` : ''
   const reroll = () => {
-    if (!newPad()) toast('info', g.key ? 'No other break layer came out: tick more folders for Pads on the MIDI page.' : 'This track has no key: a break layer needs one.')
+    if (!newPad()) toast('info', g.key ? 'No other break layer came out: tick more folders on the Pads tab.' : 'This track has no key: a break layer needs one.')
   }
   const summary = !opts.enabled ? 'Off: G generates without a break layer'
-    : !patches ? 'No pad or reese patches yet: tick their folders on the MIDI page'
+    : !patches ? 'No pad or reese patches yet: tick their folders on the Pads tab'
       : render ? <><span className="text-text">{render.presetName}</span> · {what} in the breakdowns</>
         : 'On: none in this track (most tracks with breakdowns get one)'
 
@@ -32,8 +32,8 @@ export function PadsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
             enabledTitle={opts.enabled ? 'On: new generations may get a pad or a reese in their breakdowns' : 'Off: new generations have no breakdown layer'}
             summary={summary}>
       {!patches ? (
-        <p className="text-muted text-[12.5px]">No patches yet: tick the Serum 2 folders with your pads and reeses under Pads on the MIDI page.{' '}
-          <Button variant="ghost" onClick={() => setView('midi')}>Open MIDI</Button>
+        <p className="text-muted text-[12.5px]">No patches yet: tick the Serum 2 folders with your pads and reeses on the Pads tab.{' '}
+          <Button variant="ghost" onClick={() => setView('pads')}>Open Pads</Button>
         </p>
       ) : (
         <div className="space-y-2.5 text-[12.5px]">

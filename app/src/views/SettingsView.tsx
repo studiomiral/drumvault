@@ -218,11 +218,15 @@ export function SettingsView() {
  * bass) the folders under it that make up its patch pool (saved at once, apart from the engine
  * settings).
  */
+/** The Sounds tab with a Serum module's folders. */
+const TAB_OF = { bass: 'basses', pads: 'pads', plucks: 'plucks', piano: 'piano' } as const
+
 function SerumSettingsSection() {
   const { libraryVersion, toast, setView } = useApp()
   const rootNow = serumPresetRoot()
-  const pools = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length), plucks: useBass((s) => s.pluckPresets.length) }
-  const parts = { bass: useBass((s) => s.basslines.length), pads: null, plucks: null }
+  const pools = { bass: useBass((s) => s.presets.length), pads: useBass((s) => s.padPresets.length), plucks: useBass((s) => s.pluckPresets.length),
+    piano: useBass((s) => s.pianoPresets.length) }
+  const parts = { bass: useBass((s) => s.basslines.length), pads: null, plucks: null, piano: null }
   const organic = useApp((s) => s.settings?.genre === 'organic')
   useEffect(() => {
     void loadBass()
@@ -254,11 +258,11 @@ function SerumSettingsSection() {
         </span>
       </Field>
       {SERUM_MODULES.filter((m) => m.id !== 'plucks' || organic).map((m) => (
-        <Field key={m.id} label={m.label} hint="MIDI and patch folders on the MIDI page">
+        <Field key={m.id} label={m.label} hint={`${m.id === 'bass' || m.id === 'piano' ? 'Samples, MIDI and patch folders' : 'Patch folders'} on the ${m.label} tab of Sounds`}>
           <span className="text-[12.5px] flex items-center gap-2">
             {parts[m.id] != null && `${parts[m.id]} part${parts[m.id] === 1 ? '' : 's'} to learn from · `}
             {pools[m.id]} patches in the pool
-            <Button variant="ghost" onClick={() => setView('midi')}>Pick folders</Button>
+            <Button variant="ghost" onClick={() => setView(TAB_OF[m.id])}>Pick folders</Button>
           </span>
         </Field>
       ))}

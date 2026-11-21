@@ -13,7 +13,7 @@ import { copySelection, cutSelection, duplicateSelection, pasteAtPlayhead } from
 import { useProject } from './store/project'
 import { keepTrack } from './store/generate'
 import { GridView } from './views/GridView'
-import { MidiView } from './views/MidiView'
+import { InstrumentView, PatchesView } from './views/InstrumentView'
 import { HitsView } from './views/HitsView'
 import { VocalLoopsView } from './views/VocalLoopsView'
 import { SpliceView } from './views/SpliceView'
@@ -109,11 +109,13 @@ export function App() {
         {view === 'process' && <ProcessView />}
         {view === 'library' && <LibraryView />}
         {view === 'grid' && <GridView />}
-        {view === 'midi' && <MidiView />}
         {view === 'hits' && <HitsView kind="disco" />}
         {view === 'stabs' && <HitsView key="stabs" kind="stab" />}
         {view === 'strings' && <HitsView key="strings" kind="strings" />}
-        {view === 'basses' && <HitsView key="basses" kind="bass" />}
+        {view === 'basses' && <InstrumentView key="basses" role="bass" />}
+        {view === 'pads' && <PatchesView key="pads" module="pads" />}
+        {view === 'piano' && <InstrumentView key="piano" role="piano" />}
+        {view === 'plucks' && <PatchesView key="plucks" module="plucks" />}
         {view === 'ambience' && <HitsView key="ambience" kind="ambience" />}
         {view === 'vocalloops' && <VocalLoopsView />}
         {view === 'splice' && <SpliceView />}

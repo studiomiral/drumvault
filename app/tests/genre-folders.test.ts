@@ -16,8 +16,8 @@ vi.mock('../src/api', () => ({
   },
 }))
 
-const { useApp } = await import('../src/store/app')
-const { bassSettings, loadBass, padsSettings, plucksSettings, saveBassSettings, savePadsSettings, savePlucksSettings, useBass } = await import('../src/store/bass')
+const { tabsOf, useApp } = await import('../src/store/app')
+const { bassSettings, loadBass, padsSettings, pianoSettings, plucksSettings, saveBassSettings, savePadsSettings, savePianoSettings, savePlucksSettings, useBass } = await import('../src/store/bass')
 
 const use = (s: AppSettings) => {
   saved = s
@@ -60,6 +60,26 @@ describe('Serum 2 folders per genre (SCOPE.md §5.18)', () => {
     expect(saved.bass?.octaves).toEqual({ '/serum/House Bass/a.SerumPreset': 12 })
     use({ ...saved, genre: 'house' })
     expect(bassSettings().octaves).toEqual({ '/serum/House Bass/a.SerumPreset': 12 })
+  })
+
+  it('gives the Piano tab its own folders in every genre, house included', async () => {
+    expect(pianoSettings().folders).toEqual([])
+    await savePianoSettings({ folders: ['House Keys'] })
+    expect(pianoSettings().folders).toEqual(['House Keys'])
+    expect(saved.genreFolders?.house?.piano).toEqual(['House Keys'])
+    use({ ...saved, genre: 'organic' })
+    expect(pianoSettings().folders).toEqual([])
+    await savePianoSettings({ folders: ['Felt Piano'] })
+    await loadBass()
+    expect(useBass.getState().pianoPresets.map((p) => p.folder)).toEqual(['Felt Piano'])
+    use({ ...saved, genre: 'house' })
+    expect(pianoSettings().folders).toEqual(['House Keys'])
+  })
+
+  it('shows the Sounds tabs without MIDI, and Plucks only for organic', () => {
+    const labels = (g: string) => tabsOf('sounds', g).map((t) => t.label)
+    expect(labels('house')).toEqual(['Chord Stabs', 'Drop Hits', 'Strings', 'Bass', 'Pads', 'Piano', 'Ambience', 'Vocal Loops'])
+    expect(labels('organic')).toEqual(['Chord Stabs', 'Drop Hits', 'Strings', 'Bass', 'Pads', 'Piano', 'Plucks', 'Ambience', 'Vocal Loops'])
   })
 
   it('shares the starred patches between the genres', async () => {

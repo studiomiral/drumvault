@@ -257,6 +257,29 @@ def test_import_midi_zip_names_parts_and_shares_the_key(tmp_path):
     assert (again["skipped"], again["imported"]) == (1, [])
 
 
+def test_import_midi_for_the_piano_tab_keeps_piano_and_keys_parts(tmp_path):
+    lib = tmp_path / "lib"
+    s = Settings(library_path=str(lib))
+    bass = [(b * 4 + i, 0.5, p) for b in range(4) for i, p in enumerate([41, 44, 48, 44])]
+    z = make_midi_zip(tmp_path, "555_midi.zip", {"Bass": bass, "Rhodes": chords_fm(), "Chords": chords_fm(1), "E-Piano": chords_fm(2)})
+    r = pipeline.import_midi(s, [str(z)], role="piano")
+    # Piano and keys names, not "Chords" (often a pad or a synth in house zips), not the bass.
+    assert sorted((m["file_name"], m["role"]) for m in r["imported"]) == [("555 E-Piano.mid", "piano"), ("555 Rhodes.mid", "piano")]
+    assert r["ignored"] == 2
+    rows = sqlite3.connect(lib / ".drumvault" / "library.sqlite").execute("SELECT role, rel_path FROM midi_files").fetchall()
+    assert all(role == "piano" and rel.startswith("MIDI/Piano/") for role, rel in rows)
+    # A loose file dropped on the Piano tab is piano, whatever its name.
+    write_midi(tmp_path / "loose" / "Idea 3.mid", [(0, 1, 60), (1, 1, 63)])
+    [m] = pipeline.import_midi(s, [str(tmp_path / "loose")], role="piano")["imported"]
+    assert m["role"] == "piano"
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.import_midi(s, [str(tmp_path / "loose")], role="lead")
+    assert midimod.is_piano_part("Organ") and midimod.is_piano_part("Grand Piano") and not midimod.is_piano_part("Chords")
+    assert not midimod.is_piano_part("Piano Bass")
+    from drumvault_engine.schemas import ImportMidiParams
+    assert ImportMidiParams(paths=["x"]).role == "bass" and ImportMidiParams(paths=["x"], role="piano").role == "piano"
+
+
 def test_midi_zip_takes_the_key_of_its_stem_zip(tmp_path):
     lib = tmp_path / "lib"
     s = Settings(library_path=str(lib))

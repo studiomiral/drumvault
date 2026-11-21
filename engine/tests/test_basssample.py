@@ -25,12 +25,12 @@ def oneshot(pitch: int, seconds: float = 1.5, sr: int = SR) -> np.ndarray:
     return np.stack([x, x], axis=1).astype(np.float32) * 0.6
 
 
-def imported(tmp_path: Path, name: str, data: np.ndarray) -> tuple[Settings, str, sqlite3.Row]:
+def imported(tmp_path: Path, name: str, data: np.ndarray, kind: str = "bass") -> tuple[Settings, str, sqlite3.Row]:
     s = Settings(library_path=str(tmp_path / "lib"))
     src = tmp_path / "src" / name
     src.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(src), data, SR, subtype="PCM_24")
-    [h] = hits.import_hits(s, [str(src)], kind="bass")["imported"]
+    [h] = hits.import_hits(s, [str(src)], kind=kind)["imported"]
     conn = sqlite3.connect(Path(s.library_path) / ".drumvault" / "library.sqlite")
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM hits WHERE id = ?", (h["id"],)).fetchone()
@@ -52,6 +52,19 @@ def test_bass_samples_import_into_their_own_folder_with_their_note(tmp_path):
     assert (row2["key_label"], row2["key_source"]) == ("C", "detected")
     assert ImportHitsParams(paths=["x"], kind="bass").kind == "bass"
     assert basssample.is_sample("Bass Samples/x.wav") and not basssample.is_sample("/Library/Presets/Bass/x.SerumPreset")
+
+
+def test_piano_samples_import_into_their_own_folder_with_their_note(tmp_path):
+    _, rel, row = imported(tmp_path, "Grand Piano C#.wav", oneshot(61), kind="piano")
+    assert rel.startswith("Piano Samples/") and row["kind"] == "piano"
+    assert (row["key_label"], row["key_source"]) == ("C#", "name")
+    # No note in the name: from its pitch, read above the bass range too (E5).
+    _, _, row2 = imported(tmp_path / "b", "Felt Piano Oneshot.wav", oneshot(76), kind="piano")
+    assert (row2["key_label"], row2["key_source"]) == ("E", "detected")
+    # A piano note rings longer than a hit: kept up to piano_sample_max_len_s.
+    _, _, row3 = imported(tmp_path / "c", "Long Piano G.wav", oneshot(67, seconds=9.0) * 1.0, kind="piano")
+    assert row3["duration_s"] > Settings().thresholds.hit_max_len_s
+    assert ImportHitsParams(paths=["x"], kind="piano").kind == "piano"
 
 
 def test_the_sample_plays_its_own_note_nearest_the_middle_of_the_line():

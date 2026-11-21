@@ -1,8 +1,8 @@
-"""MIDI import (SCOPE.md §6.7): bass and keys parts added from folders like zips.
+"""MIDI import (SCOPE.md §6.7): bass and piano parts added from folders like zips.
 
 Each file is read with mido into notes in beats from the bar of its first note, its length
 rounded up to whole bars and its key taken from the file name (or found from the notes). Its
-role (bass or keys) is the MIDI page section it was added to.
+role (bass or piano) is the Sounds tab it was added on (Bass, Piano).
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ from .key import PITCH_NAMES, PROFILES, camelot, make_label, normalize_pitch, pa
 MIDI_EXTENSIONS = (".mid", ".midi")
 _BASS_WORDS = re.compile(r"bass|(?<![a-z])(sub|808|reese|low)(?![a-z])", re.I)   # not "Slow Chords"
 _KEYS_WORDS = re.compile(r"(?<![a-z])(keys?|keyboards?|piano|e[ ._-]?piano|pian|organ|rhodes|wurli|clav|chords?)(?![a-z])", re.I)
+# A piano part in a MIDI zip (the Piano tab): piano and keys names, not "Chords" (in house zips
+# those are as often pads or synths).
+_PIANO_WORDS = re.compile(r"(?<![a-z])(keys?|keyboards?|piano|pno|e[ ._-]?piano|pian|organ|rhodes|wurli|clav)(?![a-z])", re.I)
 _OTHER_WORDS = re.compile(r"(chord|pad|lead|melod|arp|keys|pian|stab|vocal|top|hook|pluck|organ|guitar|string|solo|"
                           r"synth|brass|horn|bell|flute|choir|vox)", re.I)
 # "Fm", "F#min", "Bb minor", "A_maj": a key with its scale in the name.
@@ -147,6 +150,11 @@ def named_role(name: str) -> str | None:
     return "keys" if _KEYS_WORDS.search(Path(name).stem) else None
 
 
+def is_piano_part(name: str) -> bool:
+    """A zip's part named for the piano or keys ("Piano", "Rhodes", "E-Piano"), not a bass."""
+    return not _BASS_WORDS.search(name) and bool(_PIANO_WORDS.search(Path(name).stem))
+
+
 def guess_role(name: str, notes: list[Note], th: Thresholds) -> str:
     if _BASS_WORDS.search(name):
         return "bass"
@@ -183,5 +191,5 @@ def transpose_to(key_from: str | None, key_to: str | None) -> int:
     return d - 12 if d > 5 else d
 
 
-__all__ = ["MIDI_EXTENSIONS", "MidiInfo", "Note", "analyze", "camelot", "detect_key", "from_first_bar", "guess_role",
+__all__ = ["MIDI_EXTENSIONS", "MidiInfo", "Note", "analyze", "camelot", "detect_key", "from_first_bar", "guess_role", "is_piano_part",
            "has_key_in_name", "make_label", "parse_label", "read_notes", "transpose_to", "PITCH_NAMES"]

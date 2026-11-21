@@ -35,7 +35,7 @@ const SLIDE_CHANCE = 0.5
 const SLIDE_OVERLAP = 0.125
 /** An 8-beat loop's answer starts no earlier than this 16th of its second bar (its last two beats). */
 const ANSWER_FROM_MIN = 8
-/** A library line favourited on the MIDI page counts this many times. */
+/** A library line favourited on the Bass tab counts this many times. */
 const FAVORITE_WEIGHT = 3
 
 type Weights = Map<number, number>
@@ -78,7 +78,7 @@ export interface BassModel {
   answers: Answer[]
   /** How many different notes the main bars play (one count per loop). */
   colours: number[]
-  /** Where notes start at all (and 16: bar ends): the MIDI page's view, and where an added 16th goes. */
+  /** Where notes start at all (and 16: bar ends): the Bass tab's view, and where an added 16th goes. */
   onsets: number[]
   /** Intervals from the root (octave included) by beat position class. */
   at: Weights[]

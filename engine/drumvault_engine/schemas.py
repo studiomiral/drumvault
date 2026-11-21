@@ -187,8 +187,9 @@ class StretchSamplesParams(BaseModel):
 
 
 class ImportMidiParams(BaseModel):
-    """Add basslines to learn from (the MIDI page, SCOPE.md §6.7): MIDI files, zips or folders of them."""
+    """Add basslines or piano parts to learn from (the Bass and Piano tabs, SCOPE.md §6.7): MIDI files, zips or folders of them."""
     paths: list[str]
+    role: Literal["bass", "piano"] = "bass"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -298,7 +299,7 @@ class SaveMidiParams(BaseModel):
 class ImportHitsParams(BaseModel):
     """Add drop hits (SCOPE.md §6.8), chord stabs (§6.9) or strings (§6.10) from audio files, folders and zips."""
     paths: list[str]
-    kind: Literal["disco", "stab", "strings", "bass", "ambience"] = "disco"
+    kind: Literal["disco", "stab", "strings", "bass", "piano", "ambience"] = "disco"
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

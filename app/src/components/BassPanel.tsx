@@ -52,9 +52,9 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
     return others.length ? others[Math.floor(Math.random() * others.length)] : cur
   }
   const btn = 'h-7 min-w-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] disabled:opacity-40'
-  const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips under Bass on the MIDI page.'
-    : !presets.length ? (opts.source === 'samples' ? 'No bass samples with a note yet: add one-shots on the Bass Samples page, or set Source to Serum.'
-      : 'No Serum 2 patches for Bass yet: tick their folders under Bass on the MIDI page, or add one-shots on the Bass Samples page.') : null
+  const missing = !basslines.length ? 'No bass MIDI to learn from yet: add your MIDI zips on the Bass tab.'
+    : !presets.length ? (opts.source === 'samples' ? 'No bass samples with a note yet: add one-shots on the Bass tab, or set Source to Serum.'
+      : 'No Serum 2 patches for Bass yet: tick their folders on the Bass tab, or add one-shots there.') : null
 
   const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
   const summary = !opts.enabled ? 'Off: G generates without bass'
@@ -74,7 +74,7 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
       {!loaded ? <p className="text-muted text-[12.5px]">Loading basslines and patches…</p>
         : missing ? (
           <p className="text-muted text-[12.5px]">{missing}{' '}
-            <Button variant="ghost" onClick={() => setView('midi')}>Open MIDI</Button>
+            <Button variant="ghost" onClick={() => setView('basses')}>Open Bass</Button>
           </p>
         ) : !b ? (
           <p className="text-muted text-[12.5px]">{opts.enabled ? 'Press G for a generation with bass.' : 'Bass is off for new generations.'}</p>
