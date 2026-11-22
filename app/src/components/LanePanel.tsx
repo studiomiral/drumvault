@@ -8,12 +8,13 @@ import { useProject } from '../store/project'
 import { TrackPanel } from '../create/TrackPanel'
 import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setPadsOptions, setPianoOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
 import { StringsPanel } from './StringsPanel'
 import { PadsPanel } from './PadsPanel'
+import { PianoPanel } from './PianoPanel'
 import { AmbiencePanel } from './AmbiencePanel'
 import { VocalLoopsPanel } from './VocalLoopsPanel'
 import { VocalPanel } from './VocalPanel'
@@ -28,6 +29,7 @@ const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   track: () => [],
   bass: () => ['Bass'],
   chords: () => ['Stab', 'Stab 2', 'Stab 3'],
+  piano: () => ['Piano'],
   strings: () => ['Strings'],
   pads: () => ['Pad'],
   ambience: () => ['Ambience'],
@@ -37,13 +39,14 @@ const MODULE_LANES: Record<string, (g: Generation) => string[]> = {
   verb: () => [],
 }
 
-type ModuleId = 'track' | 'bass' | 'chords' | 'vocals' | 'vocalloops' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb'
+type ModuleId = 'track' | 'bass' | 'chords' | 'piano' | 'vocals' | 'vocalloops' | 'strings' | 'pads' | 'ambience' | 'disco' | 'verb'
 
 /** The side panel's pills: the track, then the modules (with a switch: whether G writes it into new tracks). */
 const PILLS: { module: ModuleId; label: string; on?: string; off?: string }[] = [
   { module: 'track', label: 'Track' },
   { module: 'bass', label: 'Bass', on: 'On: G writes a bass for every new generation', off: 'Off: new generations have no bass' },
   { module: 'chords', label: 'Chords', on: 'On: G writes chord stabs for every new generation', off: 'Off: new generations have no chord stabs' },
+  { module: 'piano', label: 'Piano', on: 'On: a quarter of new house tracks play a piano part instead of chord stabs', off: 'Off: new generations have no piano' },
   ...(ELEVENLABS ? [{ module: 'vocals' as const, label: 'Vocals' }] : []),
   { module: 'vocalloops', label: ELEVENLABS ? 'Vocal Loops' : 'Vocals', on: 'On: some new generations sing a Splice vocal loop that fits', off: 'Off: new generations sing no Splice vocal loop' },
   { module: 'strings', label: 'Strings', on: 'On: some new generations play strings under the track', off: 'Off: new generations have no strings' },
@@ -56,13 +59,14 @@ const PILLS: { module: ModuleId; label: string; on?: string; off?: string }[] = 
 /** Whether G writes each module into new generations (the pills' switches). */
 function useModulesOn(): Partial<Record<ModuleId, boolean>> {
   const s = useGenerate((x) => x.settings)
-  return { bass: s.bass.enabled, chords: s.stabs.enabled, strings: s.strings.enabled, pads: s.pads.enabled, ambience: s.ambience.enabled, vocalloops: s.vocalLoops.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
+  return { bass: s.bass.enabled, chords: s.stabs.enabled, piano: s.piano.enabled, strings: s.strings.enabled, pads: s.pads.enabled, ambience: s.ambience.enabled, vocalloops: s.vocalLoops.enabled, disco: s.disco.enabled, verb: s.verb.enabled }
 }
 
 function setModuleOn(module: ModuleId, on: boolean): void {
   if (module === 'track' || module === 'vocals') return
   if (module === 'bass') setBassOptions({ enabled: on })
   else if (module === 'chords') setStabOptions({ enabled: on })
+  else if (module === 'piano') setPianoOptions({ enabled: on })
   else if (module === 'strings') setStringsOptions({ enabled: on })
   else if (module === 'pads') setPadsOptions({ enabled: on })
   else if (module === 'ambience') setAmbienceOptions({ enabled: on })
@@ -122,6 +126,7 @@ export function LanePanel({ g, panel, onPanel }: {
       {'module' in panel && panel.module === 'track' && <TrackPanel g={g} />}
       {'module' in panel && panel.module === 'bass' && <BassPanel g={g} fixed />}
       {'module' in panel && panel.module === 'chords' && <ChordsPanel g={g} fixed />}
+      {'module' in panel && panel.module === 'piano' && <PianoPanel g={g} fixed />}
       {'module' in panel && panel.module === 'vocals' && ELEVENLABS && <VocalPanel g={g} fixed />}
       {'module' in panel && (panel.module === 'vocalloops' || (panel.module === 'vocals' && !ELEVENLABS)) && <VocalLoopsPanel g={g} fixed />}
       {'module' in panel && panel.module === 'strings' && <StringsPanel g={g} fixed />}

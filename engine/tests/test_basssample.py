@@ -116,3 +116,42 @@ def test_render_bass_takes_a_bass_sample_in_place_of_a_serum_preset(tmp_path):
         pipeline.render_bass(s, "Bass Samples/missing.wav", 0, 0, BPM, ".drumvault/bass/x-e1-0-120.wav", notes=notes, bars=1)
     with pytest.raises(pipeline.PipelineError):
         pipeline.render_bass(s, "Bass Samples/../../etc.wav", 0, 0, BPM, ".drumvault/bass/y-e1-0-120.wav", notes=notes, bars=1)
+
+
+def test_a_piano_part_plays_its_chords_with_a_voice_per_note(tmp_path):
+    s, rel, _ = imported(tmp_path, "Grand Piano C.wav", oneshot(60, 3.0), kind="piano")
+    sr = s.output_sample_rate
+    beat = int(0.5 * sr)
+    # A C major triad on beat 1, held a beat: all three notes sound together.
+    chord = [Note(0, 1, 60, 100), Note(0, 1, 64, 100), Note(0, 1, 67, 100)]
+    y = basssample.render(s, rel, chord, 0, BPM, 1, poly=True)
+    mag = np.abs(np.fft.rfft(y[: beat // 2].mean(axis=1) * np.hanning(beat // 2)))
+    freqs = np.fft.rfftfreq(beat // 2, 1 / sr)
+    for p in (60, 64, 67):
+        k = np.argmin(np.abs(freqs - midi_hz(p)))
+        assert mag[k - 2: k + 3].max() > 0.2 * mag.max()
+    # A held note rings on under the next one (the bass's one voice would cut it there).
+    held = [Note(0, 2, 60, 100), Note(1, 1, 72, 100)]
+    for poly, rings in ((True, True), (False, False)):
+        z = basssample.render(s, rel, held, 0, BPM, 1, poly=poly)
+        seg = z[int(1.2 * beat): int(1.8 * beat)].mean(axis=1)
+        m = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        f = np.fft.rfftfreq(len(seg), 1 / sr)
+        k = np.argmin(np.abs(f - midi_hz(60)))
+        assert bool(m[k - 2: k + 3].max() > 0.1 * m.max()) is rings
+    # Let go: it rings for its release, then stops.
+    rel_s = s.thresholds.piano_sample_release_ms / 1000
+    assert np.abs(y[beat + int(rel_s * sr) + 50: 2 * beat]).max() < 1e-3
+
+
+def test_render_bass_plays_a_piano_part_from_a_piano_sample(tmp_path):
+    s, rel, _ = imported(tmp_path, "Keys A.wav", oneshot(57, 2.0), kind="piano")
+    assert rel.startswith("Piano Samples/") and basssample.is_piano_sample(rel) and not basssample.is_sample(rel)
+    notes = [[0, 1, 57, 100], [0, 1, 60, 100], [0, 1, 64, 100], [2, 1, 55, 100], [2, 1, 59, 100]]
+    out_rel = ".drumvault/piano/abc-e1-0-120.wav"
+    assert pipeline.render_bass(s, rel, 0, 0, BPM, out_rel, notes=notes, bars=1) == {"path": out_rel, "cached": False}
+    y, sr = sf.read(Path(s.library_path) / out_rel, always_2d=True)
+    assert y.shape[0] == int(round(4 * 60 / BPM * sr)) and np.abs(y).max() > 0.05
+    # Only a Piano tab sample plays in the piano folder; a path out of the library never does.
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.render_bass(s, "Piano Samples/../../etc.wav", 0, 0, BPM, ".drumvault/piano/y-e1-0-120.wav", notes=notes, bars=1)

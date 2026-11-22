@@ -4,7 +4,9 @@ page sample the way a sampler plays it, instead of through a Serum patch.
 Every note of the line is the sample played faster or slower to its pitch: the sample is taken to
 sound its own note (its key's root, from its name or its sound) on the note of that name nearest
 the middle of the line, so most notes move it little. One voice: a note stops the one before it.
-A note plays as long as it is held, then fades out; the loop wraps (a note ringing past the end
+A piano part (a Piano tab one-shot, SCOPE.md §6.7c) plays the same way with as many voices as it
+has notes (`poly`): chords sound together and no note cuts another. A note plays as long as it is
+held, then fades out; the loop wraps (a note ringing past the end
 comes round to the start), so it repeats seamlessly. The app treats the result like a Serum
 render: the same file naming, loudness, sidechain, edits and MIDI export.
 """
@@ -21,11 +23,17 @@ from .config import Settings
 from .midi import Note
 
 FOLDER = "Bass Samples"
+PIANO_FOLDER = "Piano Samples"
 
 
 def is_sample(preset: str) -> bool:
     """Whether a bass "preset" is a Bass Samples page sample (library-relative) and not a Serum preset file."""
     return preset.startswith(f"{FOLDER}/")
+
+
+def is_piano_sample(preset: str) -> bool:
+    """Whether a piano "preset" is a Piano tab one-shot (library-relative) and not a Serum preset file."""
+    return preset.startswith(f"{PIANO_FOLDER}/")
 
 
 def sample_pitch_class(mono: np.ndarray, sr: int, settings: Settings, piano: bool = False) -> int | None:
@@ -64,9 +72,12 @@ def _pitched(x: np.ndarray, semitones: float) -> np.ndarray:
     return np.stack([np.interp(at, idx, x[:, c]) for c in range(x.shape[1])], axis=1).astype(np.float32)
 
 
-def render(settings: Settings, sample_rel: str, notes: list[Note], root_pc: int, bpm: float, bars: int) -> np.ndarray:
+def render(settings: Settings, sample_rel: str, notes: list[Note], root_pc: int, bpm: float, bars: int,
+           poly: bool = False) -> np.ndarray:
     """The line `notes` (already in the track key) played by the sample, as a seamless loop of
-    `bars` bars at `bpm`: (frames, 2) float32 at the library rate."""
+    `bars` bars at `bpm`: (frames, 2) float32 at the library rate. `poly` (a piano part): every
+    note its own voice, ringing as long as it is held plus piano_sample_release_ms, never cut by
+    the next one."""
     th = settings.thresholds
     f = Path(settings.library_path) / sample_rel
     if ".." in Path(sample_rel).parts or not f.exists():
@@ -81,7 +92,7 @@ def render(settings: Settings, sample_rel: str, notes: list[Note], root_pc: int,
         return out
     ref = reference_note(notes, root_pc)
     beat = 60.0 / bpm * sr
-    release = max(2, int(round(th.bass_sample_release_ms * sr / 1000)))
+    release = max(2, int(round((th.piano_sample_release_ms if poly else th.bass_sample_release_ms) * sr / 1000)))
     cut = max(2, int(round(th.bass_sample_cut_ms * sr / 1000)))
     line = sorted(notes, key=lambda q: q.start)
     starts = [int(round(q.start * beat)) % n for q in line]
@@ -93,8 +104,9 @@ def render(settings: Settings, sample_rel: str, notes: list[Note], root_pc: int,
         # One voice: the note ends where it is let go (plus its release), or where the next one starts.
         held = int(round(q.length * beat)) + release
         nxt = (starts[(i + 1) % len(line)] - starts[i]) % n or n
-        length = max(1, min(v.shape[0], held, nxt + cut if len(line) > 1 else held))
-        fade = min(length, cut if length == nxt + cut else release)
+        cut_by_next = len(line) > 1 and not poly
+        length = max(1, min(v.shape[0], held, nxt + cut if cut_by_next else held))
+        fade = min(length, cut if cut_by_next and length == nxt + cut else release)
         y = v[:length].copy()
         if fade > 1:
             y[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]

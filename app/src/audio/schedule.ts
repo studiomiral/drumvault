@@ -59,7 +59,7 @@ const GATE_RELEASE_MAX_S = 0.06
  */
 export const SEAM_XFADE_S = 0.008
 /** Rendered parts whose files are seamless loops (the engine renders two cycles and keeps the second). */
-const SEAMLESS_ROLES = new Set<string>(['bass', 'keys', 'stab', 'drone', 'pad', 'ambience'])
+const SEAMLESS_ROLES = new Set<string>(['bass', 'piano', 'keys', 'stab', 'drone', 'pad', 'ambience'])
 
 // ---------------------------------------------------------------------------
 // Tempo (SCOPE.md §6.4a): samples are cut at the library BPM; a project may run at another.
@@ -96,8 +96,8 @@ export function tempoPath(relPath: string, bpm: number): string {
 }
 
 /** FNV-1a, hex: a short stable id for a preset path in render file names. */
-/** Where a part's renders go: bass, strings and vocal parts (and older tracks' keys, stab and drone parts) each their own folder. */
-const renderFolder = (b: BassRender) => (b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones'
+/** Where a part's renders go: bass, piano, strings and vocal parts (and older tracks' keys, stab and drone parts) each their own folder. */
+const renderFolder = (b: BassRender) => (b.role === 'piano' ? 'piano' : b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones'
   : b.role === 'strings' ? 'strings' : b.role === 'vocal' ? 'vocals' : b.role === 'pad' ? 'pads' : b.role === 'ambience' ? 'ambience' : 'bass')
 
 /** The start of every render of the string sample `preset` (its rel path). */

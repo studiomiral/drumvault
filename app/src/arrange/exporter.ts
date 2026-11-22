@@ -223,11 +223,13 @@ export function exportTargets(project: Project, o: Pick<ExportOptions, 'laneIds'
 }
 
 /** The melodic part written as MIDI: the bass, named as its lane. */
-export function midiParts(project: Project): { role: 'bass'; file: string }[] {
-  const clip = project.clips.find((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === 'bass')
-  if (!clip) return []
-  const lane = project.lanes.find((l) => l.id === clip.laneId)
-  return [{ role: 'bass', file: `${safeName(lane?.name ?? 'Bass')}.mid` }]
+export function midiParts(project: Project): { role: 'bass' | 'piano'; file: string }[] {
+  return (['bass', 'piano'] as const).flatMap((role) => {
+    const clip = project.clips.find((c) => c.type === 'audio' && c.bass && (c.bass.role ?? 'bass') === role)
+    if (!clip) return []
+    const lane = project.lanes.find((l) => l.id === clip.laneId)
+    return [{ role, file: `${safeName(lane?.name ?? (role === 'bass' ? 'Bass' : 'Piano'))}.mid` }]
+  })
 }
 
 /** Whether the range is the whole track (the pre-flight asks a DJ intro and outro of that only). */
@@ -304,8 +306,8 @@ export async function exportStems(project: Project, o: ExportOptions,
   const parts = o.midi ? midiParts(project) : []
   if (parts.length && !isCancelled()) {
     const midis = await api.listMidi()
-    for (const { file } of parts) {
-      const notes = bassNotes(project, midis)
+    for (const { file, role } of parts) {
+      const notes = bassNotes(project, midis, role)
       const data = notesMidi(notes, project.bpm, o.range.startBeat, o.range.endBeat, file.replace(/\.mid$/, ''))
       await api.writeExportFile(exportDir(o, 'midi'), file, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
       result.written.push(`midi/${file}`)

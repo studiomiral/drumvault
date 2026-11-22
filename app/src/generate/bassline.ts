@@ -509,7 +509,8 @@ export function loopBeatsOf(notes: BassNote[], bars: number): number {
 }
 
 /** A generated line as a bassline the rest of the app plays, renders and exports like an imported one. */
-export function generatedMidi(line: Pick<GeneratedLine, 'notes' | 'bars'> & { beats?: number }, key: string | null): MidiItem {
+/** (A line following a piano progression, piano.ts, is longer: as long as the progression.) */
+export function generatedMidi(line: { notes: BassNote[]; bars: number; beats?: number }, key: string | null): MidiItem {
   let h = 0
   for (const ch of JSON.stringify(line.notes)) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0
   const tag = (h >>> 0).toString(16).slice(0, 5)

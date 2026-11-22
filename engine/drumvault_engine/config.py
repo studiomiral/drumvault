@@ -145,6 +145,8 @@ class Thresholds:
     piano_sample_min_hz: float = 27.5
     piano_sample_max_hz: float = 4200.0
     piano_sample_max_len_s: float = 12.0
+    # A piano part played by a one-shot (basssample.render, poly): each note rings this long after it is let go.
+    piano_sample_release_ms: float = 150.0
     # Drop hits (SCOPE.md §6.8): one stab or brass hit per file, from its attack to where its
     # tail falls below peak + hit_tail_db, at most hit_max_len_s, peak-normalised.
     hit_max_len_s: float = 6.0

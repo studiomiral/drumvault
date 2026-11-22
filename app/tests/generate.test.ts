@@ -2835,3 +2835,101 @@ describe('organic (SCOPE.md §5.18)', () => {
     expect(same(generate(LIB, { ...OPTS, genre: 'house' }, 77))).toEqual(same(generate(LIB, OPTS, 77)))
   })
 })
+
+describe('generator: piano instead of stabs (SCOPE.md §6.9a)', () => {
+  type N = [number, number, number, number]
+  const chordNotes = (at: number, len: number, ps: number[]): N[] => ps.map((p) => [at, len, p, 100])
+  const pmidi = (id: number, bars: number, notes: N[]): MidiItem => ({ id, file_name: `P${id}.mid`, name: `P${id}`, rel_path: `MIDI/Piano/p${id}.mid`,
+    role: 'piano', bars, key_label: 'Am', key_camelot: null, notes, favorite: 0, source: null, source_code: null })
+  const LOOP = pmidi(11, 1, [0.5, 1.5, 2.5, 3.5].flatMap((t) => chordNotes(t, 0.4, [57, 60, 64, 67])))
+  const PROG = pmidi(12, 4, [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]].flatMap((t, b) => [...chordNotes(b * 4, 1.25, t), ...chordNotes(b * 4 + 1.5, 2, t)]))
+  const PATCH: SerumPreset = { path: '/presets/Keys/Grand.SerumPreset', name: 'Grand', folder: 'Keys', tags: [] }
+  const STAB: HitItem = { id: 1, kind: 'stab', file_name: 'Organ.wav', name: 'Organ', rel_path: 'Chord Stabs/organ.wav', key_label: 'Am',
+    key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 0.6, channels: 2 }
+  const BASSLINE: MidiItem = { id: 1, file_name: 'B.mid', name: 'B', rel_path: 'MIDI/Bass/b.mid', role: 'bass', bars: 1, key_label: 'Am', key_camelot: null,
+    notes: [[0, 0.5, 45, 100], [1.5, 0.25, 57, 90], [2.5, 0.25, 45, 80], [3, 0.5, 52, 100]], favorite: 0, source: null, source_code: null }
+  const opts: GenerateOptions = { ...OPTS, stabs: { hits: [STAB] }, piano: { midis: [LOOP, PROG], presets: [PATCH] },
+    bass: { midis: [BASSLINE], presets: [{ path: '/presets/Bass/P.SerumPreset', name: 'P', folder: 'Bass', tags: [] }], favorites: [], sidechain: 0.5 },
+    pads: { presets: [{ path: '/presets/Pads/Warm.SerumPreset', name: 'Warm', folder: 'Pads', tags: [] }] } }
+  const gs = Array.from({ length: 80 }, (_, i) => generate(LIB, opts, 9100 + i))
+  const keyed = gs.filter((g) => g.key)
+  const lanesNamed = (g: Generation, re: RegExp) => new Set(g.project.lanes.filter((l) => re.test(l.name)).map((l) => l.id))
+  const clipsIn = (g: Generation, re: RegExp) => g.project.clips.filter((c) => lanesNamed(g, re).has(c.laneId))
+
+  it('plays stabs or a piano, never both, a piano about a quarter of the time', () => {
+    const pianos = keyed.filter((g) => g.piano)
+    expect(pianos.length / keyed.length).toBeGreaterThan(0.1)
+    expect(pianos.length / keyed.length).toBeLessThan(0.45)
+    for (const g of keyed) {
+      expect(g.rules.keys).toBe(g.piano ? 'piano' : 'stabs')
+      if (g.piano) {
+        expect(clipsIn(g, /^Stab/)).toHaveLength(0)
+        expect(clipsIn(g, /^Piano$/).length).toBeGreaterThan(0)
+        expect(g.rules.lead).toBe('piano')
+      } else expect(clipsIn(g, /^Piano$/)).toHaveLength(0)
+    }
+    // Without the Piano tab's MIDI: no piano, and no choice of it.
+    const none = generate(LIB, { ...opts, piano: null }, 9100)
+    expect(none.piano ?? null).toBeNull()
+    expect(none.rules.keys).toBeNull()
+  })
+
+  it('places the piano whole in the drops and exposed in the big breakdown, in phase with the track', () => {
+    for (const g of keyed.filter((x) => x.piano)) {
+      const piano = clipsIn(g, /^Piano$/) as AudioClip[]
+      const L = g.piano!.midi.bars * 4
+      for (const c of piano) {
+        expect(c.bass?.role).toBe('piano')
+        expect(((c.start + c.trimBeats) % L + L) % L).toBeCloseTo(0, 6)   // its loop runs from bar 1 of the track
+      }
+      for (const s of g.sections.filter((x) => x.kind === 'drop')) {
+        const mid = (s.start + s.bars / 2) * 4
+        expect(piano.some((c) => c.start <= mid && c.start + c.length > mid && !c.filter)).toBe(true)
+      }
+      const big = g.sections.find((x) => x.kind === 'break' && x.long)
+      if (big) {
+        // Exposed once the drums have stripped out (the mix's high-pass into the drop may ride it at the end).
+        const at = breakShape(big.start, big.bars).layer * 4 + 1
+        expect(piano.some((c) => c.start <= at && c.start + c.length > at && c.filter?.type !== 'lowpass')).toBe(true)
+      }
+    }
+  })
+
+  it('under a progression: the bass follows the chords from bar 1 and there is no pad; a lock picks the kind', () => {
+    const progs = Array.from({ length: 30 }, (_, i) => generate(LIB, { ...opts, locks: { keys: 'piano', pianoKind: 'progression' } }, 9300 + i)).filter((g) => g.piano)
+    expect(progs.length).toBeGreaterThan(10)
+    for (const g of progs) {
+      expect(g.piano!.kind).toBe('progression')
+      expect(g.rules.padIn).toBe(false)
+      expect(clipsIn(g, /^Pad$/)).toHaveLength(0)
+      expect(g.bass!.midi.bars).toBe(g.piano!.midi.bars)
+      // The bass's first notes move with the chords.
+      const firsts = new Set(Array.from({ length: g.piano!.midi.bars }, (_, b) => {
+        const n = g.bass!.midi.notes.filter((x) => x[0] >= b * 4 && x[0] < b * 4 + 4).sort((x, y) => x[0] - y[0])[0]
+        return n ? n[2] % 12 : null
+      }))
+      expect(firsts.size).toBeGreaterThan(1)
+      for (const c of clipsIn(g, /^Bass$/) as AudioClip[]) {
+        const L = g.bass!.midi.bars * 4
+        expect(((c.start + c.trimBeats) % L + L) % L).toBeCloseTo(0, 6)
+      }
+    }
+    const loops = Array.from({ length: 10 }, (_, i) => generate(LIB, { ...opts, locks: { keys: 'piano', pianoKind: 'loop' } }, 9400 + i)).filter((g) => g.piano)
+    for (const g of loops) expect(g.piano!.kind).toBe('loop')
+  })
+
+  it('switches a track between stabs and piano with its choice', () => {
+    const g = keyed.find((x) => !x.piano)!
+    const roles = CHOICES.find((c) => c.rule === 'keys')!.roles
+    const p = setTrackRule(LIB, opts, g, 'keys', 'piano', roles)
+    expect(p.piano).toBeTruthy()
+    expect(clipsIn(p, /^Stab/)).toHaveLength(0)
+    expect(clipsIn(p, /^Piano$/).length).toBeGreaterThan(0)
+    const back = setTrackRule(LIB, opts, p, 'keys', 'stabs', roles)
+    expect(back.piano ?? null).toBeNull()
+    expect(clipsIn(back, /^Stab/).length).toBeGreaterThan(0)
+    expect(clipsIn(back, /^Piano$/)).toHaveLength(0)
+    expect(choicesFor(p).some((c) => c.rule === 'pianoKind')).toBe(true)
+    expect(choicesFor(p).some((c) => c.rule === 'stabFit')).toBe(false)
+  })
+})

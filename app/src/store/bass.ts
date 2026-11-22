@@ -12,6 +12,8 @@ import { useHits } from './hits'
 
 interface BassState {
   basslines: MidiItem[]
+  /** The Piano tab's MIDI: what piano parts are learned from (SCOPE.md §6.9a). */
+  pianoParts: MidiItem[]
   presets: SerumPreset[]
   /** Patches in the chosen folders left out: their samples aren't on this Mac. */
   skipped: number
@@ -28,9 +30,14 @@ interface BassState {
   error: string | null
 }
 
-export const useBass = create<BassState>(() => ({ basslines: [], presets: [], skipped: 0, padPresets: [], padSkipped: 0, pluckPresets: [], pluckSkipped: 0, pianoPresets: [], pianoSkipped: 0, loaded: false, error: null }))
+export const useBass = create<BassState>(() => ({ basslines: [], pianoParts: [], presets: [], skipped: 0, padPresets: [], padSkipped: 0, pluckPresets: [], pluckSkipped: 0, pianoPresets: [], pianoSkipped: 0, loaded: false, error: null }))
 
 export { samplePatch, type BassSource } from '../generate/basspatch'
+
+/** What a piano part can play through, by `source`: the Piano folders' Serum patches, the Piano tab's one-shots, or both. */
+export function pianoPatches(source: BassSource = 'both'): SerumPreset[] {
+  return patchPool(source, useBass.getState().pianoPresets, useHits.getState().hits, 'piano')
+}
 
 /** The patches a bass can play through, by `source` (basspatch.ts), from the stores' lists unless given. */
 export function bassPatches(source: BassSource = 'both', presets: SerumPreset[] = useBass.getState().presets,
@@ -90,7 +97,7 @@ export function loadBass(): Promise<void> {
         nf.length ? api.serumPresets(s.presetRoot, nf) : none,
       ])
       useBass.setState({
-        basslines: midis.filter((m) => m.role === 'bass'), presets: playable(pool.presets), skipped: pool.presets.length - playable(pool.presets).length,
+        basslines: midis.filter((m) => m.role === 'bass'), pianoParts: midis.filter((m) => m.role === 'piano'), presets: playable(pool.presets), skipped: pool.presets.length - playable(pool.presets).length,
         padPresets: playable(pads.presets), padSkipped: pads.presets.length - playable(pads.presets).length,
         pluckPresets: playable(plucks.presets), pluckSkipped: plucks.presets.length - playable(plucks.presets).length,
         pianoPresets: playable(piano.presets), pianoSkipped: piano.presets.length - playable(piano.presets).length, loaded: true, error: null,

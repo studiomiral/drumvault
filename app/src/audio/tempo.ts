@@ -24,6 +24,7 @@ const bassReady = new Set<string>()
 const bassInflight = new Map<string, Promise<void>>()
 const renderState = {
   bass: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  piano: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   keys: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   stab: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   drone: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },  // older tracks' drones

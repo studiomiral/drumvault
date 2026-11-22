@@ -14,6 +14,7 @@ import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
+import { chordName, followBass, generatePiano, pianoMidi, pianoModel, type PianoKind, type PianoPart } from './piano'
 import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bedShift } from './ambience'
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
@@ -40,7 +41,7 @@ import type { Score } from './score'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'fx3' | 'crash' | 'hits' | 'atmos'
-  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
+  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'piano' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
 
 /** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -71,6 +72,7 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'stab', name: 'Stab', startDb: -7, color: '#fcd34d' },
   { role: 'stab2', name: 'Stab 2', startDb: -7, color: '#fde68a' },
   { role: 'stab3', name: 'Stab 3', startDb: -7, color: '#fef3c7' },
+  { role: 'piano', name: 'Piano', startDb: -7, color: '#a5b4fc' },
   { role: 'strings', name: 'Strings', startDb: -12, color: '#99f6e4' },
   { role: 'pad', name: 'Pad', startDb: -10, color: '#c4b5fd' },
   { role: 'bed', name: 'Ambience', startDb: -24, color: '#cbd5e1' },
@@ -158,7 +160,7 @@ const BUILDUP_NOTE: Record<typeof BUILDUPS[number], string> = {
  * Rules newer than some saved generations: a track made before them is remade without them
  * (no build-up appears on a lane made again).
  */
-const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false, bassTurn: 'none', dropIn: null, bigBuild: 'usual' }
+const LATER_RULES: Rules = { bedIn: false, character: null, lead: null, padIn: false, stabFit: false, glue: false, buildup: 'none', buildupBars: 4, buildupCrash: 'none', ioLift: false, firstDrop: 'full', stringsIn: false, vocalIn: false, stabCount: 1, stabTurns: 'hits', stabLoop: false, bassTurn: 'none', dropIn: null, bigBuild: 'usual', keys: 'stabs' }
 const rulesOf = (g: Generation): Rules => ({ ...LATER_RULES, ...g.rules })
 
 /** A lane's step in the starting mix (see LANES). */
@@ -320,6 +322,20 @@ function bassPool(presets: SerumPreset[], seed: number): SerumPreset[] {
   return new Rng(seed ^ 0x42535350).chance(0.5) ? samples : serum
 }
 
+/** How often a house track plays a piano part instead of the stabs, when it could play either (SCOPE.md §6.9a). */
+export const PIANO_CHANCE = 0.25
+/** The piano's filter in the parts it is held back in (a low-pass, Hz), and where it opens to. */
+const PIANO_DARK_HZ: [number, number] = [700, 1400]
+const PIANO_OPEN_HZ = 8000
+/** dB the piano sits under itself where it announces a drop or is held back, and bars it takes to leave the outro. */
+const PIANO_HELD_DB = -5
+const PIANO_ANNOUNCE_DB = -8
+const PIANO_OUTRO_BARS = 8
+/** A long intro keeps this many bars clean of the piano (the DJ's), before announcing the drop. */
+const PIANO_INTRO_CLEAN = 16
+/** How far the piano ducks under the kick (it holds chords: less than a stab, which is all attack). */
+const PIANO_DUCK = 0.2
+
 /** Whether a structure has one drop only. */
 const drops1 = (sections: Section[]) => sections.filter((s) => s.kind === 'drop').length === 1
 
@@ -365,6 +381,12 @@ export interface GenerateOptions {
     /** Rhythms saved in the step sequencer: they replace the built-in ones (some tracks take one as it is, the rest learn from them). */
     rhythms?: SavedStabRhythm[]
   } | null
+  /**
+   * Piano (SCOPE.md §6.9a): the Piano tab's MIDI (what its parts are learned from) and what plays
+   * them (Serum piano patches, Piano tab one-shots); a house track plays it instead of the stabs
+   * `PIANO_CHANCE` of the time. Null or empty = none.
+   */
+  piano?: { midis: MidiItem[]; presets: SerumPreset[] } | null
   /**
    * Strings (SCOPE.md §6.10) some tracks play under them: the Strings page's samples, and the
    * Strings lane's sidechain depth; null or empty = none.
@@ -566,6 +588,17 @@ export interface GenerationBass {
   groove?: number[]
 }
 
+/** The piano of a generation: the part written for it, in the track key, and what plays it. */
+export interface GenerationPiano {
+  /** The part as a MIDI item (pianoMidi: a negative id, its notes in the track key). */
+  midi: MidiItem
+  preset: SerumPreset
+  kind: PianoKind
+  /** Its chords (PianoPart.chords) and their names in the key, for the panel. */
+  chords: PianoPart['chords']
+  names: string[]
+}
+
 /** What the bass clips render for a generation's bass. */
 export function bassRenderOf(b: GenerationBass): BassRender {
   return {
@@ -603,6 +636,8 @@ export interface Generation {
   /** The main sample per lane (for "keep"). */
   picks: Partial<Record<Role, SampleListItem>>
   bass: GenerationBass | null
+  /** The piano part (SCOPE.md §6.9a) of a track that plays one instead of the stabs; absent or null: none. */
+  piano?: GenerationPiano | null
   rules: Rules
   /** Source code of the real track whose structure this one follows, if any. */
   template?: string | null
@@ -1253,16 +1288,57 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     if (s) picks[role] = s
   }
 
+  // ---- piano (SCOPE.md §6.9a): a house track plays chord stabs or a piano part (rule `keys`), a
+  // piano a quarter of the time when it could play either; an organic one stabs unless locked.
+  // The part is written for the track (piano.ts) from the Piano tab's MIDI, a loop or a
+  // progression. An RNG of its own: the drums are the same with or without it ----
+  const pianoRng = new Rng(seed ^ 0x5049414e)
+  const po = opts.piano
+  const pModel = key && po?.midis.length && po.presets.length ? pianoModel(po.midis) : null
+  const keysGiven = (keep.rules?.keys ?? opts.locks?.keys) as 'stabs' | 'piano' | undefined
+  const keysDrawn = pianoRng.chance(PIANO_CHANCE) ? 'piano' : 'stabs'
+  /** Where the piano's filter sits where it is held back (Hz), and over how many bars a long intro announces the drop. */
+  const pianoHz = pianoRng.int(...PIANO_DARK_HZ)
+  const pianoAnnounce = pianoRng.weighted([[4, 1], [8, 2]] as const)
+  const stabsThere = (opts.stabs?.hits.length ?? 0) > 0 && (keep.rules?.stabs ?? true) !== false
+  const keys: 'stabs' | 'piano' | null = !pModel ? null
+    : keysGiven ?? (organic ? 'stabs' : stabsThere ? keysDrawn : 'piano')
+  let piano: GenerationPiano | null = null
+  let pianoPart: PianoPart | null = null
+  if (pModel && keys === 'piano') {
+    // Another part for the same track (the panel's "New piano"): a seed of its own, kept in the rules.
+    const pSeed = Number(keep.rules?.pianoSeed ?? opts.locks?.pianoSeed ?? 0)
+    const kind = (keep.rules?.pianoKind ?? opts.locks?.pianoKind ?? null) as PianoKind | null
+    pianoPart = generatePiano(pModel, new Rng(seed ^ 0x50415254 ^ pSeed), { key, kind })
+    const want = (keep.rules?.pianoPreset ?? opts.locks?.pianoPreset) as string | undefined
+    const pool = bassPool(po!.presets, seed ^ 0x50494e4f)
+    const preset = (want ? po!.presets.find((x) => x.path === want) : undefined) ?? pianoRng.pick(pool)
+    if (pianoPart && preset) {
+      piano = { midi: pianoMidi(pianoPart, key), preset, kind: pianoPart.kind, chords: pianoPart.chords, names: [] }
+      const seen: string[] = []
+      for (const c of pianoPart.chords) {
+        const n = chordName(c, key)
+        if (seen.at(-1) !== n) seen.push(n)
+      }
+      piano.names = seen.length > 1 && seen[0] === seen.at(-1) ? seen.slice(0, -1) : seen
+    }
+  }
+
   // ---- bass (SCOPE.md §6.7): a new riff learned from the Bass tab's MIDI, through a Serum patch, in the
-  // track key ----
+  // track key; under a piano progression it follows the piano's chords (piano.ts: followBass) ----
   const bo = opts.bass
   const model = bo?.midis.length && bo.presets.length ? bassModel(bo.midis) : null
   const bassPreset = model && bo
     ? keep.bassPreset ?? rng.pickBy(bassPool(bo.presets, seed), (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
   // (The line has an RNG of its own: the rest of the track is the same whatever line it writes. It
   // may slide one note into the next on a patch that glides.)
+  const bassLine = (line: ReturnType<typeof generateBassline>) => {
+    if (!pianoPart) return line
+    const f = followBass(line.notes, line.bars, pianoPart, key)
+    return { notes: f.notes, bars: f.bars, beats: f.bars === line.bars ? line.beats : f.bars * 4 }
+  }
   const bassMidi = model && bassPreset
-    ? keep.bassMidi ?? generatedMidi(generateBassline(model, new Rng(seed ^ 0x4c494e45), { key, beats: bo!.beats, glide: !!bassPreset.glide }), key) : null
+    ? keep.bassMidi ?? generatedMidi(bassLine(generateBassline(model, new Rng(seed ^ 0x4c494e45), { key, beats: bo!.beats, glide: !!bassPreset.glide })), key) : null
   const bass: GenerationBass | null = bassMidi && bassPreset
     ? { midi: bassMidi, preset: bassPreset, transpose: transposeTo(bassMidi.key_label, key) + (bo?.octaves?.[bassPreset.path] ?? 0), ...(keep.bassMidi ? keep.bassEdit : undefined) }
     : null
@@ -1274,7 +1350,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const stabPool = stabItems.map(hitSample)
   const stabOf = new Map(stabItems.map((h) => [h.rel_path, h]))
   const keptRule = keep.rules?.stabs as boolean | undefined
-  const useStabs = stabPool.length > 0 && (keptRule ?? true)
+  // (Rule `stabs`: the stabs are there to play; a piano track doesn't play them.)
+  const stabsOn = stabPool.length > 0 && (keptRule ?? true)
+  const useStabs = stabsOn && !piano
   // (Known before the rules are: a kept or locked value, else on.)
   const stabFitEarly = ((keep.rules?.stabFit ?? opts.locks?.stabFit ?? true) as boolean) !== false
   // (One loop of them, rule `stabLoop`, likewise: on unless kept or locked off; only with stabs that fit.)
@@ -1384,10 +1462,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // ---- the track's character and its lead (SCOPE.md §6.6, "Identity"; an RNG of their own): one of
   // a few kinds of club track, which sets the rules that go together, and the one element the track
   // is built around. A kept or locked value stands; a track made before has neither ----
-  const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
+  const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(piano ? ['piano' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
   const drawnLead = pickLead(character ?? drawnCharacter, crng, hasLead)
   const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : opts.locks && 'lead' in opts.locks ? opts.locks.lead : undefined
-  const lead = kept !== undefined ? ((kept && hasLead.includes(kept as Lead) ? kept : null) as Lead | null) : character ? drawnLead : null
+  // A piano carries the track (its big breakdown is the piano's), unless another lead is kept or locked.
+  const lead = piano && (kept === undefined || kept === 'stab' || kept === 'piano') ? 'piano'
+    : kept !== undefined ? ((kept && hasLead.includes(kept as Lead) ? kept : null) as Lead | null) : character ? drawnLead : null
   // ---- the breakdown layer (§6.7b; an RNG of its own): a pad's chord or a reese's note ----
   const prng = new Rng(seed ^ 0x50414453)
   const padPool = key ? opts.pads?.presets ?? [] : []
@@ -1536,6 +1616,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     character,
     lead,
     // A layer made for the breakdowns: whether, through which patch, and where its filter starts.
+    // The piano (SCOPE.md §6.9a): set from what was written above, after the rules are merged.
+    keys: null as 'stabs' | 'piano' | null, pianoKind: null as PianoKind | null, pianoPreset: null as string | null, pianoSeed: 0,
     padIn: padPool.length > 0 && padDraw.in,
     padPreset: padDraw.preset,
     padHz: padDraw.hz,
@@ -1561,7 +1643,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     introGate: madeBefore('introGate') || !tops.length ? null : gaterng.chance(INTRO_GATE_CHANCE) ? gaterng.pick(GATE_FAMILIES) : null,
     // Chord stabs and their 2-bar rhythm; in drops only, or also low-passed in breakdowns and
     // builds ('keys': where keys parts played before stabs replaced them).
-    stabs: useStabs,
+    stabs: stabsOn,
     // The stabs written for the track (SCOPE.md §6.9, "Stabs that fit"): chosen to fit it, their
     // rhythm against its bassline (in its rests, or on its syncopations), with its feel, phrased
     // (accents, a turn at the end of every 8 bars), brought in and taken through the track, in a
@@ -1612,6 +1694,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     ...(organic ? organicRules(orng, drawn) as Partial<typeof drawn> : undefined),
     ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
+  // The piano's rules are what it is (written above, from what is kept or locked); none without a Piano tab.
+  rules.keys = !keys ? null : piano ? 'piano' : 'stabs'
+  if (piano) Object.assign(rules, { pianoKind: piano.kind, pianoPreset: piano.preset.path, pianoSeed: Number(rules.pianoSeed ?? 0) })
+  else Object.assign(rules, { pianoKind: null, pianoPreset: null })
+  // A progression has no pad under it (the pad holds the key's chord).
+  if (pianoPart?.kind === 'progression') rules.padIn = false
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
   // otherwise the build-up takes the roll's place (a fill can still lead in with it).
   if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
@@ -1747,9 +1835,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     duration_s: (bassBars(bass) * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0, rating: null, tags: null,
     zip_id: -1, source_code: 'Serum',
   } : null
+  // (A bassline following a piano progression keeps its place in it: its loop runs from the track's first bar, as the piano's.)
+  const bassPhased = pianoPart?.kind === 'progression'
   const bassPart = (from: number, to: number, filter?: ClipFilter, gapBeats = 0) => {
     if (bassSample && bassRender && to > from) {
-      lanes.add('bass', { sample: bassSample, start: from * 4, length: (to - from) * 4 - gapBeats, filter, bass: bassRender })
+      lanes.add('bass', { sample: bassSample, start: from * 4, length: (to - from) * 4 - gapBeats, filter, bass: bassRender,
+        ...(bassPhased ? { trim: (from * 4) % (bassBars(bass!) * BEATS_PER_BAR) } : {}) })
     }
   }
   // The turn (rule `bassTurn`): the loop with its last beat changed, as its own clip in the last
@@ -1769,11 +1860,66 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     for (const end of ends) {
       const t = end - bassLoopBars
       if (t < at + bassLoopBars) continue  // (a phrase no longer than the loop: no room for a turn)
+      if (bassPhased && t % bassLoopBars) continue  // (the turn is the loop's last bars: only where the loop ends)
       bassPart(at, t)
       lanes.add('bass', { sample: bassTurnSample, start: t * 4, length: bassLoopBars * 4 - (end === to ? gapBeats : 0), bass: bassTurnRender })
       at = end
     }
     if (at < to) bassPart(at, to, undefined, gapBeats)
+  }
+
+  // ---- the piano (SCOPE.md §6.9a): its part as a loop "sample" (rendered through its patch, or
+  // played by its one-shot), running from the track's first bar so a progression keeps its place ----
+  const pianoRender: BassRender | null = piano ? {
+    role: 'piano', keyLabel: key, preset: piano.preset.path, presetName: piano.preset.name, midiId: piano.midi.id, midiName: piano.midi.name,
+    transpose: 0, notes: piano.midi.notes, bars: piano.midi.bars, ...(lanes.feel ? { groove: lanes.feel.offsets } : {}),
+  } : null
+  const pianoSample: SampleListItem | null = piano && pianoRender ? {
+    id: -2_200_000_000 - (Math.abs(piano.midi.id) % 100_000_000), rel_path: bassPath(pianoRender, bpm), name: `${piano.preset.name} · ${piano.midi.name}`,
+    kind: 'loop', category: 'melodic', bpm, bars: piano.midi.bars, body_bars: null, key_label: key, key_camelot: null,
+    duration_s: (piano.midi.bars * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0, rating: null, tags: null, zip_id: -1, source_code: 'Piano',
+  } : null
+  const pianoBeats = (piano?.midi.bars ?? 1) * BEATS_PER_BAR
+  const pianoAt = (from: number, to: number, o: Partial<Segment> = {}, gapBeats = 0) => {
+    if (pianoSample && pianoRender && to > from) {
+      lanes.add('piano', { sample: pianoSample, start: from * 4, length: (to - from) * 4 - gapBeats, bass: pianoRender, trim: (from * 4) % pianoBeats, ...o })
+    }
+  }
+  const pianoLp = (from: number, to: number | null): ClipFilter => ({ type: 'lowpass', from, to, q: 0.8 })
+  /** The breakdown the piano carries: the long one, or every one in a track without a long one. */
+  const pianoBreak = (sec: Section | undefined) => !!sec && sec.kind === 'break' && (!!sec.long || !sections.some((x) => x.kind === 'break' && x.long))
+  /**
+   * The piano through a section: whole in the drops; in the big breakdown darker and softer while
+   * the drums leave, then exposed (the track's lead) to its end; held back, low-passed, in a short
+   * one, opening into what follows; announcing a drop over a build (filter opening, level rising;
+   * after the big breakdown it just plays on) and over the last bars of a long intro; leaving over
+   * the outro's first bars.
+   */
+  const pianoIn = (sec: Section, i: number, gapBeats: number) => {
+    const a = sec.start
+    const z = a + sec.bars
+    const n = sec.bars
+    const next = sections[i + 1]
+    const prev = sections[i - 1]
+    if (sec.kind === 'drop') pianoAt(a, z, {}, gapBeats)
+    else if (pianoBreak(sec)) {
+      const strip = Math.min(breakShape(a, n).layer, z)
+      if (strip > a) pianoAt(a, strip, { filter: pianoLp(PIANO_OPEN_HZ, pianoHz), gainDb: 0, gainTo: PIANO_HELD_DB })
+      pianoAt(strip, z)
+    } else if (sec.kind === 'break') {
+      const open = next?.kind === 'drop' || next?.kind === 'build' ? Math.min(4, Math.floor(n / 2)) : 0
+      pianoAt(a, z - open, { filter: pianoLp(pianoHz, null), gainDb: PIANO_HELD_DB })
+      if (open) pianoAt(z - open, z, { filter: pianoLp(pianoHz, PIANO_OPEN_HZ), gainDb: PIANO_HELD_DB, gainTo: 0 })
+    } else if (sec.kind === 'build') {
+      if (pianoBreak(prev)) pianoAt(a, z)
+      else pianoAt(a, z, { filter: pianoLp(pianoHz, PIANO_OPEN_HZ), gainDb: PIANO_ANNOUNCE_DB, gainTo: 0 })
+    } else if (sec.kind === 'intro' && next?.kind === 'drop' && n >= PIANO_INTRO_CLEAN + 4) {
+      const ann = Math.min(pianoAnnounce, n - PIANO_INTRO_CLEAN)
+      pianoAt(z - ann, z, { filter: pianoLp(pianoHz, PIANO_OPEN_HZ), gainDb: PIANO_ANNOUNCE_DB, gainTo: 0 })
+    } else if (sec.kind === 'outro' && prev?.kind === 'drop') {
+      const out = Math.min(PIANO_OUTRO_BARS, n)
+      pianoAt(a, a + out, { filter: pianoLp(PIANO_OPEN_HZ, pianoHz), gainDb: 0, gainTo: PIANO_ANNOUNCE_DB, fadeOut: Math.min(2, out) * BEATS_PER_BAR })
+    }
   }
 
   /**
@@ -2325,6 +2471,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
         stabBars(a, z, lp(rules.stabsBuild === 'sweep' ? 8000 : null))
       }
     }
+
+    // ---- piano (a piano track's, in place of the stabs) ----
+    if (piano) pianoIn(sec, i, gap)
 
     // ---- bass: the bassline repeats in drops; elsewhere high-passed (its sub out) or out, by the
     // track's rules ----
@@ -3058,6 +3207,13 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       l.pan = pans[i] ?? 0
     })
   }
+  // The piano: in the room the stabs have, ducking a little under the kick.
+  const pianoLane = project.lanes.find((x) => laneRole(x.name) === 'piano')
+  if (pianoLane) {
+    pianoLane.room = true
+    pianoLane.duck = PIANO_DUCK
+    pianoLane.duckBeats = STAB_DUCK_BEATS
+  }
   // The low end in mono: the kick's and the bass's (a kick roll's and the impacts' too).
   for (const l of project.lanes) if (MONO_ROLES.has(laneRole(l.name)!) || (padReese && laneRole(l.name) === 'pad')) l.monoBelow = MONO_BELOW_HZ
   const stringsLane = project.lanes.find((l) => l.name === 'Strings')
@@ -3163,6 +3319,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const bedMove = bed ? bedShift(bed, key)! : 0
   if (bed) choices.push(`ambience bed: ${bed.name}${bedMove ? `, a tonal bed pitched ${bedMove > 0 ? '+' : ''}${bedMove} into ${key}` : ''}, very quiet from the end of the intro to the outro, ducking under the kick`)
   if (padBreaks && padPatch) choices.push(`break layer: ${padReese ? 'a reese' : 'a pad'} (${padPatch.name}) ${padReese ? `on ${key?.replace(/m$/, '')}` : `holding ${key}`}, opening into the next part`)
+  if (piano) {
+    choices.push(piano.kind === 'progression'
+      ? `a piano progression, ${piano.names.join(' – ')} over ${piano.midi.bars} bars, through ${piano.preset.name}: the bassline follows it, no pad`
+      : `a piano loop on ${piano.names[0] ?? 'the key'}, through ${piano.preset.name}`)
+    choices.push('the piano: whole in the drops, carrying the big breakdown, announcing the drops')
+  }
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
       : `in drops, ${rules.stabsBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`
@@ -3211,7 +3373,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
   const arc = keep.arc !== undefined ? keep.arc : arcOf(opts.references, tpl)
-  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, rules, template: tpl?.source ?? null, mix: balance.mix, arc }
+  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, piano, rules, template: tpl?.source ?? null, mix: balance.mix, arc }
 }
 
 /** Places an event whose main sound ends on `endBeat` (generate's endOn). */
@@ -3716,7 +3878,7 @@ const KEY_NOTE = /^in \S+ \(made in /
  */
 export function setStabRhythm(all: SampleListItem[], opts: GenerateOptions, g: Generation, rhythm: Velocity[][]): Generation | null {
   const roles = new Set(STAB_ROLES)
-  if (!g.rules.stabs) return null
+  if (!g.rules.stabs || g.rules.keys === 'piano') return null
   const bpm = g.project.bpm
   const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: null }, g.seed, {
     structure: g.sections, arc: g.arc ?? null, key: g.key, picks: g.picks, rules: { ...rulesOf(g), stabRhythm: rhythm },
@@ -3755,6 +3917,9 @@ export function setTrackRule(all: SampleListItem[], opts: GenerateOptions, g: Ge
   return setTrackRules(all, opts, g, { [rule]: value }, roles)
 }
 
+/** The rules a piano remake owns (what it is, and what it changes: the lead, the pad under a progression). */
+const PIANO_RULES = ['keys', 'pianoKind', 'pianoPreset', 'pianoSeed', 'padIn', 'lead'] as const
+
 /** Rules that follow when one of them is set: a build-up and a roll sample into drops don't go together. */
 const COUPLED: Record<string, string[]> = { dropFill: ['buildup'], buildup: ['dropFill'] }
 
@@ -3769,9 +3934,19 @@ function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generati
   // A part the remake can't play again (its module off since, its samples gone) stays as it is.
   const gone = (role: Role) => (role === 'bass' && g.bass && !r.bass)
     || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs) || (role === 'strings' && !!g.picks.strings && !r.picks.strings)
+    || (role === 'piano' && !!g.piano && !r.piano && r.rules.keys === 'piano')
   const own = new Set(Object.keys(values).flatMap((k) => [k, ...COUPLED[k] ?? []]))
+  // The piano made again (SCOPE.md §6.9a): its part and its rules are the remake's, and under a
+  // progression (before or after) the bass that follows it too.
+  const piano = roles.includes('piano')
+  if (piano) for (const k of PIANO_RULES) own.add(k)
   const next = swapGroup(g, r, new Set(roles.filter((x) => !gone(x))), own, picks, null)
-  sameRenders(g, next.project)
+  if (piano) {
+    next.piano = r.piano ?? null
+    const follows = g.piano?.kind === 'progression' || r.piano?.kind === 'progression'
+    if (follows && roles.includes('bass') && r.bass) next.bass = r.bass
+  }
+  sameRenders(next, next.project)
   return { ...next, rules: { ...next.rules, ...values } }
 }
 

@@ -31,6 +31,8 @@ const SILENCED: Role[] = [...LEAD_IN, 'disco', 'disco2', 'atmos']
 const MIX: Role[] = LEAD_IN
 
 const has = (kind: string) => (g: Generation) => g.sections.some((s) => s.kind === kind)
+/** A track that plays its stabs (not a piano track, SCOPE.md §6.9a). */
+const stabbing = (g: Generation) => !!g.rules.stabs && g.rules.keys !== 'piano'
 const RISERS: Role[] = ['fx', 'fx2', 'fx3']
 /** What the big build into the drops after the long breakdown shapes. */
 const BIG: Role[] = ['kick', 'clap', 'buildup', ...RISERS, 'crash', ...STAB_ROLES, ...BUILD_TOPS, 'groove', 'vocal', 'vchop']
@@ -131,7 +133,7 @@ export const CHOICES: Choice[] = [
       { value: 'groove', label: 'the groove loop' }, { value: 'none', label: 'nothing' }] },
   { rule: 'ride', label: 'Ride', group: 'Sound', roles: ['ride', 'crash'],
     options: [{ value: 'late', label: 'later in drop 1' }, { value: 'second', label: 'from drop 2' }, { value: 'both', label: 'late in drop 1, then all through' }] },
-  { rule: 'stabCount', label: 'Stab sounds', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs && !!g.picks.stab, unset: 1,
+  { rule: 'stabCount', label: 'Stab sounds', group: 'Sound', roles: STAB_ROLES, when: (g) => stabbing(g) && !!g.picks.stab, unset: 1,
     options: [{ value: 1, label: 'one' }, { value: 2, label: 'two' }, { value: 3, label: 'three' }] },
   { rule: 'stabTurns', label: 'Stabs take turns', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.picks.stab2 && !g.picks.stab3 && !looped(g), unset: 'hits',
     options: [{ value: 'bars', label: 'bar by bar' }, { value: 'hits', label: 'hit by hit' }] },
@@ -148,15 +150,21 @@ export const CHOICES: Choice[] = [
 ]
 
 CHOICES.push(
-  { rule: 'lead', label: 'Lead', group: 'Sound', roles: [...STAB_ROLES, 'bass', 'perc'], unset: null,
-    when: (g) => !!g.rules.character,
-    options: [{ value: 'stab', label: 'the stabs' }, { value: 'bass', label: 'the bassline' }, { value: 'perc', label: 'the percussion' }, { value: null, label: 'none' }] },
+  { rule: 'lead', label: 'Lead', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'perc'], unset: null,
+    when: (g) => !!g.rules.character || g.rules.keys === 'piano',
+    options: [{ value: 'stab', label: 'the stabs' }, { value: 'piano', label: 'the piano' }, { value: 'bass', label: 'the bassline' },
+      { value: 'perc', label: 'the percussion' }, { value: null, label: 'none' }] },
+  // Piano or stabs (SCOPE.md §6.9a): on tracks that could play either (there is piano MIDI to learn from).
+  { rule: 'keys', label: 'Chords', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'pad'], when: (g) => g.rules.keys != null,
+    options: [{ value: 'stabs', label: 'chord stabs' }, { value: 'piano', label: 'a piano part' }] },
+  { rule: 'pianoKind', label: 'Piano', group: 'Sound', roles: ['piano', 'bass', 'pad'], when: (g) => g.rules.keys === 'piano',
+    options: [{ value: 'loop', label: 'a loop on the key (the bass as it is)' }, { value: 'progression', label: 'a progression (the bass follows it)' }] },
   { rule: 'padIn', label: 'Break layer', group: 'Breakdowns', roles: ['pad'], when: (g) => has('break')(g) && !!g.rules.padPreset, unset: false,
     options: yesNo('a pad or a reese', 'none') },
 )
 
 /** The stab choices of tracks whose stabs are written for them (rule `stabFit`). */
-const fitted = (g: Generation) => !!g.rules.stabs && !!g.rules.stabFit
+const fitted = (g: Generation) => stabbing(g) && !!g.rules.stabFit
 /** …and played as one loop (rule `stabLoop`). */
 function looped(g: Generation): boolean { return fitted(g) && !!g.rules.stabLoop }
 CHOICES.push(
@@ -174,7 +182,7 @@ CHOICES.push(
   { rule: 'stabRoll', label: 'Stab roll into drops', group: 'Builds', roles: STAB_ROLES, when: looped,
     options: [{ value: 'none', label: 'none' }, { value: 'eighths', label: 'in 8ths' }, { value: 'sixteenths', label: '8ths, then 16ths' }] },
 
-  { rule: 'stabFit', label: 'Stabs', group: 'Sound', roles: STAB_ROLES, when: (g) => !!g.rules.stabs, unset: false,
+  { rule: 'stabFit', label: 'Stabs', group: 'Sound', roles: STAB_ROLES, when: stabbing, unset: false,
     options: yesNo('written for the track', 'placed as before') },
   { rule: 'stabTurn', label: 'Stabs every 8 bars', group: 'Every 8 and 16 bars', roles: STAB_ROLES, when: fitted,
     options: [{ value: 'none', label: 'no turn' }, { value: 'drop', label: 'the last stab left out' }, { value: 'push', label: 'the last stab early' },

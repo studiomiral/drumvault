@@ -134,12 +134,12 @@ interface ClipBase {
 /** What a bass clip renders: an imported MIDI part through a Serum 2 preset (SCOPE.md §6.7). */
 export interface BassRender {
   /**
-   * Absent on older bass projects. Strings (§6.10) and vocal phrases (§6.11) share the render
-   * pipeline; keys parts, Serum chord stabs and drones only in tracks made before they were removed.
+   * Absent on older bass projects. Strings (§6.10), vocal phrases (§6.11) and piano parts (§6.9a)
+   * share the render pipeline; keys parts, Serum chord stabs and drones only in tracks made before they were removed.
    */
-  role?: 'bass' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal' | 'pad' | 'ambience'
+  role?: 'bass' | 'piano' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal' | 'pad' | 'ambience'
   keyLabel?: string | null
-  /** Absolute path of the .SerumPreset; strings' is a Strings page sample (library-relative). */
+  /** Absolute path of the .SerumPreset; strings' is a Strings page sample, a sampled bass's or piano's its one-shot (library-relative). */
   preset: string
   presetName: string
   midiId: number

@@ -1005,7 +1005,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/", ".drumvault/pads/", ".drumvault/ambience/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/piano/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/", ".drumvault/pads/", ".drumvault/ambience/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
     if out_rel.startswith(".drumvault/vocals/"):
@@ -1030,9 +1030,11 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
             return {"path": out_rel, "cached": True}
         raise PipelineError("not_found", f"An older track's drone can't be made again: {out_rel}")
     stab = out_rel.startswith(".drumvault/stabs/")
+    # A piano part (SCOPE.md §6.7c): chords, through a Serum piano patch or a Piano tab one-shot played with as many voices.
+    piano = out_rel.startswith(".drumvault/piano/")
     _drop_stale_bass_renders(out.parent, STAB_RENDER_VERSION if stab else BASS_RENDER_VERSION)
     from . import basssample
-    sampled = out_rel.startswith(".drumvault/bass/") and basssample.is_sample(preset)
+    sampled = (out_rel.startswith(".drumvault/bass/") and basssample.is_sample(preset)) or (piano and basssample.is_piano_sample(preset))
     row = None
     if midi_id >= 1:
         with LibraryDB(lib) as db:
@@ -1045,7 +1047,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     if sampled and ".." in Path(preset).parts:
         raise PipelineError("bad_path", f"Bad bass sample path: {preset}")
     if not src.exists():
-        raise PipelineError("not_found", f"{'Bass sample' if sampled else 'Serum preset'} not found: {preset}")
+        raise PipelineError("not_found", f"{('Piano sample' if piano else 'Bass sample') if sampled else 'Serum preset'} not found: {preset}")
     midi_file = lib / row["rel_path"] if row is not None else None
     newest = max(src.stat().st_mtime, midi_file.stat().st_mtime if midi_file is not None and midi_file.exists() else 0)
     if out.exists() and out.stat().st_mtime >= newest:
@@ -1057,7 +1059,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
         parts = midimod.apply_groove(parts, groove)
     sr = settings.output_sample_rate
     if sampled:
-        # A Bass Samples page one-shot plays the line like a sampler (basssample.py): its own note
+        # A Bass (or Piano) tab one-shot plays the line like a sampler (basssample.py): its own note
         # is its key's root (corrected by its pitch fix), else read from its sound.
         with LibraryDB(lib) as db:
             hit = db.hit_by_path(preset)
@@ -1066,16 +1068,17 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
             pc = (keymod.parse_label(hit["key_label"])[0] - int(hit["pitch_fix"] or 0)) % 12
         if pc is None:
             a = load(src)
-            pc = basssample.sample_pitch_class(a.data.mean(axis=1), a.sr, settings)
+            pc = basssample.sample_pitch_class(a.data.mean(axis=1), a.sr, settings, piano=piano)
         if pc is None:
-            raise PipelineError("no_pitch", f"The bass sample has no note to play from: {Path(preset).name} (set its key on the Bass Samples page)")
-        data = basssample.render(settings, preset, parts, pc, bpm, loop_bars)
+            what, tab = ("piano", "Piano") if piano else ("bass", "Bass")
+            raise PipelineError("no_pitch", f"The {what} sample has no note to play from: {Path(preset).name} (set its note on the {tab} tab)")
+        data = basssample.render(settings, preset, parts, pc, bpm, loop_bars, poly=piano)
     else:
         try:
             # A chord stab part plays exactly the step sequencer's notes: the preset's own arp and
             # clip player (their own notes, on their own grid) stay off.
             data = serum.host(settings.serum_plugin, settings.serum_plugin_name).render_loop(
-                src, parts, bpm, loop_bars, sr, sequencers=not stab)
+                src, parts, bpm, loop_bars, sr, sequencers=not (stab or piano))
         except serum.SerumError as e:
             raise PipelineError("serum", str(e)) from e
     if float(np.abs(data).max(initial=0.0)) > 1e-5:
@@ -1145,7 +1148,7 @@ def _render_strings(settings: Settings, source: str, transpose: int, bpm: float,
 
 # What the app makes for its projects and generations, rendered again whenever it's gone: the bass
 # and strings parts, and FX stretched to other tempos (and older tracks' keys, stab and drone parts).
-RENDER_DIRS = ("bass", "keys", "stabs", "drones", "strings", "tempo")
+RENDER_DIRS = ("bass", "piano", "keys", "stabs", "drones", "strings", "tempo")
 
 
 def clean_renders(settings: Settings, keep: list[str], dry_run: bool = False, recent_s: float = 600.0) -> dict:

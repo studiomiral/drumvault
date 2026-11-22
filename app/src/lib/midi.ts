@@ -54,10 +54,10 @@ export interface PlacedNote {
 }
 
 /** The notes the project's bass clips play: each clip's MIDI looped from its trim, transposed, cut at the clip end. */
-export function bassNotes(project: Project, midis: MidiItem[]): PlacedNote[] {
+export function bassNotes(project: Project, midis: MidiItem[], role: 'bass' | 'piano' = 'bass'): PlacedNote[] {
   const out: PlacedNote[] = []
   for (const c of project.clips as Clip[]) {
-    if (c.type !== 'audio' || !c.bass || (c.bass.role ?? 'bass') !== 'bass') continue
+    if (c.type !== 'audio' || !c.bass || (c.bass.role ?? 'bass') !== role) continue
     const midi = midis.find((m) => m.id === c.bass!.midiId)
     const source = playedNotes(c.bass) ?? midi?.notes
     if (!source) continue

@@ -17,7 +17,7 @@ import {
 import { CHOICES, choiceValue } from '../generate/choices'
 import { refine, type RefineOptions } from '../generate/critic'
 import { bassPath } from '../audio/schedule'
-import { bassPatches, bassSettings, loadBass, saveBassSettings, useBass, type BassSource } from './bass'
+import { bassPatches, bassSettings, loadBass, pianoPatches, saveBassSettings, useBass, type BassSource } from './bass'
 import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
@@ -57,6 +57,8 @@ export interface GenerateSettings {
   disco: { enabled: boolean }
   /** Chord stabs on/off: when on, every track plays them (SCOPE.md §6.9). */
   stabs: { enabled: boolean }
+  /** Piano on/off (when on, a quarter of house tracks play a piano part instead of the stabs, SCOPE.md §6.9a) and what plays it. */
+  piano: { enabled: boolean; source: BassSource }
   /** Strings on/off (when on, some tracks get them, SCOPE.md §6.10) and the Strings lane's sidechain depth (0…1). */
   strings: { enabled: boolean; sidechain: number }
   /** The breakdown layer on/off: when on, tracks may get a pad or a reese in their breakdowns (SCOPE.md §6.7b). */
@@ -152,6 +154,13 @@ function savedStabs(): GenerateSettings['stabs'] {
   catch { return { enabled: true } }
 }
 
+const PIANO_KEY = 'drumvault.generate.piano'
+
+function savedPiano(): GenerateSettings['piano'] {
+  try { return { enabled: true, source: 'both', ...JSON.parse(localStorage.getItem(k(PIANO_KEY)) ?? '{}') } }
+  catch { return { enabled: true, source: 'both' } }
+}
+
 const LOCKS_KEY = 'drumvault.generate.locks'
 
 function savedLocks(): Rules {
@@ -232,7 +241,7 @@ interface ShortlistItem {
 /** The loaded genre's settings, as remembered. */
 function savedSettings(): GenerateSettings {
   const [minMinutes, maxMinutes] = GENRE_START[storeGenre].minutes
-  return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
+  return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), piano: savedPiano(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
 }
 
 const noKeep = (): KeepToggles => ({ structure: false, key: false, lanes: [], bassline: false, patch: false })
@@ -376,6 +385,9 @@ function options(fresh = false): GenerateOptions {
   const stabHits = hits.filter((h) => h.kind === 'stab')
   const disco = settings.disco.enabled && discoHits.length ? { hits: discoHits } : null
   const stabs = settings.stabs.enabled && stabHits.length ? { hits: stabHits, rhythms: stabsSettings().rhythms ?? [] } : null
+  const pianoParts = useBass.getState().pianoParts
+  const pianoPool = pianoPatches(settings.piano.source)
+  const piano = settings.piano.enabled && pianoParts.length && pianoPool.length ? { midis: pianoParts, presets: pianoPool } : null
   const stringHits = hits.filter((h) => h.kind === 'strings')
   const strings = settings.strings.enabled && stringHits.length ? { hits: stringHits, sidechain: settings.strings.sidechain } : null
   // Vocals: the take the open track sings (made for it, or its Splice loop); a new track sings a
@@ -387,7 +399,7 @@ function options(fresh = false): GenerateOptions {
   const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
   const bedHits = hits.filter((h) => h.kind === 'ambience')
   const ambience = settings.ambience.enabled && bedHits.length ? { hits: bedHits } : null
-  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, strings, pads, ambience, vocals, templates, references }
+  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, piano, strings, pads, ambience, vocals, templates, references }
 }
 
 /**
@@ -825,6 +837,36 @@ export function newBed(): boolean {
 }
 
 /** The breakdown layer on or off for new generations (remembered). */
+export function setPianoOptions(patch: Partial<GenerateSettings['piano']>): void {
+  const { settings, set } = useGenerate.getState()
+  const piano = { ...settings.piano, ...patch }
+  set({ settings: { ...settings, piano } })
+  try {
+    localStorage.setItem(k(PIANO_KEY), JSON.stringify(piano))
+  } catch {
+    // not remembered
+  }
+  invalidate()
+}
+
+/**
+ * The track's piano made again (SCOPE.md §6.9a): another part (`part`: a new seed for it; under a
+ * progression the bass follows it again) or the same part through another patch or one-shot (`sound`).
+ */
+export function rerollPiano(what: 'part' | 'sound'): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  const opts = options()
+  if (!g?.piano || !samples || !opts.piano) return false
+  const others = opts.piano.presets.filter((p) => p.path !== g.piano!.preset.path)
+  if (what === 'sound' && !others.length) return false
+  const [rule, value] = what === 'part' ? ['pianoSeed', randomSeed()] : ['pianoPreset', others[Math.floor(Math.random() * others.length)].path]
+  const roles: Role[] = what === 'part' ? ['piano', 'bass', 'pad'] : ['piano']
+  const next = listenBack(setTrackRule(samples, opts, g, rule, value, roles), { only: roles })
+  apply(next, clipIds(g, next, (name) => roles.includes(laneRole(name)!)), what === 'part' ? 'New piano' : 'New piano sound')
+  return true
+}
+
 export function setPadsOptions(patch: Partial<GenerateSettings['pads']>): void {
   const { settings, set } = useGenerate.getState()
   const pads = { ...settings.pads, ...patch }
