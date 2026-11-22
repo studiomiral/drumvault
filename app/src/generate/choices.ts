@@ -155,9 +155,9 @@ CHOICES.push(
     options: [{ value: 'stab', label: 'the stabs' }, { value: 'piano', label: 'the piano' }, { value: 'bass', label: 'the bassline' },
       { value: 'perc', label: 'the percussion' }, { value: null, label: 'none' }] },
   // Piano or stabs (SCOPE.md §6.9a): on tracks that could play either (there is piano MIDI to learn from).
-  { rule: 'keys', label: 'Chords', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'pad'], when: (g) => g.rules.keys != null,
+  { rule: 'keys', label: 'Chords', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'pad', 'strings'], when: (g) => g.rules.keys != null,
     options: [{ value: 'stabs', label: 'chord stabs' }, { value: 'piano', label: 'a piano part' }] },
-  { rule: 'pianoKind', label: 'Piano', group: 'Sound', roles: ['piano', 'bass', 'pad'], when: (g) => g.rules.keys === 'piano',
+  { rule: 'pianoKind', label: 'Piano', group: 'Sound', roles: ['piano', 'bass', 'pad', 'strings'], when: (g) => g.rules.keys === 'piano',
     options: [{ value: 'loop', label: 'a loop on the key (the bass as it is)' }, { value: 'progression', label: 'a progression (the bass follows it)' }] },
   { rule: 'padIn', label: 'Break layer', group: 'Breakdowns', roles: ['pad'], when: (g) => has('break')(g) && !!g.rules.padPreset, unset: false,
     options: yesNo('a pad or a reese', 'none') },

@@ -861,7 +861,7 @@ export function rerollPiano(what: 'part' | 'sound'): boolean {
   const others = opts.piano.presets.filter((p) => p.path !== g.piano!.preset.path)
   if (what === 'sound' && !others.length) return false
   const [rule, value] = what === 'part' ? ['pianoSeed', randomSeed()] : ['pianoPreset', others[Math.floor(Math.random() * others.length)].path]
-  const roles: Role[] = what === 'part' ? ['piano', 'bass', 'pad'] : ['piano']
+  const roles: Role[] = what === 'part' ? ['piano', 'bass', 'pad', 'strings'] : ['piano']
   const next = listenBack(setTrackRule(samples, opts, g, rule, value, roles), { only: roles })
   apply(next, clipIds(g, next, (name) => roles.includes(laneRole(name)!)), what === 'part' ? 'New piano' : 'New piano sound')
   return true

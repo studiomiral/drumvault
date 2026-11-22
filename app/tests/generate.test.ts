@@ -2850,7 +2850,9 @@ describe('generator: piano instead of stabs (SCOPE.md §6.9a)', () => {
     notes: [[0, 0.5, 45, 100], [1.5, 0.25, 57, 90], [2.5, 0.25, 45, 80], [3, 0.5, 52, 100]], favorite: 0, source: null, source_code: null }
   const opts: GenerateOptions = { ...OPTS, stabs: { hits: [STAB] }, piano: { midis: [LOOP, PROG], presets: [PATCH] },
     bass: { midis: [BASSLINE], presets: [{ path: '/presets/Bass/P.SerumPreset', name: 'P', folder: 'Bass', tags: [] }], favorites: [], sidechain: 0.5 },
-    pads: { presets: [{ path: '/presets/Pads/Warm.SerumPreset', name: 'Warm', folder: 'Pads', tags: [] }] } }
+    pads: { presets: [{ path: '/presets/Pads/Warm.SerumPreset', name: 'Warm', folder: 'Pads', tags: [] }] },
+    strings: { hits: [{ id: 40, kind: 'strings', file_name: 'Strings Am.wav', name: 'Strings Am', rel_path: 'Strings/strings-am.wav', key_label: 'Am',
+      key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 16, channels: 2 }] } }
   const gs = Array.from({ length: 80 }, (_, i) => generate(LIB, opts, 9100 + i))
   const keyed = gs.filter((g) => g.key)
   const lanesNamed = (g: Generation, re: RegExp) => new Set(g.project.lanes.filter((l) => re.test(l.name)).map((l) => l.id))
@@ -2900,8 +2902,9 @@ describe('generator: piano instead of stabs (SCOPE.md §6.9a)', () => {
     expect(progs.length).toBeGreaterThan(10)
     for (const g of progs) {
       expect(g.piano!.kind).toBe('progression')
-      expect(g.rules.padIn).toBe(false)
+      expect([g.rules.padIn, g.rules.stringsIn]).toEqual([false, false])
       expect(clipsIn(g, /^Pad$/)).toHaveLength(0)
+      expect(clipsIn(g, /^Strings$/)).toHaveLength(0)
       expect(g.bass!.midi.bars).toBe(g.piano!.midi.bars)
       // The bass's first notes move with the chords.
       const firsts = new Set(Array.from({ length: g.piano!.midi.bars }, (_, b) => {
@@ -2916,6 +2919,15 @@ describe('generator: piano instead of stabs (SCOPE.md §6.9a)', () => {
     }
     const loops = Array.from({ length: 10 }, (_, i) => generate(LIB, { ...opts, locks: { keys: 'piano', pianoKind: 'loop' } }, 9400 + i)).filter((g) => g.piano)
     for (const g of loops) expect(g.piano!.kind).toBe('loop')
+  })
+
+  it('balances the piano as the music part of the user\'s tracks, a lead over it, low-cut and compressed', () => {
+    for (const g of keyed.filter((x) => x.piano)) {
+      const lane = g.project.lanes.find((l) => l.name === 'Piano')!
+      // The render plays at RENDER_LEVEL_DB (−17) in the drops: to the kick's level (−17.5) and the music part's (−8), plus the lead's 1.5.
+      expect(lane.levelDb).toBe(-7)
+      expect(lane.eq?.bands.some((b) => b.type === 'highpass' && b.freq === 150)).toBe(true)
+    }
   })
 
   it('switches a track between stabs and piano with its choice', () => {

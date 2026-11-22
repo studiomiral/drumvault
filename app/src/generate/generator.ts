@@ -1698,8 +1698,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   rules.keys = !keys ? null : piano ? 'piano' : 'stabs'
   if (piano) Object.assign(rules, { pianoKind: piano.kind, pianoPreset: piano.preset.path, pianoSeed: Number(rules.pianoSeed ?? 0) })
   else Object.assign(rules, { pianoKind: null, pianoPreset: null })
-  // A progression has no pad under it (the pad holds the key's chord).
-  if (pianoPart?.kind === 'progression') rules.padIn = false
+  // A progression has no pad or strings under it (they hold the key's chord).
+  if (pianoPart?.kind === 'progression') Object.assign(rules, { padIn: false, stringsIn: false })
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
   // otherwise the build-up takes the roll's place (a fill can still lead in with it).
   if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
@@ -3918,7 +3918,7 @@ export function setTrackRule(all: SampleListItem[], opts: GenerateOptions, g: Ge
 }
 
 /** The rules a piano remake owns (what it is, and what it changes: the lead, the pad under a progression). */
-const PIANO_RULES = ['keys', 'pianoKind', 'pianoPreset', 'pianoSeed', 'padIn', 'lead'] as const
+const PIANO_RULES = ['keys', 'pianoKind', 'pianoPreset', 'pianoSeed', 'padIn', 'stringsIn', 'lead'] as const
 
 /** Rules that follow when one of them is set: a build-up and a roll sample into drops don't go together. */
 const COUPLED: Record<string, string[]> = { dropFill: ['buildup'], buildup: ['dropFill'] }
@@ -3933,7 +3933,8 @@ function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generati
   })
   // A part the remake can't play again (its module off since, its samples gone) stays as it is.
   const gone = (role: Role) => (role === 'bass' && g.bass && !r.bass)
-    || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs) || (role === 'strings' && !!g.picks.strings && !r.picks.strings)
+    || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs)
+    || (role === 'strings' && !!g.picks.strings && !r.picks.strings && r.piano?.kind !== 'progression')
     || (role === 'piano' && !!g.piano && !r.piano && r.rules.keys === 'piano')
   const own = new Set(Object.keys(values).flatMap((k) => [k, ...COUPLED[k] ?? []]))
   // The piano made again (SCOPE.md §6.9a): its part and its rules are the remake's, and under a

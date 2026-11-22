@@ -35,7 +35,7 @@ export function bassy(s: Pick<SampleListItem, 'category' | 'tone'>): boolean {
 /** Each lane's low cut (Hz); none on the kick and the bass. */
 const LOW_CUT_HZ: Partial<Record<Role, number>> = {
   clap: 150, clap2: 150, clap3: 150, buildup: 120, hats: 250, hats2: 250, ride: 250, perc: 180, perc2: 180,
-  top: 150, top2: 150, top3: 150, top4: 150, groove: 120, stab: 120, stab2: 120, stab3: 120, strings: 150, pad: 150, bed: 200, vocal: 150, vchop: 200, disco: 120, disco2: 120,
+  top: 150, top2: 150, top3: 150, top4: 150, groove: 120, stab: 120, stab2: 120, stab3: 120, piano: 150, strings: 150, pad: 150, bed: 200, vocal: 150, vchop: 200, disco: 120, disco2: 120,
   fills: 120, fx: 120, fx2: 120, fx3: 120, crash: 250, atmos: 120,
 }
 /**
