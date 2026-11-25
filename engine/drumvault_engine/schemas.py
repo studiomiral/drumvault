@@ -108,7 +108,7 @@ class Overrides(BaseModel):
 Method = Literal["process_zip", "reprocess_zip", "import_samples", "delete_zip", "rebuild_loops", "analyze_library", "cancel", "health",
                  "analyze_zip", "set_sample_meta", "mark_reviewed", "grid_preview", "delete_samples", "restore_samples", "shift_sample", "stretch_samples", "import_midi",
                  "render_bass", "serum_presets", "save_midi", "set_midi_meta",
-                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "preflight", "scan_references", "clean_renders", "import_vocal", "analyze_vocal", "import_vocal_loops", "shutdown"]
+                 "delete_midi", "import_hits", "scan_splice", "set_hit_meta", "delete_hits", "master_mixdown", "preflight", "scan_references", "clean_renders", "import_vocal", "analyze_vocal", "import_vocal_loops", "import_music_loops", "shutdown"]
 
 
 class RpcRequest(BaseModel):
@@ -205,6 +205,8 @@ class RenderBassParams(BaseModel):
     bars: Optional[int] = Field(default=None, ge=1, le=16)
     # The track's groove: per 16th step of the bar, how late (16ths) notes starting there play.
     groove: Optional[list[float]] = Field(default=None, min_length=16, max_length=16)
+    # A music loop's colour (out_rel under .drumvault/music/): [low cut Hz, bell Hz, bell dB, bell Q, shelf dB, drive dB].
+    color: Optional[list[float]] = Field(default=None, min_length=6, max_length=6)
     # A strings part (out_rel under .drumvault/strings/): `preset` is the Strings page sample.
     settings: dict[str, Any] = Field(default_factory=dict)
 
@@ -212,6 +214,12 @@ class RenderBassParams(BaseModel):
 class AnalyzeVocalParams(BaseModel):
     """Find a take's phrase loop, chops and key again (pipeline.analyze_vocal)."""
     folder: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportMusicLoopsParams(BaseModel):
+    """Music loops made ready for Generate (musicloop.import_loops)."""
+    paths: list[str]
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

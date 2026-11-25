@@ -151,11 +151,13 @@ export type RpcRequest =
   | { id: string; method: "shift_sample"; params: { sample_id: number; beats: number; settings: EngineSettings } }
   | { id: string; method: "stretch_samples"; params: { rel_paths: string[]; bpm: number; settings: EngineSettings } }
   | { id: string; method: "import_midi"; params: { paths: string[]; role?: "bass" | "piano"; settings: EngineSettings } }
-  | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; settings: EngineSettings } }
+  | { id: string; method: "render_bass"; params: { preset: string; midi_id: number; transpose: number; bpm: number; out_rel: string; notes?: number[][] | null; bars?: number | null; groove?: number[] | null; color?: number[] | null; settings: EngineSettings } }
   | { id: string; method: "set_midi_meta"; params: { midi_id: number; role?: string | null; key_label?: string | null; clear_key?: boolean; settings: EngineSettings } }
   | { id: string; method: "delete_midi"; params: { midi_ids: number[]; settings: EngineSettings } }
   | { id: string; method: "import_vocal"; params: { folder: string; settings: EngineSettings } }
   | { id: string; method: "analyze_vocal"; params: { folder: string; settings: EngineSettings } }
+  | { id: string; method: "import_vocal_loops"; params: { paths: string[]; settings: EngineSettings } }
+  | { id: string; method: "import_music_loops"; params: { paths: string[]; settings: EngineSettings } }
   | { id: string; method: "clean_renders"; params: { keep: string[]; dry_run?: boolean; settings: EngineSettings } }
   | { id: string; method: "master_mixdown"; params: { mix_path: string; out_path: string; format?: "pcm24" | "float32"; settings: EngineSettings } }
   | { id: string; method: "preflight"; params: { mix_path: string; master_path?: string | null; bpm: number; sections?: PreflightSection[] | null; key_label?: string | null; whole?: boolean; settings: EngineSettings } }

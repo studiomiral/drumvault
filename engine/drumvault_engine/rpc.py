@@ -22,11 +22,11 @@ from typing import Any, Callable, TextIO
 
 from pydantic import ValidationError
 
-from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, preflight as preflightmod, references as referencesmod, splice as splicemod, stretch, vocalloop
+from . import __version__, hits as hitsmod, key as keymod, master as mastermod, pipeline, preflight as preflightmod, references as referencesmod, splice as splicemod, stretch, vocalloop, musicloop
 from .config import Settings
 from .schemas import (
     AnalyzeZipParams, CancelParams, DeleteHitsParams, DeleteMidiParams, DeleteSamplesParams, DeleteZipParams, GridPreviewParams,
-    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, PreflightParams, ScanReferencesParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams, ImportVocalLoopsParams,
+    HealthResult, ImportHitsParams, ImportMidiParams, ImportSamplesParams, JobAccepted, JobDoneEvent, MarkReviewedParams, MasterMixdownParams, PreflightParams, ScanReferencesParams, CleanRendersParams, ImportVocalParams, AnalyzeVocalParams, ImportVocalLoopsParams, ImportMusicLoopsParams,
     ProcessZipParams, ProgressEvent,
     RebuildLoopsParams, RenderBassParams, ReprocessZipParams, RestoreSamplesParams, RpcError, RpcRequest, SampleCounts, SaveMidiParams,
     ScanSpliceParams, SerumPresetsParams, SetHitMetaParams, SetMidiMetaParams, SetSampleMetaParams, ShiftSampleParams, StretchSamplesParams,
@@ -45,7 +45,7 @@ DIRECT_METHODS = {"grid_preview": GridPreviewParams, "delete_samples": DeleteSam
                   "delete_midi": DeleteMidiParams, "import_hits": ImportHitsParams, "scan_splice": ScanSpliceParams,
                   "set_hit_meta": SetHitMetaParams, "delete_hits": DeleteHitsParams,
                   "master_mixdown": MasterMixdownParams, "preflight": PreflightParams,
-                  "scan_references": ScanReferencesParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams, "import_vocal_loops": ImportVocalLoopsParams}
+                  "scan_references": ScanReferencesParams, "clean_renders": CleanRendersParams, "import_vocal": ImportVocalParams, "analyze_vocal": AnalyzeVocalParams, "import_vocal_loops": ImportVocalLoopsParams, "import_music_loops": ImportMusicLoopsParams}
 
 
 @dataclass
@@ -215,7 +215,7 @@ class RpcServer:
                 self._reply(req_id, pipeline.import_midi(settings, p.paths, p.role))
             elif method == "render_bass":
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
-                                                         p.notes, p.bars, p.groove))
+                                                         p.notes, p.bars, p.groove, p.color))
             elif method == "save_midi":
                 self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label))
             elif method == "set_midi_meta":
@@ -236,6 +236,8 @@ class RpcServer:
                 self._reply(req_id, pipeline.import_vocal(settings, p.folder))
             elif method == "import_vocal_loops":
                 self._reply(req_id, vocalloop.import_loops(settings, p.paths))
+            elif method == "import_music_loops":
+                self._reply(req_id, musicloop.import_loops(settings, p.paths))
             elif method == "clean_renders":
                 self._reply(req_id, pipeline.clean_renders(settings, p.keep, p.dry_run))
             elif method == "master_mixdown":
@@ -248,7 +250,7 @@ class RpcServer:
                 self._reply(req_id, referencesmod.scan(settings, p.analyze))
             else:
                 self._reply(req_id, pipeline.serum_presets(settings, p.root, p.folders))
-        except (pipeline.PipelineError, hitsmod.HitError, mastermod.MasterError, preflightmod.PreflightError, vocalloop.VocalLoopError) as e:
+        except (pipeline.PipelineError, hitsmod.HitError, mastermod.MasterError, preflightmod.PreflightError, vocalloop.VocalLoopError, musicloop.MusicLoopError) as e:
             self._error(req_id, e.code, str(e))
         except Exception as e:
             log.error("%s failed:\n%s", method, traceback.format_exc())

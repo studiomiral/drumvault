@@ -341,6 +341,22 @@ class Thresholds:
     vocal_loop_max_s: float = 240.0          # (a pack's whole hook: its best 8 bars are the phrase)
     splice_link_timeout_s: float = 6.0
     vocal_loop_suggest_bpm: float = 8.0     # the Splice page suggests vocal loops this close to the library tempo
+    # Music loops (musicloop.py, SCOPE.md §6.11b): their length; a loop without a tempo in its name
+    # gets the tempo that makes it whole bars (1, 2, 4 or 8) within this range.
+    music_loop_min_s: float = 1.0
+    music_loop_max_s: float = 180.0
+    music_loop_bpm_min: float = 100.0
+    music_loop_bpm_max: float = 140.0
+    music_loop_bars_tolerance: float = 0.03   # a loop this close (in bars) to whole bars is whole bars
+    # Its colour in each track (the app draws it within these; the engine clamps to them): a low cut,
+    # a bell in the mids, a high shelf, and a soft saturation (drive, dB into a tanh, gain matched).
+    music_max_shift: int = 3                  # semitones, either way (never 0: the app doesn't render it so)
+    music_low_cut_hz: tuple[float, float] = (100.0, 300.0)
+    music_bell_hz: tuple[float, float] = (250.0, 4000.0)
+    music_bell_db: float = 6.0                # ± at most
+    music_shelf_hz: float = 7000.0
+    music_shelf_db: float = 4.0               # ± at most
+    music_drive_db: tuple[float, float] = (0.0, 12.0)
 
     # ---- mastering (master.py): the mixdown through Ozone 11 into mastered.wav -----
     # The master's loudness is set by its drops: its loudest `master_short_term_s` (short-term

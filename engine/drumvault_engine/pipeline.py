@@ -991,7 +991,7 @@ def _drop_stale_bass_renders(folder: Path, version: int = BASS_RENDER_VERSION) -
 
 def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, bpm: float, out_rel: str,
                 notes: list[list[float]] | None = None, bars: int | None = None,
-                groove: list[float] | None = None) -> dict:
+                groove: list[float] | None = None, color: list[float] | None = None) -> dict:
     """Render a MIDI part through a Serum 2 preset as a seamless loop at `bpm`, loudness-matched,
     to `out_rel` (under .drumvault/bass/). Cached: redone only when the preset or MIDI changed.
     `notes`/`bars` (edited in the piano roll) replace the imported file's; the app names such
@@ -1005,7 +1005,7 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     from . import midi as midimod, serum
     from .midi import Note
     lib = Path(settings.library_path)
-    if not out_rel.startswith((".drumvault/bass/", ".drumvault/piano/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/", ".drumvault/pads/", ".drumvault/ambience/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
+    if not out_rel.startswith((".drumvault/bass/", ".drumvault/piano/", ".drumvault/keys/", ".drumvault/stabs/", ".drumvault/drones/", ".drumvault/strings/", ".drumvault/vocals/", ".drumvault/pads/", ".drumvault/ambience/", ".drumvault/music/")) or ".." in Path(out_rel).parts or not out_rel.endswith(".wav"):
         raise PipelineError("bad_path", f"Bad bass render path: {out_rel}")
     out = lib / out_rel
     if out_rel.startswith(".drumvault/vocals/"):
@@ -1021,6 +1021,8 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
         except stretch.StretchError as e:
             raise PipelineError("stretch", str(e)) from e
         return {"path": out_rel, "cached": False}
+    if out_rel.startswith(".drumvault/music/"):
+        return _render_music(settings, preset, transpose, bpm, int(bars or 1), color, out, out_rel)
     if out_rel.startswith(".drumvault/strings/"):
         return _render_strings(settings, preset, transpose, bpm, int(bars or 8), out, out_rel)
     if out_rel.startswith(".drumvault/ambience/"):
@@ -1087,6 +1089,26 @@ def render_bass(settings: Settings, preset: str, midi_id: int, transpose: int, b
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f".{out.name}.part")
     sf.write(str(tmp), data, sr, subtype="PCM_24", format="WAV")
+    tmp.replace(out)
+    return {"path": out_rel, "cached": False}
+
+
+def _render_music(settings: Settings, source: str, transpose: int, bpm: float, bars: int, color: list[float] | None,
+                  out: Path, out_rel: str) -> dict:
+    """A music loop in a track (musicloop.py, SCOPE.md §6.11b): moved into the key, coloured, at `bpm`."""
+    from . import musicloop
+    src = Path(settings.library_path) / source
+    if not source.startswith(f"{musicloop.FOLDER}/") or ".." in Path(source).parts or not src.exists():
+        raise PipelineError("not_found", f"Music loop not found: {source}")
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return {"path": out_rel, "cached": True}
+    try:
+        data = musicloop.render(settings, source, transpose, bpm, bars, color)
+    except stretch.StretchError as e:
+        raise PipelineError("stretch", str(e)) from e
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.part")
+    sf.write(str(tmp), data, settings.output_sample_rate, subtype="PCM_24", format="WAV")
     tmp.replace(out)
     return {"path": out_rel, "cached": False}
 
