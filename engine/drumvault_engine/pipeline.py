@@ -524,6 +524,9 @@ def _write_outputs(db: LibraryDB, lib: Path, zid: int, tag: str, analysis: ZipAn
                 shift = int(um.get("shift_beats") or 0) if kind != "oneshot" else 0
                 if shift:
                     data = rotate_beats(data, out_sr, settings.library_bpm, shift)
+                    if kind == "event":  # its body moved with the sound
+                        body_bars = eventmod.file_body_bars(data, out_sr, settings.library_bpm, bars or 1, th)
+                        fields["body_bars"] = body_bars
                 fields["shift_beats"] = shift
                 if kind == "loop":
                     fields["groove"] = json.dumps(groovemod.loop_groove(data, out_sr, settings.library_bpm, th) or {})
@@ -787,9 +790,11 @@ def shift_sample(settings: Settings, sample_id: int, beats: int) -> dict:
                             peakmod.peaks_for(moved, sr, row["kind"], row["bars"], settings.thresholds))
         db.set_shift(sample_id, new)
         if row["kind"] == "event":
+            # The body moves with the sound (a fill moved a bar later ends a bar later, on the drop).
+            body = eventmod.file_body_bars(moved, sr, float(row["bpm"]), int(row["bars"]), settings.thresholds)
+            db.set_body_bars(sample_id, body)
             old_shape = json.loads(row["shape"] or "{}") if "shape" in row.keys() else {}
-            shape = eventmod.shape(moved, sr, float(row["bpm"]), int(row["bars"]), int(row["body_bars"] or row["bars"]),
-                                   settings.thresholds)
+            shape = eventmod.shape(moved, sr, float(row["bpm"]), int(row["bars"]), body, settings.thresholds)
             db.set_shape(sample_id, {**shape, "boundary": old_shape.get("boundary")})
     return {"sample_id": sample_id, "shift_beats": new}
 
@@ -1585,8 +1590,12 @@ def analyze_library(settings: Settings, ctx: JobContext | None = None) -> dict:
                 bpm = float(z["bpm_override"] or z["detected_bpm"] or settings.library_bpm)
                 bar = int(round((float(r["source_offset_s"]) - _bar_one_s(db, z)) * bpm / 240.0))
             a = load(path)
+            body = r["body_bars"]
+            if r["shift_beats"]:  # moved in the Library: its body moved with the sound
+                body = eventmod.file_body_bars(a.data, a.sr, float(r["bpm"] or settings.library_bpm), int(r["bars"] or 1), th)
+                db.set_body_bars(r["id"], body)
             db.set_shape(r["id"], _event_shape(a.data, a.sr, float(r["bpm"] or settings.library_bpm), int(r["bars"] or 1),
-                                               r["body_bars"], bar, th))
+                                               body, bar, th))
         not_kept = []
         for j, z in enumerate(unkept):
             ctx.check()

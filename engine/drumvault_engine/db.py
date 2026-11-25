@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # Library folders renamed since libraries were made with them (old → new), moved when a library opens.
 RENAMED_FOLDERS = {"Disco Hits": "Drop Hits"}
@@ -169,7 +169,14 @@ class LibraryDB:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        row = self.conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        before = int(row["value"]) if row else SCHEMA_VERSION
         self._migrate()
+        if before < 22:
+            # v22: events moved in the Library ("Move sound") kept the body of where they were
+            # cut, so a fill moved a bar later was placed a bar into the drop. Measured again
+            # (body and shape) by analyze_library.
+            self.conn.execute("UPDATE samples SET shape = NULL WHERE kind = 'event' AND COALESCE(shift_beats, 0) != 0")
         self._rename_folders()
         self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                           (str(SCHEMA_VERSION),))
@@ -498,7 +505,7 @@ class LibraryDB:
 
     def events_without_shape(self) -> list[sqlite3.Row]:
         return self.conn.execute(
-            "SELECT s.id, s.rel_path, s.bpm, s.bars, s.body_bars, s.source_offset_s, s.zip_id, z.kind AS zip_kind "
+            "SELECT s.id, s.rel_path, s.bpm, s.bars, s.body_bars, s.shift_beats, s.source_offset_s, s.zip_id, z.kind AS zip_kind "
             "FROM samples s JOIN zips z ON z.id = s.zip_id WHERE s.kind = 'event' AND s.shape IS NULL").fetchall()
 
     def set_shape(self, sample_id: int, shape: dict) -> None:
@@ -514,6 +521,10 @@ class LibraryDB:
 
     def sample_by_path(self, rel_path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM samples WHERE rel_path = ?", (rel_path,)).fetchone()
+
+    def set_body_bars(self, sample_id: int, body_bars: int) -> None:
+        with self._lock:
+            self._update("samples", sample_id, {"body_bars": body_bars})
 
     def set_shift(self, sample_id: int, shift_beats: int) -> None:
         with self._lock:

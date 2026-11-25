@@ -315,6 +315,9 @@ export class LibraryReader {
     // …and their tempo looked for (v19): a loop is synced to the track.
     if (this.hasTable('hits') && this.hasColumn('hits', 'kind')
         && (this.all<{ n: number }>(`SELECT COUNT(*) AS n FROM hits WHERE kind = 'ambience'${this.hasColumn('hits', 'bpm') ? ' AND bpm IS NULL' : ''}`)[0]?.n ?? 0) > 0) return true
+    // Events moved in the Library (v22): their body measured again (the engine clears their shape when it opens the library).
+    if (this.hasColumn('samples', 'shift_beats') && Number(this.all<{ v: string }>("SELECT value AS v FROM meta WHERE key = 'schema_version'")[0]?.v ?? 22) < 22
+        && (this.all<{ n: number }>("SELECT COUNT(*) AS n FROM samples WHERE kind = 'event' AND shift_beats != 0")[0]?.n ?? 0) > 0) return true
     // The Disco Hits folder renamed Drop Hits (v20): the engine moves it when it opens the library.
     if (this.hasTable('hits')
         && (this.all<{ n: number }>("SELECT COUNT(*) AS n FROM hits WHERE substr(rel_path, 1, 11) = 'Disco Hits/'")[0]?.n ?? 0) > 0) return true

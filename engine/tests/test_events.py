@@ -179,3 +179,60 @@ def test_events_know_the_bar_they_start_on():
     _put(stem, 12 * 4, _burst(2 * BAR, seed=27))
     (e,) = events.extract_events(stem, SR, 1000, BPM, Settings())
     assert e.bar == 12  # 1000 samples early: within the preroll, so on bar 12
+
+
+def _fill_then_silence() -> np.ndarray:
+    """A 2-bar event cut from a stem: a fill in its first bar, a bar of silence after it."""
+    data = np.zeros((2 * BAR, 1), np.float32)
+    data[:BAR] = _burst(BAR, seed=31)
+    return data
+
+
+def test_file_body_bars_follows_the_sound():
+    th = Settings().thresholds
+    data = _fill_then_silence()
+    assert events.file_body_bars(data, SR, BPM, 2, th) == 1
+    # Moved a bar later ("Move sound"): the fill is in the second bar, its body ends there.
+    assert events.file_body_bars(np.roll(data, BAR, axis=0), SR, BPM, 2, th) == 2
+
+
+def _library_with_event(tmp_path, data, shift=0, version=None):
+    """A library holding one 2-bar fill (`data`), cut with a 1-bar body, moved `shift` beats."""
+    import soundfile as sf
+
+    from drumvault_engine.db import LibraryDB
+    rel = "Fills/Drum-Fills/fill_2bar_01.wav"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    sf.write(tmp_path / rel, data, SR)
+    with LibraryDB(tmp_path) as db:
+        db.conn.execute("INSERT INTO zips (id, file_name, kind) VALUES (1, 'a.zip', 'pack')")
+        db.conn.execute("INSERT INTO samples (id, zip_id, kind, category, rel_path, bpm, bars, body_bars, shift_beats, shape) "
+                        "VALUES (1, 1, 'event', 'fill', ?, ?, 2, 1, ?, '{}')", (rel, BPM, shift))
+        if version is not None:
+            db.conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+    return rel
+
+
+def test_move_sound_moves_an_events_body(tmp_path):
+    """A fill moved a bar later in the Library ends a bar later: on the drop, not a bar into it."""
+    import json
+
+    from drumvault_engine import pipeline
+    from drumvault_engine.db import LibraryDB
+    _library_with_event(tmp_path, _fill_then_silence())
+    pipeline.shift_sample(Settings(library_path=str(tmp_path)), 1, 4)
+    with LibraryDB(tmp_path) as db:
+        body, shape = db.conn.execute("SELECT body_bars, shape FROM samples WHERE id = 1").fetchone()
+    assert body == 2 and json.loads(shape)["end"] > 16   # its sound ends in the second bar
+
+
+def test_events_moved_before_are_measured_again(tmp_path):
+    """v22: an event moved in a library from before is measured again by analyze_library."""
+    from drumvault_engine import pipeline
+    from drumvault_engine.db import LibraryDB
+    _library_with_event(tmp_path, np.roll(_fill_then_silence(), BAR, axis=0), shift=4, version=21)
+    with LibraryDB(tmp_path) as db:  # the migration clears its shape...
+        assert db.conn.execute("SELECT shape FROM samples WHERE id = 1").fetchone()[0] is None
+    pipeline.analyze_library(Settings(library_path=str(tmp_path)))
+    with LibraryDB(tmp_path) as db:  # ...and the analysis measures its body again
+        assert db.conn.execute("SELECT body_bars, shape IS NOT NULL FROM samples WHERE id = 1").fetchone()[:] == (2, 1)

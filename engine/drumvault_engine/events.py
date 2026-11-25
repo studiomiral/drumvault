@@ -58,6 +58,17 @@ def body_bars(mono: np.ndarray, beat_len: float, phase: int, bar0: int, a: int, 
     return max(1, -(-last // 4) - bar0)
 
 
+def file_body_bars(data: np.ndarray, sr: int, bpm: float, bars: int, th: Thresholds) -> int:
+    """`body_bars` measured on an event's own file: whole bars from its start to the end of its
+    last loud beat. For an event moved inside itself ("Move sound"): its sound moved, so its body
+    did too (a fill moved a bar later ends a bar later)."""
+    levels = beat_levels(to_mono(data), sr * 60.0 / bpm, 0)[: bars * 4]
+    if not len(levels):
+        return 1
+    loud = np.nonzero(levels >= levels.max() + th.event_body_rel_db)[0]
+    return max(1, min(bars, -(-(int(loud[-1]) + 1) // 4)))
+
+
 def split_beds(regions: list[tuple[int, int]], th: Thresholds) -> list[tuple[int, int]]:
     """Regions longer than `event_max_bars` (atmos beds) cut into `event_bed_bars` chunks."""
     out = []

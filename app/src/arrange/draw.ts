@@ -308,9 +308,13 @@ function drawLoopBody(g: CanvasRenderingContext2D, c: Clip & { type: 'audio' }, 
   }
   const peaks = clipPeaks(c.sample)
   if (!peaks?.length || h < 6) return
-  const full = Math.max(1, (c.sample.bars ?? 1) * BEATS_PER_BAR)  // the peaks cover the whole file
+  // A remixed fill (spliced, reworked) is drawn as it plays: each 16th from the file and the 16th
+  // its slice map says (as schedule.ts plays it), so its waveform is the fill heard, not the sample.
+  const remix = c.remix?.slices.length ? c.remix : null
+  const sources = [peaks, ...(remix?.from ?? []).map((r) => clipPeaks(r) ?? null)]
+  const fulls = [c.sample, ...(remix?.from ?? [])].map((r) => Math.max(1, (r.bars ?? 1) * BEATS_PER_BAR))  // the peaks cover the whole file
   let max = 0
-  for (const [lo, hi] of peaks) max = Math.max(max, -lo, hi)
+  for (const p of sources) for (const [lo, hi] of p ?? []) max = Math.max(max, -lo, hi)
   const scale = max > 0 ? (h / 2) / max : 0
   const mid = top + h / 2
   g.fillStyle = `${color}b0`
@@ -318,9 +322,18 @@ function drawLoopBody(g: CanvasRenderingContext2D, c: Clip & { type: 'audio' }, 
   const to = Math.min(W, Math.ceil(x1))
   for (let x = from; x < to; x += 1) {  // one column per pixel
     const beat = (x - x0) / px
-    const content = (((trim + beat) % L) + L) % L
-    const i = Math.max(0, Math.min(peaks.length - 1, Math.floor((content / full) * peaks.length)))
-    const [lo, hi] = peaks[i]
+    let content = (((trim + beat) % L) + L) % L
+    let src = 0
+    if (remix) {
+      const step = Math.floor(content * STEPS_PER_BEAT)
+      const [which, slice] = remix.slices[step % remix.slices.length]
+      src = which
+      content = (slice + (content * STEPS_PER_BEAT - step)) / STEPS_PER_BEAT
+    }
+    const p = sources[src]
+    if (!p?.length) continue  // its partner's peaks still loading
+    const i = Math.max(0, Math.min(p.length - 1, Math.floor((content / fulls[src]) * p.length)))
+    const [lo, hi] = p[i]
     g.fillRect(x, mid - hi * scale, 1, Math.max(1, (hi - lo) * scale))
   }
 }
