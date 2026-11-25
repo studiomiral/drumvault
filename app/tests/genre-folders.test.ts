@@ -76,9 +76,9 @@ describe('Serum 2 folders per genre (SCOPE.md §5.18)', () => {
     expect(pianoSettings().folders).toEqual(['House Keys'])
   })
 
-  it('shows the Sounds tabs without MIDI, and Plucks only for organic', () => {
+  it('shows the Sounds tabs without MIDI, Plucks only for organic and Music Loops only for house', () => {
     const labels = (g: string) => tabsOf('sounds', g).map((t) => t.label)
-    expect(labels('house')).toEqual(['Chord Stabs', 'Drop Hits', 'Strings', 'Bass', 'Pads', 'Piano', 'Ambience', 'Vocal Loops'])
+    expect(labels('house')).toEqual(['Chord Stabs', 'Drop Hits', 'Strings', 'Bass', 'Pads', 'Piano', 'Ambience', 'Vocal Loops', 'Music Loops'])
     expect(labels('organic')).toEqual(['Chord Stabs', 'Drop Hits', 'Strings', 'Bass', 'Pads', 'Piano', 'Plucks', 'Ambience', 'Vocal Loops'])
   })
 
