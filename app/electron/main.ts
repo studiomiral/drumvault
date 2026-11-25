@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
-import type { AppSettings, EngineStatus, HotFillRequest, JobMethod, SampleMeta, UploadRecord } from '../src/types/api'
+import type { AppSettings, EngineStatus, HotFillRequest, JobMethod, MusicLoopMeta, SampleMeta, UploadRecord } from '../src/types/api'
 import { DEFAULT_GENRE, GENRES, type EngineEvent, type Genre, type GridPreview, type JobAccepted, type Overrides } from '../src/types/engine'
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
@@ -381,12 +381,12 @@ function registerIpc(): void {
     return sidecar.request('serum_presets', { root, folders, settings: engineSettings() }, 120_000)
   })
   ipcMain.handle('bass:render', async (_e, p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
-    notes?: number[][]; bars?: number; groove?: number[] }) => {
+    notes?: number[][]; bars?: number; groove?: number[]; color?: number[] }) => {
     if (!sidecar) throw new Error('Engine is not running')
     // The first render loads Serum 2 into the engine (several seconds).
     await sidecar.request('render_bass', {
       preset: p.preset, midi_id: p.midiId, transpose: p.transpose, bpm: p.bpm, out_rel: p.outRel,
-      notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, settings: engineSettings(),
+      notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, color: p.color ?? null, settings: engineSettings(),
     }, 300_000)
   })
   ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
@@ -533,6 +533,53 @@ function registerIpc(): void {
     if (!/^[\w-]+$/.test(id)) throw new Error(`Bad vocal id: ${id}`)
     await rm(join(lib(), 'Vocals', id), { recursive: true, force: true })
     send('library-changed')
+  })
+  // Music loops (SCOPE.md §6.11b): <Library>/Music Loops/<id>/, made by the engine (musicloop.py).
+  const musicMeta = (id: string) => {
+    if (!/^[\w-]+$/.test(id)) throw new Error(`Bad music loop id: ${id}`)
+    return join(lib(), 'Music Loops', id, 'meta.json')
+  }
+  ipcMain.handle('music:import', async (_e, paths: string[]) => {
+    if (!sidecar) throw new Error('Engine is not running')
+    const r = await sidecar.request('import_music_loops', { paths, settings: engineSettings() }, 900_000)
+    send('library-changed')
+    return r
+  })
+  // Exported in a track: never offered to a new one again.
+  ipcMain.handle('music:used', async (_e, ids: string[], track: string) => {
+    for (const id of ids) {
+      if (!/^[\w-]+$/.test(id)) continue
+      const file = musicMeta(id)
+      if (!existsSync(file)) continue
+      const m = JSON.parse(await readFile(file, 'utf8'))
+      m.usedIn = [...new Set([...(m.usedIn ?? []), track])]
+      await writeFile(file, JSON.stringify(m, null, 2))
+    }
+  })
+  ipcMain.handle('music:unuse', async (_e, id: string) => {
+    const file = musicMeta(id)
+    const m = JSON.parse(await readFile(file, 'utf8'))
+    m.usedIn = []
+    await writeFile(file, JSON.stringify(m, null, 2))
+  })
+  ipcMain.handle('music:delete', async (_e, id: string) => {
+    musicMeta(id)
+    await rm(join(lib(), 'Music Loops', id), { recursive: true, force: true })
+    send('library-changed')
+  })
+  ipcMain.handle('music:list', async (): Promise<MusicLoopMeta[]> => {
+    const root = join(lib(), 'Music Loops')
+    if (!existsSync(root)) return []
+    const out: MusicLoopMeta[] = []
+    for (const d of await readdir(root)) {
+      try {
+        const m = JSON.parse(await readFile(join(root, d, 'meta.json'), 'utf8'))
+        if ((m.genre ?? DEFAULT_GENRE) === activeGenre()) out.push(m as MusicLoopMeta)
+      } catch {
+        // not a loop (or one still being made)
+      }
+    }
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   })
   ipcMain.handle('vocals:list', async (): Promise<VocalMeta[]> => {
     const root = join(lib(), 'Vocals')
@@ -742,6 +789,7 @@ function buildMenu(): void {
         { label: 'Piano', click: () => send('menu', 'view:piano') },
         { label: 'Ambience', click: () => send('menu', 'view:ambience') },
         { label: 'Vocal Loops', click: () => send('menu', 'view:vocalloops') },
+        { label: 'Music Loops', click: () => send('menu', 'view:musicloops') },
         { label: 'Splice', click: () => send('menu', 'view:splice') },
         { type: 'separator' },
         { label: 'Upload', click: () => send('menu', 'view:upload') },

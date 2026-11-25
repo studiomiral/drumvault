@@ -1170,7 +1170,7 @@ def _render_strings(settings: Settings, source: str, transpose: int, bpm: float,
 
 # What the app makes for its projects and generations, rendered again whenever it's gone: the bass
 # and strings parts, and FX stretched to other tempos (and older tracks' keys, stab and drone parts).
-RENDER_DIRS = ("bass", "piano", "keys", "stabs", "drones", "strings", "tempo")
+RENDER_DIRS = ("bass", "piano", "keys", "stabs", "drones", "strings", "music", "tempo")
 
 
 def clean_renders(settings: Settings, keep: list[str], dry_run: bool = False, recent_s: float = 600.0) -> dict:

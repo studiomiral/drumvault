@@ -32,7 +32,7 @@ export const PART: Partial<Record<Role, string>> = {
   kick: 'kick', clap: 'clap', clap2: 'clap', clap3: 'clap', hats: 'hats', hats2: 'hats', ride: 'ride',
   perc: 'perc', perc2: 'perc', top: 'top', top2: 'top', top3: 'top', top4: 'top', groove: 'top',
   // (The piano is the music part of your tracks as the stabs are: their chords, SCOPE.md §6.9a.)
-  bass: 'bass', stab: 'music', stab2: 'music', stab3: 'music', piano: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx', fx3: 'fx',
+  bass: 'bass', stab: 'music', stab2: 'music', stab3: 'music', piano: 'music', music: 'music', crash: 'crash', fills: 'fills', fx: 'fx', fx2: 'fx', fx3: 'fx',
 }
 
 /** House defaults (dB against the kick, all of a part's lanes together). */

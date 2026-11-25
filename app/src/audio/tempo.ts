@@ -32,6 +32,7 @@ const renderState = {
   vocal: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   pad: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
   ambience: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
+  music: { listeners: new Set<(rendering: boolean) => void>(), pending: 0 },
 }
 
 /** Listen for bass rendering starting / finishing (the Generate view shows it). */
@@ -50,7 +51,7 @@ export function renderBass(b: BassRender, bpm: number): Promise<void> {
   if (!p) {
     const state = renderState[b.role ?? 'bass']
     if (state.pending++ === 0) for (const fn of state.listeners) fn(true)
-    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: playedNotes(b), bars: b.bars, groove: b.groove })
+    p = api.renderBass({ preset: b.preset, midiId: b.midiId, transpose: b.transpose, bpm, outRel: path, notes: playedNotes(b), bars: b.bars, groove: b.groove, color: b.color })
       .then(() => {
         bassReady.add(path)
       })

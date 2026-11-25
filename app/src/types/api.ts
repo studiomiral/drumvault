@@ -234,6 +234,39 @@ export interface VocalLoopImport {
   failed: string[]
 }
 
+/**
+ * A music loop (SCOPE.md §6.11b): <Library>/Music Loops/<id>/meta.json (musicloop.py). Played by
+ * some new house tracks in place of the chord stabs, never as recorded (moved and coloured).
+ */
+export interface MusicLoopMeta {
+  id: string
+  createdAt: string
+  /** The file it was made from, and where it was. */
+  file: string
+  original: string
+  sha1: string
+  /** Library-relative: its whole bars, cut on its own grid. */
+  loop: string
+  /** Its own tempo: the name's, else the one that makes it whole bars ('length'). */
+  bpm: number
+  tempoSource: 'name' | 'length'
+  bars: number
+  /** The key it was recorded in: its name's, else the one heard; null: never played. */
+  key: string | null
+  keySource: 'name' | 'heard' | 'none'
+  seconds: number
+  /** The exported tracks it went out in: never offered to a new track again. */
+  usedIn: string[]
+  genre?: Genre
+}
+
+/** What an import of music loops did (musicloop.import_loops). */
+export interface MusicLoopImport {
+  imported: { id: string; name: string; key: string | null; bpm: number; bars: number }[]
+  skipped: number
+  failed: string[]
+}
+
 /** A sound in the Splice folder that could go on one of the music pages (SCOPE.md §6.12). */
 export interface SpliceCandidate {
   /** Absolute path of the file in the Splice folder. */
@@ -590,7 +623,7 @@ export interface DrumvaultAPI {
   serumPresets(root: string, folders: string[] | null): Promise<{ folders: { folder: string; count: number }[]; presets: SerumPreset[] }>
   /** Render a MIDI part through a Serum 2 preset as a loop at `bpm` into `outRel` (cached). */
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
-    notes?: [number, number, number, number][]; bars?: number; groove?: number[] }): Promise<void>
+    notes?: [number, number, number, number][]; bars?: number; groove?: number[]; color?: number[] }): Promise<void>
   /** Save an edited bassline to the MIDI library; returns its id. */
   saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
   /** Deleted samples, newest first. */
@@ -667,6 +700,16 @@ export interface DrumvaultAPI {
   setVocalUrl(id: string, url: string | null): Promise<void>
   /** A take offered to new tracks again (its export thrown away). */
   unuseVocal(id: string): Promise<void>
+  /** Music loops (SCOPE.md §6.11b): the active genre's, oldest first. */
+  listMusicLoops(): Promise<MusicLoopMeta[]>
+  /** Music loops from files and folders (musicloop.py); files already there are skipped. */
+  importMusicLoops(paths: string[]): Promise<MusicLoopImport>
+  /** These loops were exported in `track`: never offered to a new track again. */
+  markMusicLoopsUsed(ids: string[], track: string): Promise<void>
+  /** A loop offered to new tracks again (its export thrown away). */
+  unuseMusicLoop(id: string): Promise<void>
+  /** Remove a music loop and its folder. */
+  deleteMusicLoop(id: string): Promise<void>
   revealPath(path: string): Promise<void>
 
   /** Folder dialog for the Upload page's exports. */

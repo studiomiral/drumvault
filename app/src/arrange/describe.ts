@@ -55,6 +55,7 @@ export function describeTrack(project: Project, sung: VocalMeta[], bars: number)
   }
   const stabs = n('Stab')
   if (stabs) parts.push(stabs > 1 ? `${count(stabs)} chord stabs taking turns` : 'a chord stab')
+  if (has('Music Loop')) parts.push('a music loop carrying the chords')
   const tops = n('Tops') + (has('Groove') ? 1 : 0)
   const perc = n('Perc')
   parts.push(tops + perc >= 4 ? 'layered tops and percussion' : tops + perc ? 'tight, stripped-back drums' : 'just kick, clap and hats')
@@ -131,7 +132,7 @@ export function houseTags(project: Project, sung: VocalMeta[]): HotTag[] {
   if (lead === 'perc' || lead === 'bass') add('Groovy', 0.5)
   if (minor && character !== 'disco') add('Dark', 1)
   if (!minor && g?.key) { add('Happy', 1); add('Uplifting', 1) }
-  if (n('Stab') >= 2) add('Melodic', 1)
+  if (n('Stab') >= 2 || on.has('Music Loop')) add('Melodic', 1)
   if (on.has('Strings')) { add('Melodic', 1.5); add('Euphoric', 1) }
   if (n('Drop Hit')) add('Funky', 1.5)
   const pad = project.clips.find((c) => c.type === 'audio' && c.bass?.role === 'pad')

@@ -9,7 +9,8 @@ import {
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
 import { dropRanges, KICK_LEVEL_DB, laneLoudness } from '../src/generate/balance'
 import { bassPath } from '../src/audio/schedule'
-import type { EventShape, HitItem, LoopGroove, MidiItem, SerumPreset, TrackArrangement } from '../src/types/api'
+import type { EventShape, HitItem, LoopGroove, MidiItem, MusicLoopMeta, SerumPreset, TrackArrangement } from '../src/types/api'
+import { musicFits, musicShift } from '../src/generate/musicloops'
 import { hitPitch } from '../src/generate/disco'
 import type { VocalTake } from '../src/generate/vocals'
 import { feelFit } from '../src/generate/feel'
@@ -2943,5 +2944,118 @@ describe('generator: piano instead of stabs (SCOPE.md §6.9a)', () => {
     expect(clipsIn(back, /^Piano$/)).toHaveLength(0)
     expect(choicesFor(p).some((c) => c.rule === 'pianoKind')).toBe(true)
     expect(choicesFor(p).some((c) => c.rule === 'stabFit')).toBe(false)
+  })
+})
+
+describe('generator: music loops instead of stabs (SCOPE.md §6.11b)', () => {
+  const STAB: HitItem = { id: 1, kind: 'stab', file_name: 'Organ.wav', name: 'Organ', rel_path: 'Chord Stabs/organ.wav', key_label: 'Am',
+    key_camelot: null, key_source: 'name', pitch_fix: 0, duration_s: 0.6, channels: 2 }
+  const loop = (id: string, key: string | null, bpm = BPM, usedIn: string[] = []): MusicLoopMeta => ({
+    id, createdAt: '2026-11-25T00:00:00Z', file: `${id} ${key ?? ''}.wav`, original: `/x/${id}.wav`, sha1: id, loop: `Music Loops/${id}/loop.wav`,
+    bpm, tempoSource: 'name', bars: 4, key, keySource: 'name', seconds: 8, usedIn, genre: 'house',
+  })
+  // Loops in every key around the circle, so most tracks have one 1–3 semitones away.
+  const KEYS = ['Am', 'Bbm', 'Bm', 'Cm', 'C#m', 'Dm', 'Ebm', 'Em', 'Fm', 'F#m', 'Gm', 'G#m']
+  const LOOPS = KEYS.map((k, i) => loop(`m${i}`, k))
+  const opts: GenerateOptions = { ...OPTS, stabs: { hits: [STAB] }, musicLoops: { loops: LOOPS } }
+  const gs = Array.from({ length: 90 }, (_, i) => generate(LIB, opts, 9700 + i))
+  const keyed = gs.filter((g) => g.key)
+  const clipsIn = (g: Generation, name: string) => {
+    const ids = new Set(g.project.lanes.filter((l) => l.name === name || l.name.startsWith(`${name} `)).map((l) => l.id))
+    return g.project.clips.filter((c) => ids.has(c.laneId))
+  }
+
+  it('never moves a loop by 0, nor more than 3 semitones, and only uses unexported loops near the tempo', () => {
+    expect(musicShift({ key: 'Am' }, 'Am')).toBeNull()
+    expect(musicShift({ key: 'Am' }, 'C')).toBeNull()          // the relative key: as recorded
+    expect(musicShift({ key: 'Am' }, 'Bm')).toBe(2)
+    expect(musicShift({ key: 'Am' }, 'Gm')).toBe(-2)
+    expect(musicShift({ key: 'Am' }, 'Dm')).toBeNull()         // 5 away
+    expect(musicShift({ key: null }, 'Am')).toBeNull()
+    expect(musicFits(loop('a', 'Am'), 'Bm', BPM)).toBe(true)
+    expect(musicFits(loop('a', 'Am', BPM + 7), 'Bm', BPM)).toBe(false)
+    expect(musicFits(loop('a', 'Am', BPM, ['Track']), 'Bm', BPM)).toBe(false)
+  })
+
+  it('plays a loop in place of the stabs about a third of the time, moved and coloured, as the lead', () => {
+    const withLoop = keyed.filter((g) => g.music)
+    expect(withLoop.length / keyed.length).toBeGreaterThan(0.18)
+    expect(withLoop.length / keyed.length).toBeLessThan(0.5)
+    for (const g of keyed) {
+      if (!g.music) {
+        expect(clipsIn(g, 'Music Loop')).toHaveLength(0)
+        continue
+      }
+      expect(g.rules.keys).toBe('music')
+      expect(g.rules.musicLoop).toBe(g.music.loop.id)
+      expect(g.rules.lead).toBe('music')
+      expect(clipsIn(g, 'Stab')).toHaveLength(0)
+      const clips = clipsIn(g, 'Music Loop') as AudioClip[]
+      expect(clips.length).toBeGreaterThan(0)
+      for (const c of clips) {
+        expect(c.bass?.role).toBe('music')
+        expect(c.bass!.transpose).not.toBe(0)
+        expect(Math.abs(c.bass!.transpose)).toBeLessThanOrEqual(3)
+        expect(c.bass!.color).toHaveLength(6)
+        expect(c.sample.relPath).toBe(bassPath(c.bass!, g.project.bpm))
+        expect(((c.start + c.trimBeats) % 16 + 16) % 16).toBeCloseTo(0, 6)   // its loop runs from bar 1
+      }
+      // Whole in the drops.
+      for (const s of g.sections.filter((x) => x.kind === 'drop')) {
+        const mid = (s.start + s.bars / 2) * 4
+        expect(clips.some((c) => c.start <= mid && c.start + c.length > mid && !c.filter)).toBe(true)
+      }
+      expect(g.project.lanes.find((l) => l.name === 'Music Loop')!.eq?.bands.some((b) => b.type === 'highpass')).toBe(true)
+    }
+    // The colour is the track's: another track, another one.
+    const colors = new Set(withLoop.map((g) => JSON.stringify(g.music!.color)))
+    expect(colors.size).toBeGreaterThan(withLoop.length / 2)
+  })
+
+  it('never in a piano track, nor in organic, nor in a track whose key is the loop\'s own', () => {
+    const TYPE = { path: '/presets/Keys/Grand.SerumPreset', name: 'Grand', folder: 'Keys', tags: [] }
+    const PIANO: MidiItem = { id: 11, file_name: 'P.mid', name: 'P', rel_path: 'MIDI/Piano/p.mid', role: 'piano', bars: 1, key_label: 'Am', key_camelot: null,
+      notes: [0.5, 1.5, 2.5, 3.5].flatMap((t) => [57, 60, 64].map((p) => [t, 0.4, p, 100] as [number, number, number, number])), favorite: 0, source: null, source_code: null }
+    for (let i = 0; i < 40; i++) {
+      const g = generate(LIB, { ...opts, piano: { midis: [PIANO], presets: [TYPE] } }, 9800 + i)
+      if (g.piano) expect([g.music ?? null, clipsIn(g, 'Music Loop').length]).toEqual([null, 0])
+    }
+    for (let i = 0; i < 10; i++) expect(generate(LIB, { ...opts, genre: 'organic' }, 9900 + i).music ?? null).toBeNull()
+    const own = Array.from({ length: 30 }, (_, i) => generate(LIB, { ...opts, musicLoops: { loops: [loop('am', 'Am')] }, locks: { keys: 'music' } }, 9950 + i))
+    for (const g of own) if (g.key === 'Am' || g.key === 'C') expect(g.music ?? null).toBeNull()
+  })
+
+  it('moves the loop into a new key, or swaps it for one that moves, else drops it', () => {
+    const g = keyed.find((x) => x.music)!
+    const shifted = (k: string) => changeKey(LIB, opts, g, k, 1)
+    for (const k of ['Am', 'Bbm', 'Bm', 'Cm', 'Dm', 'Em', 'F#m']) {
+      const r = shifted(k)
+      if (!r.music) {
+        expect(clipsIn(r, 'Music Loop')).toHaveLength(0)
+        continue
+      }
+      for (const c of clipsIn(r, 'Music Loop') as AudioClip[]) {
+        expect(c.bass!.transpose).toBe(musicShift(r.music.loop, k))
+        expect(c.bass!.transpose).not.toBe(0)
+      }
+    }
+    // Only its own loop, in its own key: it goes.
+    const alone = { ...opts, musicLoops: { loops: [g.music!.loop] } }
+    const r = changeKey(LIB, alone, g, g.music!.loop.key!, 1)
+    expect(r.music ?? null).toBeNull()
+    expect(clipsIn(r, 'Music Loop')).toHaveLength(0)
+  })
+
+  it('switches a track between stabs and a music loop with its choice', () => {
+    const g = keyed.find((x) => !x.music && x.rules.keys === 'stabs' && LOOPS.some((l) => musicFits(l, x.key, x.project.bpm)))!
+    const roles = CHOICES.find((c) => c.rule === 'keys')!.roles
+    const m = setTrackRule(LIB, opts, g, 'keys', 'music', roles)
+    expect(m.music).toBeTruthy()
+    expect(clipsIn(m, 'Stab')).toHaveLength(0)
+    expect(clipsIn(m, 'Music Loop').length).toBeGreaterThan(0)
+    const back = setTrackRule(LIB, opts, m, 'keys', 'stabs', roles)
+    expect(back.music ?? null).toBeNull()
+    expect(clipsIn(back, 'Stab').length).toBeGreaterThan(0)
+    expect(clipsIn(back, 'Music Loop')).toHaveLength(0)
   })
 })

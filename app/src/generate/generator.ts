@@ -11,7 +11,7 @@ import { expandCompatible } from '../lib/camelot'
 import { BEATS_PER_BAR, makeLane, makeMarker, newProject, replaceSample, sampleRef, STEPS_PER_BAR, uid } from '../lib/project'
 import type { Category, Genre, ReferenceTrack, SampleKind } from '../types/engine'
 import { bassPath, stringsRenderPrefix } from '../audio/schedule'
-import type { HitItem, MidiItem, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
+import type { HitItem, MidiItem, MusicLoopMeta, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
 import { chordName, followBass, generatePiano, pianoMidi, pianoModel, type PianoKind, type PianoPart } from './piano'
@@ -20,6 +20,7 @@ import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bed
 import { STRINGS_BREAK_RISE_DB, STRINGS_CHANCE, STRINGS_FADE_IN_BARS, STRINGS_FADE_OUT_BARS, stringsItem, stringsRender, stringsSample, stringsShift } from './strings'
 import { takeAbout } from '../vocals/plan'
 import { chopPitch, loopFits, phraseRender, phraseSample, vocalItem, type VocalTake } from './vocals'
+import { colorAbout, drawColor, loopName, MUSIC_CHANCE, musicFits, musicItem, musicRender, musicSample, musicShift } from './musicloops'
 import { accented, bassSteps, closestGap, focusWeight, loopJobs, loopParts, perBarFor, rollBar, sparse, stabParts, stabRhythm, stabWeight, turned, type StabBass, type StabJob, type StabLayout, type StabRoll, type StabTurn, type StabTurns } from './stabs'
 import { BASS_HP_MIN_HZ, MIX_HP_FROM_HZ, MIX_HP_TO_HZ, rideSources, ridePieces, sectionBars, type RidePart } from './rides'
 import { audible, feelFit, grooveFor, hasFeel, stepGroove } from './feel'
@@ -41,7 +42,7 @@ import type { Score } from './score'
 
 export type Role = 'kick' | 'clap' | 'clap2' | 'clap3' | 'buildup' | 'hats' | 'hats2' | 'ride' | 'perc' | 'perc2'
   | 'top' | 'top2' | 'top3' | 'top4' | 'groove' | 'bass' | 'fills' | 'fx' | 'fx2' | 'fx3' | 'crash' | 'hits' | 'atmos'
-  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'piano' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
+  | 'disco' | 'disco2' | 'stab' | 'stab2' | 'stab3' | 'piano' | 'music' | 'strings' | 'pad' | 'bed' | 'vocal' | 'vchop'
 
 /** Volume per lane (dB on top of the balanced mix), set with the Generate view's lane sliders. */
 export type Mix = Partial<Record<Role, number>>
@@ -73,6 +74,7 @@ export const LANES: { role: Role; name: string; startDb: number; color: string }
   { role: 'stab2', name: 'Stab 2', startDb: -7, color: '#fde68a' },
   { role: 'stab3', name: 'Stab 3', startDb: -7, color: '#fef3c7' },
   { role: 'piano', name: 'Piano', startDb: -7, color: '#a5b4fc' },
+  { role: 'music', name: 'Music Loop', startDb: -7, color: '#f0abfc' },
   { role: 'strings', name: 'Strings', startDb: -12, color: '#99f6e4' },
   { role: 'pad', name: 'Pad', startDb: -10, color: '#c4b5fd' },
   { role: 'bed', name: 'Ambience', startDb: -24, color: '#cbd5e1' },
@@ -388,6 +390,12 @@ export interface GenerateOptions {
    */
   piano?: { midis: MidiItem[]; presets: SerumPreset[] } | null
   /**
+   * Music loops (SCOPE.md §6.11b): the Music Loops page's loops; a house track that plays no piano
+   * plays one that fits (never exported, 1–3 semitones from its key, near its tempo) instead of the
+   * stabs `MUSIC_CHANCE` of the time. The one a track plays stays its own once exported. Null or empty = none.
+   */
+  musicLoops?: { loops: MusicLoopMeta[] } | null
+  /**
    * Strings (SCOPE.md §6.10) some tracks play under them: the Strings page's samples, and the
    * Strings lane's sidechain depth; null or empty = none.
    */
@@ -588,6 +596,13 @@ export interface GenerationBass {
   groove?: number[]
 }
 
+/** The music loop of a generation: the loop, how far it moves into the key (never 0), its colour. */
+export interface GenerationMusic {
+  loop: MusicLoopMeta
+  shift: number
+  color: number[]
+}
+
 /** The piano of a generation: the part written for it, in the track key, and what plays it. */
 export interface GenerationPiano {
   /** The part as a MIDI item (pianoMidi: a negative id, its notes in the track key). */
@@ -638,6 +653,8 @@ export interface Generation {
   bass: GenerationBass | null
   /** The piano part (SCOPE.md §6.9a) of a track that plays one instead of the stabs; absent or null: none. */
   piano?: GenerationPiano | null
+  /** The music loop (SCOPE.md §6.11b) a track plays instead of the stabs; absent or null: none. */
+  music?: GenerationMusic | null
   rules: Rules
   /** Source code of the real track whose structure this one follows, if any. */
   template?: string | null
@@ -1295,14 +1312,39 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const pianoRng = new Rng(seed ^ 0x5049414e)
   const po = opts.piano
   const pModel = key && po?.midis.length && po.presets.length ? pianoModel(po.midis) : null
-  const keysGiven = (keep.rules?.keys ?? opts.locks?.keys) as 'stabs' | 'piano' | undefined
-  const keysDrawn = pianoRng.chance(PIANO_CHANCE) ? 'piano' : 'stabs'
+  // ---- a music loop (SCOPE.md §6.11b): house only, in a track without a piano, a third of the
+  // time when one fits (never exported, 1–3 semitones from the key: never as recorded; near the
+  // tempo). The one a track plays (kept, or the rule `musicLoop`) is its own, exported or not.
+  // An RNG of its own ----
+  const musicRng = new Rng(seed ^ 0x4d55534c)
+  const musicDrawn = musicRng.chance(MUSIC_CHANCE)
+  const musicColor = drawColor(musicRng)
+  const allLoops = organic ? [] : opts.musicLoops?.loops ?? []
+  const musicWant = (keep.rules?.musicLoop ?? opts.locks?.musicLoop) as string | undefined
+  const musicKept = keep.picks?.music?.id
+  const musicOwn = allLoops.find((l) => (l.id === musicWant || musicItem(l).id === musicKept) && (musicWant || musicKept) && musicShift(l, key) != null)
+  const musicFit = allLoops.filter((l) => musicFits(l, key, bpm))
+  const canMusic = !!musicOwn || musicFit.length > 0
+  const keysGiven = (keep.rules?.keys ?? opts.locks?.keys) as 'stabs' | 'piano' | 'music' | undefined
+  const keysDrawn = pianoRng.chance(PIANO_CHANCE) ? 'piano' : canMusic && musicDrawn ? 'music' : 'stabs'
   /** Where the piano's filter sits where it is held back (Hz), and over how many bars a long intro announces the drop. */
   const pianoHz = pianoRng.int(...PIANO_DARK_HZ)
   const pianoAnnounce = pianoRng.weighted([[4, 1], [8, 2]] as const)
   const stabsThere = (opts.stabs?.hits.length ?? 0) > 0 && (keep.rules?.stabs ?? true) !== false
-  const keys: 'stabs' | 'piano' | null = !pModel ? null
-    : keysGiven ?? (organic ? 'stabs' : stabsThere ? keysDrawn : 'piano')
+  // (Given: what can play. Drawn: a piano a quarter of the time, else a music loop a third of the time.
+  // No stabs to play: a piano, else a music loop.)
+  const keysOk = (k: typeof keysGiven) => (k === 'piano' ? !!pModel : k === 'music' ? canMusic : k === 'stabs')
+  const keysFree = !stabsThere ? (pModel ? 'piano' : 'music') : pModel ? keysDrawn : canMusic && musicDrawn ? 'music' : 'stabs'
+  const keys: 'stabs' | 'piano' | 'music' | null = !pModel && !canMusic ? null
+    : keysGiven && keysOk(keysGiven) ? keysGiven : organic ? 'stabs' : keysFree
+  let music: GenerationMusic | null = null
+  if (keys === 'music') {
+    // (Not one the track played: its renders start with the loop's own part of the name.)
+    const rendered = (l: MusicLoopMeta) => bassPath(musicRender(l, key, 0, []), bpm).replace(/-b\d+-0-[\d.]+\.wav$/, '-')
+    const fresh = musicFit.filter((l) => !(keep.avoid ?? []).some((a) => a.startsWith(rendered(l))))
+    const loop = musicOwn ?? (fresh.length ? musicRng.pick(fresh) : musicFit.length ? musicRng.pick(musicFit) : null)
+    if (loop) music = { loop, shift: musicShift(loop, key)!, color: musicColor }
+  }
   let piano: GenerationPiano | null = null
   let pianoPart: PianoPart | null = null
   if (pModel && keys === 'piano') {
@@ -1352,7 +1394,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const keptRule = keep.rules?.stabs as boolean | undefined
   // (Rule `stabs`: the stabs are there to play; a piano track doesn't play them.)
   const stabsOn = stabPool.length > 0 && (keptRule ?? true)
-  const useStabs = stabsOn && !piano
+  const useStabs = stabsOn && !piano && !music
   // (Known before the rules are: a kept or locked value, else on.)
   const stabFitEarly = ((keep.rules?.stabFit ?? opts.locks?.stabFit ?? true) as boolean) !== false
   // (One loop of them, rule `stabLoop`, likewise: on unless kept or locked off; only with stabs that fit.)
@@ -1462,11 +1504,13 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // ---- the track's character and its lead (SCOPE.md §6.6, "Identity"; an RNG of their own): one of
   // a few kinds of club track, which sets the rules that go together, and the one element the track
   // is built around. A kept or locked value stands; a track made before has neither ----
-  const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(piano ? ['piano' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
+  const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(piano ? ['piano' as const] : []), ...(music ? ['music' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
   const drawnLead = pickLead(character ?? drawnCharacter, crng, hasLead)
   const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : opts.locks && 'lead' in opts.locks ? opts.locks.lead : undefined
   // A piano carries the track (its big breakdown is the piano's), unless another lead is kept or locked.
+  // (A music loop likewise: it plays where a piano would.)
   const lead = piano && (kept === undefined || kept === 'stab' || kept === 'piano') ? 'piano'
+    : music && (kept === undefined || kept === 'stab' || kept === 'piano' || kept === 'music') ? 'music'
     : kept !== undefined ? ((kept && hasLead.includes(kept as Lead) ? kept : null) as Lead | null) : character ? drawnLead : null
   // ---- the breakdown layer (§6.7b; an RNG of its own): a pad's chord or a reese's note ----
   const prng = new Rng(seed ^ 0x50414453)
@@ -1617,7 +1661,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     lead,
     // A layer made for the breakdowns: whether, through which patch, and where its filter starts.
     // The piano (SCOPE.md §6.9a): set from what was written above, after the rules are merged.
-    keys: null as 'stabs' | 'piano' | null, pianoKind: null as PianoKind | null, pianoPreset: null as string | null, pianoSeed: 0,
+    keys: null as 'stabs' | 'piano' | 'music' | null, pianoKind: null as PianoKind | null, pianoPreset: null as string | null, pianoSeed: 0,
+    musicLoop: null as string | null,
     padIn: padPool.length > 0 && padDraw.in,
     padPreset: padDraw.preset,
     padHz: padDraw.hz,
@@ -1695,7 +1740,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
     ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
   // The piano's rules are what it is (written above, from what is kept or locked); none without a Piano tab.
-  rules.keys = !keys ? null : piano ? 'piano' : 'stabs'
+  rules.keys = !keys ? null : piano ? 'piano' : music ? 'music' : 'stabs'
+  rules.musicLoop = music?.loop.id ?? null
   if (piano) Object.assign(rules, { pianoKind: piano.kind, pianoPreset: piano.preset.path, pianoSeed: Number(rules.pianoSeed ?? 0) })
   else Object.assign(rules, { pianoKind: null, pianoPreset: null })
   // A progression has no pad or strings under it (they hold the key's chord).
@@ -1879,10 +1925,17 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     kind: 'loop', category: 'melodic', bpm, bars: piano.midi.bars, body_bars: null, key_label: key, key_camelot: null,
     duration_s: (piano.midi.bars * BEATS_PER_BAR * 60) / bpm, channels: 2, favorite: 0, rating: null, tags: null, zip_id: -1, source_code: 'Piano',
   } : null
-  const pianoBeats = (piano?.midi.bars ?? 1) * BEATS_PER_BAR
+  // ---- a music loop (SCOPE.md §6.11b) plays where a piano would: its loop moved into the key and
+  // coloured (its render), running from the track's first bar ----
+  const musicRender_: BassRender | null = music ? musicRender(music.loop, key, music.shift, music.color) : null
+  const musicSample_: SampleListItem | null = music && musicRender_ ? musicSample(music.loop, musicRender_, bpm) : null
+  /** The lead part placed by pianoIn: the piano's, or the music loop's (a track has one or neither). */
+  const keysPart = pianoSample && pianoRender ? { role: 'piano' as const, sample: pianoSample, render: pianoRender, bars: piano!.midi.bars }
+    : musicSample_ && musicRender_ ? { role: 'music' as const, sample: musicSample_, render: musicRender_, bars: music!.loop.bars } : null
+  const pianoBeats = (keysPart?.bars ?? 1) * BEATS_PER_BAR
   const pianoAt = (from: number, to: number, o: Partial<Segment> = {}, gapBeats = 0) => {
-    if (pianoSample && pianoRender && to > from) {
-      lanes.add('piano', { sample: pianoSample, start: from * 4, length: (to - from) * 4 - gapBeats, bass: pianoRender, trim: (from * 4) % pianoBeats, ...o })
+    if (keysPart && to > from) {
+      lanes.add(keysPart.role, { sample: keysPart.sample, start: from * 4, length: (to - from) * 4 - gapBeats, bass: keysPart.render, trim: (from * 4) % pianoBeats, ...o })
     }
   }
   const pianoLp = (from: number, to: number | null): ClipFilter => ({ type: 'lowpass', from, to, q: 0.8 })
@@ -2473,7 +2526,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     }
 
     // ---- piano (a piano track's, in place of the stabs) ----
-    if (piano) pianoIn(sec, i, gap)
+    if (piano || music) pianoIn(sec, i, gap)
 
     // ---- bass: the bassline repeats in drops; elsewhere high-passed (its sub out) or out, by the
     // track's rules ----
@@ -3207,9 +3260,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       l.pan = pans[i] ?? 0
     })
   }
-  // The piano: in the room the stabs have, ducking a little under the kick.
-  const pianoLane = project.lanes.find((x) => laneRole(x.name) === 'piano')
-  if (pianoLane) {
+  // The piano (or a music loop): in the room the stabs have, ducking a little under the kick.
+  for (const pianoLane of project.lanes.filter((x) => laneRole(x.name) === 'piano' || laneRole(x.name) === 'music')) {
     pianoLane.room = true
     pianoLane.duck = PIANO_DUCK
     pianoLane.duckBeats = STAB_DUCK_BEATS
@@ -3325,6 +3377,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
       : `a piano loop on ${piano.names[0] ?? 'the key'}, through ${piano.preset.name}`)
     choices.push('the piano: whole in the drops, carrying the big breakdown, announcing the drops')
   }
+  if (music) {
+    choices.push(`a music loop, ${loopName(music.loop)} (${music.loop.bars} bar${music.loop.bars === 1 ? '' : 's'}), moved ${music.shift > 0 ? '+' : ''}${music.shift} st into ${key}, ${colorAbout(music.color)}: in place of the stabs`)
+    choices.push('the music loop: whole in the drops, carrying the big breakdown, announcing the drops')
+  }
   if (stabs.length) {
     const where = rules.stabsIn === 'drops' ? 'in drops only'
       : `in drops, ${rules.stabsBreaks === 'filtered' ? 'low-passed' : 'out'} in breakdowns`
@@ -3373,7 +3429,8 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const byId = new Map(samples.map((s) => [s.rel_path, s]))
   const zips = [...new Set(project.clips.map((c) => byId.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
   const arc = keep.arc !== undefined ? keep.arc : arcOf(opts.references, tpl)
-  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, piano, rules, template: tpl?.source ?? null, mix: balance.mix, arc }
+  if (music) picks.music = musicItem(music.loop)
+  return { seed, rngAt, project, sections, key, choices, zips, picks, bass, piano, music, rules, template: tpl?.source ?? null, mix: balance.mix, arc }
 }
 
 /** Places an event whose main sound ends on `endBeat` (generate's endOn). */
@@ -3574,6 +3631,8 @@ const LANE_RULES: Partial<Record<Role, string[]>> = {
   vocal: ['vocalLoop', 'vocalAt'],
   // A stab lane made again: another sample in the same rhythm (the others play their turns in it).
   stab: [],
+  // The Music Loop lane made again: another loop that fits (it stays a music loop).
+  music: ['musicLoop'],
 }
 const LAYER_OF: Partial<Record<Role, Role>> = {
   clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', fx3: 'fx', disco2: 'disco', stab2: 'stab', stab3: 'stab', vchop: 'vocal',
@@ -3624,7 +3683,7 @@ export function rerollLane(all: SampleListItem[], opts: GenerateOptions, g: Gene
     const nextRules = { ...g.rules, ...Object.fromEntries(Object.entries(r.rules).filter(([k]) => own.has(k))) }
     const byPath = new Map(all.map((s) => [s.rel_path, s]))
     const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
-    return { ...g, project, picks: nextPicks, rules: nextRules, zips, bass: role === 'bass' ? r.bass : g.bass }
+    return { ...g, project, picks: nextPicks, rules: nextRules, zips, bass: role === 'bass' ? r.bass : g.bass, ...(role === 'music' ? { music: r.music ?? null } : {}) }
   }
   return null
 }
@@ -3654,6 +3713,12 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
   // The ambience bed: noise stays as it is; a tonal bed is moved into the new key, or another one
   // that moves takes its place (one would be heard as recorded); none does: it goes. (One no longer
   // on the Ambience page stays as it is.)
+  // The music loop (SCOPE.md §6.11b): moved into the new key when it moves 1–3 semitones there, else
+  // another loop that does (never as recorded) where it played; none does: it goes.
+  const loops = opts.musicLoops?.loops ?? []
+  const musicLoop = !g.music ? null : musicShift(g.music.loop, key) != null ? g.music.loop
+    : ((xs) => (xs.length ? new Rng(seed ^ 0x4d55534c).pick(xs) : null))(loops.filter((l) => musicFits(l, key, project.bpm)))
+  const music = g.music && musicLoop ? { loop: musicLoop, shift: musicShift(musicLoop, key)!, color: g.music.color } : null
   const bedHits = opts.ambience?.hits ?? []
   const wasBed = g.picks.bed ? bedHits.find((h) => bedItem(h).id === g.picks.bed!.id) : undefined
   const movingBeds = bedHits.filter((h) => bedShift(h, key) != null)
@@ -3703,6 +3768,10 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
       const render = stringsRender(strings.hit, key, strings.shift, project.bpm)
       return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(stringsSample(stringsItem(strings.hit), render, project.bpm)) } }
     }
+    if (c.type === 'audio' && c.bass?.role === 'music' && music) {
+      const render = musicRender(music.loop, key, music.shift, music.color)
+      return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(musicSample(music.loop, render, project.bpm)) } }
+    }
     if (c.type === 'audio' && c.bass?.role === 'ambience' && bedHit) {
       const render = bedRender(bedHit, project.bpm, key, bedShift(bedHit, key)!)
       return { ...c, bass: render, sample: { ...c.sample, ...sampleRef(bedSample(bedItem(bedHit), render, project.bpm)) } }
@@ -3739,6 +3808,12 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
     project.clips = project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'strings'))
     project.lanes = project.lanes.filter((l) => l.name !== 'Strings' || project.clips.some((c) => c.laneId === l.id))
   }
+  if (music) picks.music = musicItem(music.loop)
+  else if (g.music) {
+    delete picks.music
+    project.clips = project.clips.filter((c) => !(c.type === 'audio' && c.bass?.role === 'music'))
+    project.lanes = project.lanes.filter((l) => l.name !== 'Music Loop' || project.clips.some((c) => c.laneId === l.id))
+  }
   if (bedHit) picks.bed = bedItem(bedHit)
   else if (wasBed) {
     delete picks.bed
@@ -3748,7 +3823,8 @@ export function changeKey(all: SampleListItem[], opts: GenerateOptions, g: Gener
   const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((z): z is string => !!z))].sort()
   const note = `in ${key} (made in ${g.key ?? 'no key'})${swapped ? `, ${swapped} FX swapped for ones in key` : ''}${kept ? `, ${kept} kept: nothing else in key` : ''}`
   const choices = [...g.choices.filter((c) => !KEY_NOTE.test(c)), note]
-  return { ...g, project, key, bass, zips, choices, picks }
+  const rules = g.music ? { ...g.rules, musicLoop: music?.loop.id ?? null, ...(music ? {} : { keys: 'stabs' }) } : g.rules
+  return { ...g, project, key, bass, zips, choices, picks, rules, ...(g.music ? { music } : {}) }
 }
 
 /**
@@ -3878,7 +3954,7 @@ const KEY_NOTE = /^in \S+ \(made in /
  */
 export function setStabRhythm(all: SampleListItem[], opts: GenerateOptions, g: Generation, rhythm: Velocity[][]): Generation | null {
   const roles = new Set(STAB_ROLES)
-  if (!g.rules.stabs || g.rules.keys === 'piano') return null
+  if (!g.rules.stabs || g.rules.keys === 'piano' || g.rules.keys === 'music') return null
   const bpm = g.project.bpm
   const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: null }, g.seed, {
     structure: g.sections, arc: g.arc ?? null, key: g.key, picks: g.picks, rules: { ...rulesOf(g), stabRhythm: rhythm },
@@ -3919,12 +3995,14 @@ export function setTrackRule(all: SampleListItem[], opts: GenerateOptions, g: Ge
 
 /** The rules a piano remake owns (what it is, and what it changes: the lead, the pad under a progression). */
 const PIANO_RULES = ['keys', 'pianoKind', 'pianoPreset', 'pianoSeed', 'padIn', 'stringsIn', 'lead'] as const
+/** The rules a music loop remake owns (what it is, which loop, and the lead). */
+const MUSIC_RULES = ['keys', 'musicLoop', 'lead'] as const
 
 /** Rules that follow when one of them is set: a build-up and a roll sample into drops don't go together. */
 const COUPLED: Record<string, string[]> = { dropFill: ['buildup'], buildup: ['dropFill'] }
 
 /** setTrackRule for several rules at once (`picks`: the samples kept, `avoid`: ones not to take again). */
-function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generation, values: Rules, roles: Role[],
+export function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generation, values: Rules, roles: Role[],
                        picks: Generation['picks'] = g.picks, avoid?: string[]): Generation {
   const bpm = g.project.bpm
   const rules = { ...rulesOf(g), ...values }
@@ -3936,12 +4014,20 @@ function setTrackRules(all: SampleListItem[], opts: GenerateOptions, g: Generati
     || (STAB_ROLES.includes(role) && g.rules.stabs && !r.rules.stabs)
     || (role === 'strings' && !!g.picks.strings && !r.picks.strings && r.piano?.kind !== 'progression')
     || (role === 'piano' && !!g.piano && !r.piano && r.rules.keys === 'piano')
+    || (role === 'music' && !!g.music && !r.music && r.rules.keys === 'music')
   const own = new Set(Object.keys(values).flatMap((k) => [k, ...COUPLED[k] ?? []]))
   // The piano made again (SCOPE.md §6.9a): its part and its rules are the remake's, and under a
   // progression (before or after) the bass that follows it too.
   const piano = roles.includes('piano')
   if (piano) for (const k of PIANO_RULES) own.add(k)
+  const music = roles.includes('music')
+  if (music) for (const k of MUSIC_RULES) own.add(k)
   const next = swapGroup(g, r, new Set(roles.filter((x) => !gone(x))), own, picks, null)
+  if (music) {
+    next.music = r.music ?? null
+    if (r.music) next.picks = { ...next.picks, music: musicItem(r.music.loop) }
+    else if (next.picks.music) next.picks = Object.fromEntries(Object.entries(next.picks).filter(([k]) => k !== 'music'))
+  }
   if (piano) {
     next.piano = r.piano ?? null
     const follows = g.piano?.kind === 'progression' || r.piano?.kind === 'progression'

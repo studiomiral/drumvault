@@ -32,7 +32,7 @@ const MIX: Role[] = LEAD_IN
 
 const has = (kind: string) => (g: Generation) => g.sections.some((s) => s.kind === kind)
 /** A track that plays its stabs (not a piano track, SCOPE.md §6.9a). */
-const stabbing = (g: Generation) => !!g.rules.stabs && g.rules.keys !== 'piano'
+const stabbing = (g: Generation) => !!g.rules.stabs && g.rules.keys !== 'piano' && g.rules.keys !== 'music'
 const RISERS: Role[] = ['fx', 'fx2', 'fx3']
 /** What the big build into the drops after the long breakdown shapes. */
 const BIG: Role[] = ['kick', 'clap', 'buildup', ...RISERS, 'crash', ...STAB_ROLES, ...BUILD_TOPS, 'groove', 'vocal', 'vchop']
@@ -150,13 +150,13 @@ export const CHOICES: Choice[] = [
 ]
 
 CHOICES.push(
-  { rule: 'lead', label: 'Lead', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'perc'], unset: null,
-    when: (g) => !!g.rules.character || g.rules.keys === 'piano',
-    options: [{ value: 'stab', label: 'the stabs' }, { value: 'piano', label: 'the piano' }, { value: 'bass', label: 'the bassline' },
+  { rule: 'lead', label: 'Lead', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'music', 'bass', 'perc'], unset: null,
+    when: (g) => !!g.rules.character || g.rules.keys === 'piano' || g.rules.keys === 'music',
+    options: [{ value: 'stab', label: 'the stabs' }, { value: 'piano', label: 'the piano' }, { value: 'music', label: 'the music loop' }, { value: 'bass', label: 'the bassline' },
       { value: 'perc', label: 'the percussion' }, { value: null, label: 'none' }] },
-  // Piano or stabs (SCOPE.md §6.9a): on tracks that could play either (there is piano MIDI to learn from).
-  { rule: 'keys', label: 'Chords', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'bass', 'pad', 'strings'], when: (g) => g.rules.keys != null,
-    options: [{ value: 'stabs', label: 'chord stabs' }, { value: 'piano', label: 'a piano part' }] },
+  // Piano, a music loop or stabs (SCOPE.md §6.9a, §6.11b): on tracks that could play another (piano MIDI to learn from, a loop that fits).
+  { rule: 'keys', label: 'Chords', group: 'Sound', roles: [...STAB_ROLES, 'piano', 'music', 'bass', 'pad', 'strings'], when: (g) => g.rules.keys != null,
+    options: [{ value: 'stabs', label: 'chord stabs' }, { value: 'piano', label: 'a piano part' }, { value: 'music', label: 'a music loop' }] },
   { rule: 'pianoKind', label: 'Piano', group: 'Sound', roles: ['piano', 'bass', 'pad', 'strings'], when: (g) => g.rules.keys === 'piano',
     options: [{ value: 'loop', label: 'a loop on the key (the bass as it is)' }, { value: 'progression', label: 'a progression (the bass follows it)' }] },
   { rule: 'padIn', label: 'Break layer', group: 'Breakdowns', roles: ['pad'], when: (g) => has('break')(g) && !!g.rules.padPreset, unset: false,

@@ -78,6 +78,11 @@ export function vocalTakes(project: Project): string[] {
   return [...new Set(ids)]
 }
 
+/** The music loops a project plays (their ids, SCOPE.md §6.11b), from its renders. */
+export function musicLoopsOf(project: Project): string[] {
+  return [...new Set(project.clips.flatMap((c) => (c.type === 'audio' && c.bass?.role === 'music' && c.bass.music ? [c.bass.music.loop] : [])))]
+}
+
 /** Whether the project sings: a vocal lane with clips that plays (unmuted). */
 export function hasVocals(project: Project): boolean {
   return project.lanes.some((l) => VOCAL_LANES.has(l.name) && !l.mute && project.clips.some((c) => c.laneId === l.id))
@@ -323,6 +328,9 @@ export async function exportStems(project: Project, o: ExportOptions,
   // House of Tracks takes each vocal once: the takes this track sings are used now.
   const sung = vocalTakes(project)
   if (sung.length && !isCancelled() && result.written.length) await api.markVocalsUsed(sung, safeName(o.folder))
+  // Its music loop likewise: never offered to a new track again (SCOPE.md §6.11b).
+  const played = musicLoopsOf(project)
+  if (played.length && !isCancelled() && result.written.length) await api.markMusicLoopsUsed(played, safeName(o.folder))
   onProgress('Done', 1)
   return result
 }

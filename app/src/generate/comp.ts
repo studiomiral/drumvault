@@ -49,6 +49,8 @@ export const COMP_ROLES: Partial<Record<Role, RoleComp>> = {
   stab: { overDb: -2, ratio: 2.5, kneeDb: 6, attackMs: 25, releaseBeats: 0.5, makeupDb: 2.5, what: 'steadier, the attack kept' },
   disco: { overDb: -2, ratio: 2.5, kneeDb: 6, attackMs: 25, releaseBeats: 0.5, makeupDb: 2.5, what: 'steadier, the attack kept' },
   piano: { overDb: -3, ratio: 2.5, kneeDb: 6, attackMs: 20, releaseBeats: 0.5, makeupDb: 2, what: 'the chords held at one level, their attack kept' },
+  // (A music loop as the piano: it plays where the piano would, SCOPE.md §6.11b.)
+  music: { overDb: -3, ratio: 2.5, kneeDb: 6, attackMs: 20, releaseBeats: 0.5, makeupDb: 2, what: 'the loop held at one level, its attack kept' },
   strings: { overDb: -4, ratio: 3, kneeDb: 8, attackMs: 30, releaseBeats: 0.6, makeupDb: 2, what: 'levelled slowly: a bed' },
   vocal: { overDb: -7.5, ratio: 3, kneeDb: 6, attackMs: 10, releaseBeats: 0.2, makeupDb: 4, what: 'the phrase held at one level' },
 }
@@ -58,7 +60,7 @@ export const COMP_ROLES: Partial<Record<Role, RoleComp>> = {
  * library (the bench), as they aren't measured one by one.
  */
 // (The piano: chords with an attack and a ring, between the bass's punch and the strings'; not benched yet.)
-export const RENDER_PUNCH_DB: Partial<Record<Role, number>> = { bass: -11, piano: -13, strings: -16.5, vocal: -13.5 }
+export const RENDER_PUNCH_DB: Partial<Record<Role, number>> = { bass: -11, piano: -13, music: -13, strings: -16.5, vocal: -13.5 }
 /** A library sample not measured yet: its peak (as the library normalises it) less a usual crest (dB). */
 const UNMEASURED_PUNCH_DB = { oneshot: -0.3 - 17.5, loop: -1 - 17.5, event: -1 - 17.5 }
 

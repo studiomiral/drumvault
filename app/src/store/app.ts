@@ -3,7 +3,7 @@ import { api } from '../api'
 import { SERUM_PRESET_ROOT } from '../lib/defaults'
 import type { AppSettings, DepsReport, EngineStatus, JobInfo, SerumPreset } from '../types/api'
 
-export type View = 'create' | 'process' | 'library' | 'grid' | 'hits' | 'stabs' | 'strings' | 'basses' | 'pads' | 'piano' | 'plucks' | 'ambience' | 'vocalloops' | 'splice' | 'upload' | 'settings'
+export type View = 'create' | 'process' | 'library' | 'grid' | 'hits' | 'stabs' | 'strings' | 'basses' | 'pads' | 'piano' | 'plucks' | 'ambience' | 'vocalloops' | 'musicloops' | 'splice' | 'upload' | 'settings'
 
 /** The sidebar's pages: Create, Drums (its tabs: Drumvault, Library; Grid opens from a zip), Sounds, Upload, Settings. */
 export type Page = 'create' | 'drums' | 'sounds' | 'upload' | 'settings'
@@ -17,14 +17,16 @@ export const PAGE_TABS: Record<Page, { view: View; label: string }[]> = {
     // Plucks: organic's only (PageTabs leaves it out for the other genres).
     { view: 'plucks', label: 'Plucks' },
     { view: 'ambience', label: 'Ambience' }, { view: 'vocalloops', label: 'Vocal Loops' },
+    // Music Loops: house's only (SCOPE.md §6.11b).
+    { view: 'musicloops', label: 'Music Loops' },
   ],
   upload: [{ view: 'upload', label: 'Upload' }],
   settings: [{ view: 'settings', label: 'Settings' }],
 }
 
-/** A page's tabs for a genre: Plucks only for organic (its arps and plucks, SCOPE.md §5.18). */
+/** A page's tabs for a genre: Plucks only for organic (its arps and plucks, SCOPE.md §5.18), Music Loops only for house (§6.11b). */
 export function tabsOf(page: Page, genre: string | undefined): { view: View; label: string }[] {
-  return PAGE_TABS[page].filter((t) => t.view !== 'plucks' || genre === 'organic')
+  return PAGE_TABS[page].filter((t) => (t.view !== 'plucks' || genre === 'organic') && (t.view !== 'musicloops' || (genre ?? 'house') === 'house'))
 }
 
 /** The page a view is on (Grid with the drums, Splice with the sounds). */

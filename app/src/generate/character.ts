@@ -15,11 +15,11 @@ export const CHARACTER_LABEL: Record<Character, string> = {
 }
 
 /** The element a track is built around. */
-/** The track's lead; a piano track's is the piano (SCOPE.md §6.9a), never drawn by its character. */
-export type Lead = 'stab' | 'bass' | 'perc' | 'piano'
-export const LEAD_LABEL: Record<Lead, string> = { stab: 'the stabs', bass: 'the bassline', perc: 'the percussion', piano: 'the piano' }
+/** The track's lead; a piano track's is the piano (SCOPE.md §6.9a), a music loop track's the loop (§6.11b), never drawn by its character. */
+export type Lead = 'stab' | 'bass' | 'perc' | 'piano' | 'music'
+export const LEAD_LABEL: Record<Lead, string> = { stab: 'the stabs', bass: 'the bassline', perc: 'the percussion', piano: 'the piano', music: 'the music loop' }
 /** The lead sits this much over where the balance puts it (dB); a stab still never over the kick. */
-export const LEAD_DB: Record<Lead, number> = { stab: 1.5, bass: 1, perc: 1.5, piano: 1.5 }
+export const LEAD_DB: Record<Lead, number> = { stab: 1.5, bass: 1, perc: 1.5, piano: 1.5, music: 1.5 }
 
 /** Which lead each character leans to (weights), of those the track has. */
 const LEADS: Record<Character, [Lead, number][]> = {

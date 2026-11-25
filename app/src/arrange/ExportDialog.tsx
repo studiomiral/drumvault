@@ -7,6 +7,7 @@ import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
 import { keepTrack } from '../store/generate'
+import { loadMusicLoops } from '../store/musicloops'
 import { nextGeneratedName } from './persistence'
 import type { WavFormat } from '../audio/wav'
 import { Preflight } from './Preflight'
@@ -82,6 +83,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     try {
       const result = await exportStems(project, opts, (message, pct) => setPhase({ kind: 'running', message, pct }),
         () => cancelled.current)
+      // (Its music loop is used now: new tracks no longer draw it.)
+      void loadMusicLoops()
       if (cancelled.current) setPhase({ kind: 'done', files: result.written, note: 'Export cancelled.', result })
       else if (result.clipped.length) setPhase({ kind: 'clipping', result, opts })
       else setPhase({ kind: 'done', files: result.written, result })

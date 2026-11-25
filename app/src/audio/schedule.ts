@@ -59,7 +59,7 @@ const GATE_RELEASE_MAX_S = 0.06
  */
 export const SEAM_XFADE_S = 0.008
 /** Rendered parts whose files are seamless loops (the engine renders two cycles and keeps the second). */
-const SEAMLESS_ROLES = new Set<string>(['bass', 'piano', 'keys', 'stab', 'drone', 'pad', 'ambience'])
+const SEAMLESS_ROLES = new Set<string>(['bass', 'piano', 'keys', 'stab', 'drone', 'pad', 'ambience', 'music'])
 
 // ---------------------------------------------------------------------------
 // Tempo (SCOPE.md §6.4a): samples are cut at the library BPM; a project may run at another.
@@ -98,7 +98,7 @@ export function tempoPath(relPath: string, bpm: number): string {
 /** FNV-1a, hex: a short stable id for a preset path in render file names. */
 /** Where a part's renders go: bass, piano, strings and vocal parts (and older tracks' keys, stab and drone parts) each their own folder. */
 const renderFolder = (b: BassRender) => (b.role === 'piano' ? 'piano' : b.role === 'keys' ? 'keys' : b.role === 'stab' ? 'stabs' : b.role === 'drone' ? 'drones'
-  : b.role === 'strings' ? 'strings' : b.role === 'vocal' ? 'vocals' : b.role === 'pad' ? 'pads' : b.role === 'ambience' ? 'ambience' : 'bass')
+  : b.role === 'strings' ? 'strings' : b.role === 'vocal' ? 'vocals' : b.role === 'pad' ? 'pads' : b.role === 'ambience' ? 'ambience' : b.role === 'music' ? 'music' : 'bass')
 
 /** The start of every render of the string sample `preset` (its rel path). */
 export function stringsRenderPrefix(preset: string): string {
@@ -123,8 +123,10 @@ export function bassPath(b: BassRender, bpm: number): string {
   const d = b.drone
   const drone = d ? `-${d.rhythm}${d.warp && d.warp !== 'none' ? `-${d.warp}` : ''}${d.start ? `-s${Math.round(d.start * 100)}` : ''}` : ''
   // (A strings part shorter than 8 bars is another file than the 8-bar one.)
-  const len = (b.role === 'strings' && b.bars && b.bars !== 8) || b.role === 'ambience' ? `-b${b.bars ?? 8}` : ''
-  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${turn}${feel}${drone}${len}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
+  const len = (b.role === 'strings' && b.bars && b.bars !== 8) || b.role === 'ambience' || b.role === 'music' ? `-b${b.bars ?? 8}` : ''
+  // (A music loop's colour is its own file: each track's is drawn for it.)
+  const color = b.color?.length ? `-c${shortHash(JSON.stringify(b.color))}` : ''
+  return `.drumvault/${renderFolder(b)}/${shortHash(b.preset)}-${edit}${turn}${feel}${drone}${len}${color}-${b.transpose}-${Math.round(bpm * 100) / 100}.wav`
 }
 
 /** The file a clip plays at the project tempo. */

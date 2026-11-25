@@ -16,6 +16,7 @@ import { GridView } from './views/GridView'
 import { InstrumentView, PatchesView } from './views/InstrumentView'
 import { HitsView } from './views/HitsView'
 import { VocalLoopsView } from './views/VocalLoopsView'
+import { MusicLoopsView } from './views/MusicLoopsView'
 import { SpliceView } from './views/SpliceView'
 import { LibraryView } from './views/LibraryView'
 import { ProcessView } from './views/ProcessView'
@@ -118,6 +119,7 @@ export function App() {
         {view === 'plucks' && <PatchesView key="plucks" module="plucks" />}
         {view === 'ambience' && <HitsView key="ambience" kind="ambience" />}
         {view === 'vocalloops' && <VocalLoopsView />}
+        {view === 'musicloops' && <MusicLoopsView />}
         {view === 'splice' && <SpliceView />}
         {view === 'create' && <CreateView />}
         {view === 'upload' && <UploadView />}

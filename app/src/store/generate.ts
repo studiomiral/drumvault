@@ -12,7 +12,7 @@ import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
   applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
-  setStabRhythm, setTrackRule, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
+  setStabRhythm, setTrackRule, setTrackRules, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
 import { refine, type RefineOptions } from '../generate/critic'
@@ -21,6 +21,8 @@ import { bassPatches, bassSettings, loadBass, pianoPatches, saveBassSettings, us
 import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
+import { loadMusicLoops, useMusicLoops } from './musicloops'
+import { musicFits } from '../generate/musicloops'
 import { folderLoopFits, LOOP_CHANCE, loopFits, type VocalTake } from '../generate/vocals'
 import { takeName, type VocalRequest } from '../vocals/plan'
 import { hitSampleId, hitTranspose } from '../generate/disco'
@@ -30,7 +32,7 @@ import { bestOf, bestOfSteps, CANDIDATES } from '../generate/score'
 import { serializeProject } from '../lib/project'
 import { nextGeneratedName, onProjects, openProject, refreshProjectList, saveNow, createProject, deleteCurrentProject } from '../arrange/persistence'
 import { useArrange } from './arrange'
-import type { HitItem, SampleListItem, SavedStabRhythm, SpliceCandidate, TrackArrangement } from '../types/api'
+import type { HitItem, MusicLoopMeta, SampleListItem, SavedStabRhythm, SpliceCandidate, TrackArrangement } from '../types/api'
 import { DEFAULT_GENRE, type Genre, type ReferenceTrack } from '../types/engine'
 import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
 import { attempt, useApp } from './app'
@@ -67,6 +69,8 @@ export interface GenerateSettings {
   ambience: { enabled: boolean }
   /** Splice vocal loops on/off: when on, some new tracks sing one that fits their key and tempo (SCOPE.md §6.11a). */
   vocalLoops: { enabled: boolean }
+  /** Music loops on/off: when on, a third of new house tracks without a piano play one that fits in place of the stabs (SCOPE.md §6.11b). */
+  musicLoops: { enabled: boolean }
   /** Choices locked for every next track (choices.ts), by rule. */
   locks: Rules
 }
@@ -117,6 +121,15 @@ const STRINGS_KEY = 'drumvault.generate.strings'
 const PADS_KEY = 'drumvault.generate.pads'
 const AMBIENCE_KEY = 'drumvault.generate.ambience'
 const VOCAL_LOOPS_KEY = 'drumvault.generate.vocalLoops'
+const MUSIC_LOOPS_KEY = 'drumvault.generate.musicLoops'
+
+function savedMusicLoops(): GenerateSettings['musicLoops'] {
+  try {
+    return { enabled: true, ...JSON.parse(localStorage.getItem(k(MUSIC_LOOPS_KEY)) ?? '{}') }
+  } catch {
+    return { enabled: true }
+  }
+}
 
 function savedVocalLoops(): GenerateSettings['vocalLoops'] {
   try {
@@ -241,7 +254,7 @@ interface ShortlistItem {
 /** The loaded genre's settings, as remembered. */
 function savedSettings(): GenerateSettings {
   const [minMinutes, maxMinutes] = GENRE_START[storeGenre].minutes
-  return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), piano: savedPiano(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), locks: savedLocks() }
+  return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), piano: savedPiano(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), musicLoops: savedMusicLoops(), locks: savedLocks() }
 }
 
 const noKeep = (): KeepToggles => ({ structure: false, key: false, lanes: [], bassline: false, patch: false })
@@ -399,7 +412,11 @@ function options(fresh = false): GenerateOptions {
   const pads = settings.pads.enabled && padPresets.length ? { presets: padPresets } : null
   const bedHits = hits.filter((h) => h.kind === 'ambience')
   const ambience = settings.ambience.enabled && bedHits.length ? { hits: bedHits } : null
-  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, piano, strings, pads, ambience, vocals, templates, references }
+  // Music loops (house only): a new track draws from them while the module is on; the track on
+  // screen keeps (and can change) the one it plays.
+  const allLoops = useMusicLoops.getState().loops
+  const musicLoops = storeGenre === 'house' && allLoops.length && (!fresh || settings.musicLoops.enabled) ? { loops: allLoops } : null
+  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, piano, strings, pads, ambience, vocals, musicLoops, templates, references }
 }
 
 /**
@@ -536,6 +553,8 @@ export function newSound(laneId: string): boolean {
     setGenerationBass({ preset: others[Math.floor(Math.random() * others.length)] }, g)
     return true
   }
+  // (The Music Loop lane: another loop that fits.)
+  if (role === 'music') return newMusicLoop()
   if (role === 'strings') {
     const next = newStringsSound(samples, options(), g, randomSeed())
     if (!next) return false
@@ -905,6 +924,42 @@ function spliceTakes(): VocalTake[] {
   return (playableVocals(useVocals.getState().vocals) as VocalTake[]).filter((t) => t.source === 'splice' && !t.usedIn.length)
 }
 
+/** Music loops on or off for new generations (remembered). */
+export function setMusicLoopOptions(patch: Partial<GenerateSettings['musicLoops']>): void {
+  const { settings, set } = useGenerate.getState()
+  const musicLoops = { ...settings.musicLoops, ...patch }
+  set({ settings: { ...settings, musicLoops } })
+  try {
+    localStorage.setItem(k(MUSIC_LOOPS_KEY), JSON.stringify(musicLoops))
+  } catch {
+    // not remembered
+  }
+  if (patch.enabled !== undefined) invalidate()
+}
+
+/** The music loops a track in `key` at `bpm` could play (never exported, moved 1–3 semitones, near its tempo). */
+export function musicLoopsFitting(key: string | null, bpm: number): MusicLoopMeta[] {
+  return storeGenre === 'house' ? useMusicLoops.getState().loops.filter((l) => musicFits(l, key, bpm)) : []
+}
+
+/**
+ * Another music loop for the track on screen (SCOPE.md §6.11b), at random from the others that fit;
+ * on a track playing stabs, a loop in their place. The rest stays (⌘Z goes back). False: none fits.
+ */
+export function newMusicLoop(): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  if (!g || !samples) return false
+  const others = musicLoopsFitting(g.key, g.project.bpm).filter((l) => l.id !== g.music?.loop.id)
+  if (!others.length) return false
+  const pick = others[Math.floor(Math.random() * others.length)]
+  const roles: Role[] = g.music ? ['music'] : ['music', ...STAB_ROLES, 'piano']
+  const values = g.music ? { musicLoop: pick.id } : { keys: 'music', musicLoop: pick.id }
+  const next = listenBack(setTrackRules(samples, options(), g, values, roles), { only: roles })
+  apply(next, clipIds(g, next, (name) => roles.includes(laneRole(name)!)), g.music ? 'New music loop' : 'Music loop instead of stabs')
+  return true
+}
+
 /** Splice vocal loops on or off for new generations (remembered). */
 export function setVocalLoopOptions(patch: Partial<GenerateSettings['vocalLoops']>): void {
   const { settings, set } = useGenerate.getState()
@@ -1148,7 +1203,7 @@ export function invalidate(): void {
 
 export async function loadSamples(): Promise<void> {
   const [samples, templates, references] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), fetchReferences(),
-    loadBass(), loadHits(), loadVocals()])
+    loadBass(), loadHits(), loadVocals(), loadMusicLoops()])
   useGenerate.getState().set({ samples, templates, references })
   prefetch()
   void moveShortlist()

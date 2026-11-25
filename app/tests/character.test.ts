@@ -58,7 +58,7 @@ describe('a track\'s character and its lead', () => {
 
   it('draws the lead by the character\'s leaning, and none when the track lacks the part drawn', () => {
     const count = (c: typeof CHARACTERS[number]) => {
-      const n = { stab: 0, bass: 0, perc: 0, piano: 0 }
+      const n = { stab: 0, bass: 0, perc: 0, piano: 0, music: 0 }
       for (let s = 1; s <= 600; s++) n[pickLead(c, new Rng(s), ['stab', 'bass', 'perc'])!]++
       return n
     }

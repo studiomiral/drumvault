@@ -102,6 +102,11 @@ const api: DrumvaultAPI = {
   importVocalLoops: (paths) => ipcRenderer.invoke('vocals:import-loops', paths),
   setVocalUrl: (id, url) => ipcRenderer.invoke('vocals:set-url', id, url),
   unuseVocal: (id) => ipcRenderer.invoke('vocals:unuse', id),
+  listMusicLoops: () => ipcRenderer.invoke('music:list'),
+  importMusicLoops: (paths) => ipcRenderer.invoke('music:import', paths),
+  markMusicLoopsUsed: (ids, track) => ipcRenderer.invoke('music:used', ids, track),
+  unuseMusicLoop: (id) => ipcRenderer.invoke('music:unuse', id),
+  deleteMusicLoop: (id) => ipcRenderer.invoke('music:delete', id),
   revealPath: (path) => ipcRenderer.invoke('shell:revealPath', path),
 
   chooseUploadFolder: (defaultPath) => ipcRenderer.invoke('upload:chooseDir', defaultPath),

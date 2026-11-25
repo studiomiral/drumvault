@@ -137,7 +137,7 @@ export interface BassRender {
    * Absent on older bass projects. Strings (§6.10), vocal phrases (§6.11) and piano parts (§6.9a)
    * share the render pipeline; keys parts, Serum chord stabs and drones only in tracks made before they were removed.
    */
-  role?: 'bass' | 'piano' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal' | 'pad' | 'ambience'
+  role?: 'bass' | 'piano' | 'keys' | 'stab' | 'drone' | 'strings' | 'vocal' | 'pad' | 'ambience' | 'music'
   keyLabel?: string | null
   /** Absolute path of the .SerumPreset; strings' is a Strings page sample, a sampled bass's or piano's its one-shot (library-relative). */
   preset: string
@@ -165,6 +165,13 @@ export interface BassRender {
   drone?: { rhythm: string; warp?: string; start?: number }
   /** A vocal phrase: the key it's sung in (`transpose` moves it from there) and its take's id. */
   vocal?: { key: string | null; take: string }
+  /** A music loop (§6.11b): the key it was recorded in (`transpose` moves it from there) and its id. */
+  music?: { key: string | null; loop: string }
+  /**
+   * A music loop's colour in this track, so it never sounds as recorded: [low cut Hz, bell Hz,
+   * bell dB, bell Q, high shelf dB, saturation drive dB] (generate/musicloops.ts: drawColor).
+   */
+  color?: number[]
 }
 
 /** A loop on the bar grid; extending it repeats the loop. */
