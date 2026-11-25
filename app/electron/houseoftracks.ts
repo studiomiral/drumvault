@@ -82,8 +82,11 @@ export function hotKey(key: string): string | null {
 
 /**
  * The script that fills the form (or, `verify`, only reads it back), run in the page with
- * executeJavaScript. Values are set through the elements' native setters with `input` and `change`
- * events, so React sees them; radios and tag options are clicked. Resolves to one row per field.
+ * executeJavaScript. Selects are set through their native setters with `input` and `change` events,
+ * so React sees them; radios and tag options are clicked. The text fields are left to be typed
+ * (the site only takes what it saw typed, not a value set by a script): each is marked with
+ * `data-dv-type` and listed in `typed`, for hotwindow.ts to type into with the DevTools Protocol.
+ * Resolves to one row per field and the fields to type.
  */
 export function fillScript(fields: HotFields, verify: boolean): string {
   const key = hotKey(fields.key)
@@ -112,10 +115,16 @@ const PAGE_FILL = String.raw`async (S, V, verify) => {
   const byLabel = (m) => [...document.querySelectorAll('input:not([type]), input[type="text"], input[type="url"], textarea')]
     .filter((el) => !el.disabled && (el.offsetWidth || el.offsetHeight) && !known.some((k) => el.matches(k)))
     .find((el) => new RegExp(m.label, 'i').test(describe(el)) && !(m.not && new RegExp(m.not, 'i').test(describe(el))))
+  const typed = []
+  const toType = (el, field, v) => {
+    const n = String(typed.length)
+    el.setAttribute('data-dv-type', n)
+    typed.push({ field, value: v, selector: '[data-dv-type="' + n + '"]' })
+  }
   const textByLabel = (field, m, v) => {
     const el = byLabel(m)
     if (!el) return row(field, v, false, 'no field labelled /' + m.label + '/ on the page')
-    if (!verify) setValue(el, v)
+    if (!verify) return toType(el, field, v)
     const where = el.id ? '#' + el.id : el.name ? '[name=' + el.name + ']' : el.tagName.toLowerCase()
     row(field, v, el.value === v, el.value === v ? 'in ' + where : 'the page has "' + el.value.slice(0, 60) + '" (' + where + ')')
   }
@@ -123,7 +132,7 @@ const PAGE_FILL = String.raw`async (S, V, verify) => {
   const text = (field, sel, v) => {
     const el = q(sel)
     if (!el) return missing(field, v, sel)
-    if (!verify) setValue(el, v)
+    if (!verify) return toType(el, field, v)
     row(field, v, el.value === v, el.value === v ? undefined : 'the page has "' + el.value.slice(0, 60) + '"')
   }
   const select = (field, sel, label, match) => {
@@ -194,8 +203,29 @@ const PAGE_FILL = String.raw`async (S, V, verify) => {
     if (V.vocalPackUrl) textByLabel('Vocal pack URL', S.vocalPackUrl, V.vocalPackUrl)
     else row('Vocal pack URL', '', false, 'no link: paste it in the form')
   }
-  return rows
+  return { rows, typed }
 }`
+
+/** A text field the fill script left to be typed: its row's name, the text, and the field's mark. */
+export interface HotTyped {
+  field: string
+  value: string
+  selector: string
+}
+
+/** Fallback for a field typing didn't fill: the value set as the script used to (native setter, `input`, `change`). */
+export function setValueScript(selector: string, value: string): string {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)})
+    if (!el) return false
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+    el.dispatchEvent(new Event('blur', { bubbles: true }))
+    return true
+  })()`
+}
 
 /** Whether the form is on screen and React has taken it over (its props on the element), so set values stick. */
 export const READY_SCRIPT = `(() => { const el = document.querySelector(${JSON.stringify(HOT_SELECTORS.ready)}); return !!el && Object.keys(el).some((k) => k.startsWith('__reactProps')) })()`

@@ -8,7 +8,7 @@ import { basename, join } from 'node:path'
 import type { HotFields, HotFillResult, HotFillRow, UploadCheck } from '../src/types/api'
 import {
   DUMP_SCRIPT, fileNameScript, fillScript, HOT_FILE_INPUTS, HOT_FILE_LABELS, HOT_PARTITION, HOT_UPLOAD_URL, isHotUrl, READY_SCRIPT,
-  type HotFileInput,
+  setValueScript, type HotFileInput, type HotTyped,
 } from './houseoftracks'
 
 let hot: BrowserWindow | null = null
@@ -74,6 +74,40 @@ async function formReady(win: BrowserWindow, timeoutMs = 30_000): Promise<boolea
   return false
 }
 
+type Debugger = Electron.WebContents['debugger']
+
+/** A key pressed and let go (DevTools Protocol): `text` for one that types (Enter in a textarea). */
+async function press(dbg: Debugger, key: string, code: number, text?: string): Promise<void> {
+  await dbg.sendCommand('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code: key, windowsVirtualKeyCode: code, ...(text ? { text, unmodifiedText: text } : {}) })
+  await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: code })
+}
+
+/**
+ * Type `t.value` into its field as the keyboard would (DevTools Protocol): focused, what's there
+ * selected, the text inserted (trusted `input` events; Enter for each line break, in a textarea
+ * only), then End pressed and let go. The site counts only what it saw typed: a value set by a
+ * script it showed but didn't take until the user did something in the field.
+ */
+export async function typeInto(dbg: Debugger, rootId: number, t: HotTyped): Promise<boolean> {
+  const { nodeId } = await dbg.sendCommand('DOM.querySelector', { nodeId: rootId, selector: t.selector }) as { nodeId: number }
+  if (!nodeId) return false
+  await dbg.sendCommand('DOM.scrollIntoViewIfNeeded', { nodeId }).catch(() => {})
+  await dbg.sendCommand('DOM.focus', { nodeId })
+  const { result } = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.activeElement && document.activeElement.tagName', returnByValue: true }) as { result: { value?: string } }
+  const lines = t.value.split('\n')
+  if (lines.length > 1 && result.value !== 'TEXTAREA') return false  // Enter in an input would submit the form
+  // ⌘A, so the text replaces what's there (any field, a number one too), and ⌫ for none.
+  await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 4, commands: ['selectAll'] })
+  await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 4 })
+  if (!t.value) await press(dbg, 'Backspace', 8)
+  for (let i = 0; i < lines.length; i++) {
+    if (i) await press(dbg, 'Enter', 13, '\r')
+    if (lines[i]) await dbg.sendCommand('Input.insertText', { text: lines[i] })
+  }
+  await press(dbg, 'End', 35)
+  return true
+}
+
 /** The export's files for each file input (instrumental ones only for a track that sings). */
 export function hotFiles(check: UploadCheck, sings: boolean): Record<HotFileInput, string | null> {
   return {
@@ -87,8 +121,9 @@ export function hotFiles(check: UploadCheck, sings: boolean): Record<HotFileInpu
 }
 
 /**
- * A clean upload form, filled with `fields`, the files attached (Chrome DevTools Protocol: a page
- * can't set a file input itself), then every field read back. Never presses Next or Submit.
+ * A clean upload form, filled with `fields`: the text fields typed and the files attached through
+ * the Chrome DevTools Protocol (the site takes only typed text; a page can't set a file input
+ * itself), then every field read back. Never presses Next or Submit.
  */
 export async function fillHot(fields: HotFields, check: UploadCheck, onPage: (url: string | null) => void): Promise<HotFillResult> {
   const win = openHot(onPage)
@@ -99,11 +134,13 @@ export async function fillHot(fields: HotFields, check: UploadCheck, onPage: (ur
     return { rows: [], error: `The upload form didn't show (${wc.getURL() || 'no page'}). Log in to House of Tracks in its window, then press Fill again.` }
   }
   await sleep(400)
-  const filled = (await wc.executeJavaScript(fillScript(fields, false), true)) as HotFillRow[]
+  const { rows: filled, typed } = (await wc.executeJavaScript(fillScript(fields, false), true)) as { rows: HotFillRow[]; typed: HotTyped[] }
 
   const sings = fields.vocal !== 'None'
   const files = hotFiles(check, sings)
   const fileRows: HotFillRow[] = []
+  // Text fields typing didn't fill (set by script below, as before).
+  const scripted = new Set<string>()
   const dbg = wc.debugger
   let attached = false
   try {
@@ -112,6 +149,15 @@ export async function fillHot(fields: HotFields, check: UploadCheck, onPage: (ur
       attached = true
     }
     const { root } = await dbg.sendCommand('DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } }
+    // The text fields, typed, right after the fill script marked them.
+    for (const t of typed) {
+      const ok = await typeInto(dbg, root.nodeId, t).catch(() => false)
+      const now = ok ? await wc.executeJavaScript(`document.querySelector(${JSON.stringify(t.selector)})?.value ?? null`).catch(() => null) : null
+      if (now !== t.value) scripted.add(t.field)
+    }
+    // Out of the last field, as a click elsewhere would (a field checked on blur is checked).
+    await dbg.sendCommand('Runtime.evaluate', { expression: 'document.activeElement && document.activeElement.blur()' }).catch(() => {})
+
     for (const input of Object.keys(HOT_FILE_INPUTS) as HotFileInput[]) {
       const path = files[input]
       const label = HOT_FILE_LABELS[input]
@@ -133,17 +179,24 @@ export async function fillHot(fields: HotFields, check: UploadCheck, onPage: (ur
       }
     }
   } catch (e) {
+    for (const t of typed) scripted.add(t.field)
     fileRows.push({ field: 'Files', value: '', ok: false, note: `couldn't attach files: ${(e as Error).message}` })
   } finally {
     if (attached && dbg.isAttached()) dbg.detach()
   }
 
+  // A field typing didn't fill gets its value set by script, as before (the check says so).
+  for (const t of typed) if (scripted.has(t.field)) await wc.executeJavaScript(setValueScript(t.selector, t.value)).catch(() => false)
+
   // Read everything back once the page has caught up: React may have redrawn after the files.
   await sleep(600)
-  const checked = (await wc.executeJavaScript(fillScript(fields, true), true)) as HotFillRow[]
+  const checked = ((await wc.executeJavaScript(fillScript(fields, true), true)) as { rows: HotFillRow[] }).rows
   const rows = checked.map((r) => {
     const f = filled.find((x) => x.field === r.field)
-    return !r.ok && f?.note ? { ...r, note: f.note } : r
+    if (!r.ok && f?.note) return { ...r, note: f.note }
+    // Set but not typed: the site may not take it until something is typed in the field.
+    if (r.ok && scripted.has(r.field)) return { ...r, ok: false, note: "couldn't type it, so it was set by script: click in the field and type a space, or the site says it's empty" }
+    return r
   })
   for (const r of fileRows) {
     if (!r.ok) continue
