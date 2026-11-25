@@ -63,8 +63,10 @@ export interface UploadCheck {
   masterInstrumental: string | null
   mixdown: string | null
   mixdownInstrumental: string | null
-  /** WAVs in stems/, MIDI files in midi/. */
+  /** WAVs in stems/ (or, once they were deleted after zipping, in stems.zip), MIDI files in midi/. */
   stems: number
+  /** The stems are in stems.zip only: stems/ was deleted after zipping (to save space). */
+  stemsZipOnly: boolean
   midi: number
   info: boolean
   zips: Record<ZipPart, UploadZip | null>

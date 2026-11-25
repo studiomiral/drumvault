@@ -99,7 +99,7 @@ export function uploadProblems(check: UploadCheck, info: TrackInfo): UploadProbl
   if (!check.info) blocking.push('info.txt is missing')
   if (!check.master) blocking.push('No master: masters/mastered.wav (or "… mastered.wav")')
   if (!check.mixdown) blocking.push('No mixdown: masters/mixdown.wav')
-  if (!check.stems) blocking.push('stems/ has no WAVs')
+  if (!check.stems) blocking.push('No stems: stems/ has no WAVs, and there is no stems.zip')
   if (!check.midi) blocking.push('midi/ has no MIDI files')
   if (sings(info)) {
     // A track with a vocal goes with its instrumental masters too.

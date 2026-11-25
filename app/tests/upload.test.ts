@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -9,7 +9,7 @@ vi.hoisted(() => {
 })
 
 import { fillScript, hotKey, isHotUrl } from '../electron/houseoftracks'
-import { checkFolder, listExports, readUploads, uploadsFile, writeUpload, zipPart } from '../electron/upload'
+import { checkFolder, deleteZipped, listExports, readUploads, uploadsFile, writeUpload, zipPart } from '../electron/upload'
 import { parseInfoText } from '../src/arrange/exporter'
 import { hotFields, lyricsOf, PRICES, uploadProblems, vocalKind, vocalPacks } from '../src/upload/fields'
 import type { UploadCheck } from '../src/types/api'
@@ -55,7 +55,7 @@ describe('upload: export folders', () => {
     expect(c.masterInstrumental?.endsWith('masters/Bring It mastered instrumental.wav')).toBe(true)
     expect(c.mixdown?.endsWith('masters/mixdown.wav')).toBe(true)
     expect(c.mixdownInstrumental?.endsWith('masters/mixdown instrumental.wav')).toBe(true)
-    expect([c.stems, c.midi, c.info]).toEqual([2, 1, true])
+    expect([c.stems, c.stemsZipOnly, c.midi, c.info]).toEqual([2, false, 1, true])
     expect(c.zips).toEqual({ stems: null, midi: null })
 
     const plain = await checkFolder(project(d, 'Plain'))
@@ -108,6 +108,34 @@ describe.skipIf(!existsSync('/usr/bin/ditto'))('upload: zips', () => {
     expect(c.zips.stems?.fresh).toBe(false)
   })
 
+  it('deletes the stems once they are in the zip; the zip then stands for them', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'dv-up-'))
+    const p = project(d, 'Space')
+    await zipPart(p, 'stems', () => {}).done
+    // A file the zip doesn't hold, or holds at another size, stays.
+    writeFileSync(join(p, 'stems', 'Hats.wav'), 'h')
+    expect(await deleteZipped(p, 'stems')).toBe(2)
+    expect(existsSync(join(p, 'stems', 'Kick.wav'))).toBe(false)
+    expect(existsSync(join(p, 'stems', 'Hats.wav'))).toBe(true)
+    unlinkSync(join(p, 'stems', 'Hats.wav'))
+    expect(await deleteZipped(p, 'stems')).toBe(0)
+    expect(existsSync(join(p, 'stems'))).toBe(false)
+
+    const c = await checkFolder(p)
+    expect([c.stems, c.stemsZipOnly, c.zips.stems?.fresh]).toEqual([2, true, true])
+    expect(uploadProblems(c, parseInfoText(INFO('Space'))).blocking).toEqual([])
+    // stems/ there but empty (a file Finder left in it): still the zip's.
+    mkdirSync(join(p, 'stems'))
+    writeFileSync(join(p, 'stems', '.DS_Store'), 'x')
+    const again = await checkFolder(p)
+    expect([again.stems, again.stemsZipOnly, again.zips.stems?.fresh]).toEqual([2, true, true])
+    // A broken zip: nothing deleted.
+    const q = project(d, 'Broken')
+    writeFileSync(join(q, 'stems.zip'), 'not a zip')
+    await expect(deleteZipped(q, 'stems')).rejects.toThrow()
+    expect(existsSync(join(q, 'stems', 'Kick.wav'))).toBe(true)
+  })
+
   it('refuses an empty folder and a bad request, leaving no part file', async () => {
     const d = mkdtempSync(join(tmpdir(), 'dv-up-'))
     const p = project(d, 'Empty', { midi: false })
@@ -153,7 +181,7 @@ describe('upload: the House of Tracks form', () => {
   })
 
   const ALL_THERE: UploadCheck = {
-    master: 'x', masterInstrumental: null, mixdown: 'x', mixdownInstrumental: null, stems: 1, midi: 1, info: true, zips: { stems: null, midi: null },
+    master: 'x', masterInstrumental: null, mixdown: 'x', mixdownInstrumental: null, stems: 1, stemsZipOnly: false, midi: 1, info: true, zips: { stems: null, midi: null },
   }
 
   it('fills from info.txt and the choices, with the vocal kind from the credits', () => {

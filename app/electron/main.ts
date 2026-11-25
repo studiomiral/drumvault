@@ -19,7 +19,7 @@ import * as eleven from './eleven'
 import { compositionPlan, type VocalAnalysis, type VocalMeta, type VocalRequest } from '../src/vocals/plan'
 import { JobTracker } from './jobs'
 import { dumpHot, fillHot, openHot } from './hotwindow'
-import { checkFolder, INFO_FILE, listExports, readUploads, writeUpload, ZIP_PARTS, zipPart } from './upload'
+import { checkFolder, deleteZipped, INFO_FILE, listExports, readUploads, writeUpload, ZIP_PARTS, zipPart } from './upload'
 import { Sidecar } from './sidecar'
 
 // Tests and parallel profiles can point the app at their own settings folder. Otherwise settings,
@@ -631,7 +631,8 @@ function registerIpc(): void {
   })
   ipcMain.handle('upload:list', (_e, dir: string) => listExports(exportFolder(dir)))
   ipcMain.handle('upload:check', (_e, path: string) => checkFolder(exportProject(path)))
-  // Zip stems/ and midi/ (the ones without a fresh zip) in a child process each, one after the other.
+  // Zip stems/ and midi/ (the ones without a fresh zip) in a child process each, one after the other;
+  // the stem WAVs are deleted once they're in the zip (to save space; the MIDI files are small).
   const zipping = new Map<string, () => void>()
   ipcMain.handle('upload:zip', async (_e, path: string) => {
     const dir = exportProject(path)
@@ -647,6 +648,7 @@ function registerIpc(): void {
         const job = zipPart(dir, part, (done, total) => send('upload-zip', { path: dir, part, done, total }))
         cancel = () => { cancelled = true; job.cancel() }
         await job.done
+        if (part === 'stems') await deleteZipped(dir, 'stems')
       }
       return await checkFolder(dir)
     } finally {

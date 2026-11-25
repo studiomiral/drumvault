@@ -220,7 +220,7 @@ function TrackPanel({ track, rec, setRecord, progress, zipping, busy, filling, r
       { label: check.masterInstrumental ? `masters/${base(check.masterInstrumental)}` : 'masters/mastered instrumental.wav', ok: !!check.masterInstrumental },
       { label: 'masters/mixdown instrumental.wav', ok: !!check.mixdownInstrumental },
     ] : []),
-    { label: `stems/ (${check.stems} WAV${check.stems === 1 ? '' : 's'})`, ok: check.stems > 0 },
+    { label: `${check.stemsZipOnly ? 'stems.zip' : 'stems/'} (${check.stems} WAV${check.stems === 1 ? '' : 's'})`, ok: check.stems > 0 },
     { label: `midi/ (${check.midi} file${check.midi === 1 ? '' : 's'})`, ok: check.midi > 0 },
   ]
 
@@ -316,7 +316,8 @@ function TrackPanel({ track, rec, setRecord, progress, zipping, busy, filling, r
             )
           })}
           <div className="text-[11.5px] text-faint pt-1">
-            stems/ and midi/ each zipped as Finder's Compress does, next to them in the project folder. The masters go up as they are.
+            stems/ and midi/ each zipped as Finder's Compress does, next to them in the project folder; the stem WAVs are deleted once
+            they're in stems.zip, to save space. The masters go up as they are.
           </div>
         </div>
       </Card>

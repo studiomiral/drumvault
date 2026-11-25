@@ -2,9 +2,10 @@
 // its stems/ and midi/ zipped for House of Tracks, and what was uploaded remembered.
 // Plain Node (no Electron imports) so it can be tested on its own.
 
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, stat, unlink } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rmdir, stat, unlink } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { UploadCheck, UploadFolder, UploadRecord, UploadZip, ZipPart } from '../src/types/api'
 import { writeAtomic } from './fs'
@@ -13,6 +14,7 @@ export const INFO_FILE = 'info.txt'
 export const ZIP_PARTS: ZipPart[] = ['stems', 'midi']
 
 const isJunk = (name: string) => name.startsWith('.') || name === '__MACOSX'
+const run = promisify(execFile)
 
 async function files(dir: string, ext: RegExp): Promise<string[]> {
   try {
@@ -61,12 +63,15 @@ export async function checkFolder(path: string): Promise<UploadCheck> {
   const midi = await files(join(path, 'midi'), /\.midi?$/i)
   const zips = {} as UploadCheck['zips']
   for (const part of ZIP_PARTS) zips[part] = await zipState(path, part)
+  // stems/ deleted after zipping: the stems are the zip's.
+  const zipped = !stems.length && zips.stems ? (await zipEntries(zips.stems.path)).filter((n) => /\.wav$/i.test(n)).length : 0
   return {
     master: pick(/(^|[\s_-])mastered\.wav$/i),
     masterInstrumental: pick(/(^|[\s_-])mastered instrumental\.wav$/i),
     mixdown: pick(/^mixdown\.wav$/i),
     mixdownInstrumental: pick(/^mixdown instrumental\.wav$/i),
-    stems: stems.length,
+    stems: stems.length || zipped,
+    stemsZipOnly: !stems.length && zipped > 0,
     midi: midi.length,
     info: existsSync(join(path, INFO_FILE)),
     zips,
@@ -85,12 +90,56 @@ async function zipState(path: string, part: ZipPart): Promise<UploadZip | null> 
   const dir = join(path, part)
   let newest = 0
   try {
-    newest = (await stat(dir)).mtimeMs
-    for (const name of await files(dir, /./)) newest = Math.max(newest, (await stat(join(dir, name))).mtimeMs)
+    const names = await files(dir, /./)
+    // (An empty folder, its files deleted after zipping: the zip is all there is.)
+    if (names.length) newest = (await stat(dir)).mtimeMs
+    for (const name of names) newest = Math.max(newest, (await stat(join(dir, name))).mtimeMs)
   } catch {
     // no folder: the zip is all there is
   }
   return { path: zip, size: st.size, fresh: st.mtimeMs >= newest }
+}
+
+/** The files in a zip (paths inside it, folders and __MACOSX left out); none if it can't be read. */
+async function zipEntries(zip: string, unzip = '/usr/bin/unzip'): Promise<string[]> {
+  try {
+    const { stdout } = await run(unzip, ['-Z1', zip], { maxBuffer: 16 << 20 })
+    return stdout.split('\n').filter((l) => l && !l.endsWith('/') && !l.startsWith('__MACOSX'))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Once `<part>.zip` is made, the files it holds are deleted from `<part>/` (to save space: a
+ * track's stems are a few hundred MB, twice over with the zip), and the folder too when nothing
+ * else is left in it. Only after the zip tests whole (`unzip -t`), and only the files it holds,
+ * at their size. Returns how many were deleted.
+ */
+export async function deleteZipped(path: string, part: ZipPart, unzip = '/usr/bin/unzip'): Promise<number> {
+  if (!isAbsolute(path) || !ZIP_PARTS.includes(part)) throw new Error(`Bad request: ${path} ${part}`)
+  const zip = join(path, `${part}.zip`)
+  await run(unzip, ['-tqq', zip])
+  const { stdout } = await run(unzip, ['-Zl', zip], { maxBuffer: 16 << 20 })
+  // "-rw-r--r--  3.0 unx   5000 bx defN 25-Nov-26 10:00 stems/Kick.wav": the size, then the path.
+  const sizes = new Map<string, number>()
+  for (const l of stdout.split('\n')) {
+    const m = /^\S+\s+\S+\s+\S+\s+(\d+)\s+\S+\s+\d+\s+\S+\s+\S+\s+\S+\s+(.+)$/.exec(l)
+    if (m) sizes.set(m[2], Number(m[1]))
+  }
+  const dir = join(path, part)
+  let deleted = 0
+  for (const name of await files(dir, /./)) {
+    const size = sizes.get(`${part}/${name}`)
+    if (size == null || (await stat(join(dir, name))).size !== size) continue
+    await unlink(join(dir, name))
+    deleted++
+  }
+  if (!(await files(dir, /./)).length) {
+    for (const e of await readdir(dir).catch(() => [] as string[])) if (isJunk(e)) await unlink(join(dir, e)).catch(() => {})
+    await rmdir(dir).catch(() => {})
+  }
+  return deleted
 }
 
 /** Bytes of the files in a folder (the zip's progress is counted against them). */
