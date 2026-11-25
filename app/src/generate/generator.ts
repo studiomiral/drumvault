@@ -12,7 +12,7 @@ import { BEATS_PER_BAR, makeLane, makeMarker, newProject, replaceSample, sampleR
 import type { Category, Genre, ReferenceTrack, SampleKind } from '../types/engine'
 import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, MusicLoopMeta, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
-import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, PatternClip, Project, StepGroove, Velocity } from '../types/project'
+import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, Lane, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
 import { chordName, followBass, generatePiano, pianoMidi, pianoModel, type PianoKind, type PianoPart } from './piano'
 import { hitPitch, hitSample } from './disco'
@@ -3638,6 +3638,91 @@ const LAYER_OF: Partial<Record<Role, Role>> = {
   clap2: 'clap', clap3: 'clap', hats2: 'hats', perc2: 'perc', top2: 'top', top3: 'top', top4: 'top', fx2: 'fx', fx3: 'fx', disco2: 'disco', stab2: 'stab', stab3: 'stab', vchop: 'vocal',
 }
 
+// ---------------------------------------------------------------------------
+// Adding a lane to a made track (SCOPE.md §6.6, "Adding a lane")
+// ---------------------------------------------------------------------------
+
+/** The kinds of lane that can be added to a generated track, as the role whose part each is another of. */
+export const ADDABLE: { role: Role; label: string }[] = [
+  { role: 'kick', label: 'Kick' }, { role: 'clap', label: 'Clap' }, { role: 'hats', label: 'Hats' }, { role: 'ride', label: 'Ride' },
+  { role: 'perc', label: 'Perc' }, { role: 'top', label: 'Top loop' }, { role: 'groove', label: 'Groove' },
+  { role: 'buildup', label: 'Build-up' }, { role: 'fills', label: 'Fills' }, { role: 'fx', label: 'FX: risers and sweeps' },
+  { role: 'hits', label: 'Impacts and downlifters' }, { role: 'crash', label: 'Crash and cymbals' }, { role: 'atmos', label: 'Atmos' },
+  { role: 'stab', label: 'Chord stab' }, { role: 'disco', label: 'Drop hit' }, { role: 'bed', label: 'Ambience bed' },
+]
+/** An added lane sits this much under the lanes of its kind the track already has (dB). */
+const EXTRA_UNDER_DB = 2
+/** What an added lane of a kind needs switched on to play at all (in a track without one). */
+const EXTRA_FORCE: Partial<Record<Role, Rules>> = { stab: { stabs: true, keys: 'stabs' }, disco: { discoIn: true }, bed: { bedIn: true } }
+
+/** The role of a generated lane, or of an added one (the kind it is another of). */
+export function laneKind(lane: Pick<Lane, 'name' | 'extra'>): Role | undefined {
+  return laneRole(lane.name) ?? (lane.extra as Role | undefined)
+}
+
+/**
+ * The track with a lane of `role`'s kind added (`into`: the added lane `into` filled again: its
+ * Remake), written as the generator places that kind (a build-up into the drops, fills at phrase
+ * ends, a top loop in the drops, …) over the same structure, key and rules, with samples the
+ * track doesn't play yet where there are some, and mixed as that kind is (its level a little
+ * under the lanes of the kind already there, its EQ, compressor and sidechain). Everything
+ * else stays exactly as it is. First as the track's own rules have it; when that puts nothing
+ * there (a track without a build-up), with the kind's own rules drawn anew. Null when nothing comes out.
+ */
+export function addLane(all: SampleListItem[], opts: GenerateOptions, g: Generation, role: Role, seed: number, into?: string): Generation | null {
+  const base = LANES.find((x) => x.role === role)
+  if (!base) return null
+  const own = new Set(LANE_RULES[role] ?? [])
+  const track = rulesOf(g)
+  const force = EXTRA_FORCE[role] ?? {}
+  const family = (r: Role | undefined) => !!r && (LAYER_OF[r] ?? r) === role
+  // (The kind's main sample drawn again: for chord stabs every stab, so the new one is another.)
+  const picks = Object.fromEntries(Object.entries(g.picks).filter(([r]) => !family(r as Role))) as Generation['picks']
+  const used = new Set(g.project.clips.map((c) => c.sample.relPath))
+  const before = into ? g.project.clips.filter((c) => c.laneId === into) : []
+  const bpm = g.project.bpm
+  for (let i = 0; i < 24; i++) {
+    const rules = { ...(i < 6 ? track : Object.fromEntries(Object.entries(track).filter(([k]) => !own.has(k)))), ...force }
+    const r = generate(all, { ...opts, tempo: { min: bpm, max: bpm }, bass: role === 'stab' ? opts.bass : null }, seed + i * 7919, {
+      structure: g.sections, arc: g.arc ?? null, key: g.key, picks, rules, avoid: [...used],
+    })
+    const rl = r.project.lanes.find((l) => l.name === base.name)
+    const clips = rl ? r.project.clips.filter((c) => c.laneId === rl.id) : []
+    if (!clips.length || clips.every((c) => used.has(c.sample.relPath))) continue
+    const project = structuredClone(g.project)
+    const others = project.lanes.filter((l) => l.id !== into && family(laneKind(l)))
+    const mix = { levelDb: (rl!.levelDb ?? 0) - (others.length ? EXTRA_UNDER_DB : 0), eq: rl!.eq && structuredClone(rl!.eq), comp: rl!.comp && { ...rl!.comp } }
+    let laneId = into
+    if (into) {
+      Object.assign(project.lanes.find((l) => l.id === into)!, mix)
+      project.clips = project.clips.filter((c) => c.laneId !== into)
+    } else {
+      const names = new Set(project.lanes.map((l) => l.name))
+      let name = `Extra ${base.name}`
+      for (let n = 2; names.has(name); n++) name = `Extra ${base.name} ${n}`
+      const { id: _id, ...made } = structuredClone(rl!)
+      const lane: Lane = { ...made, ...mix, id: uid(), name, extra: role, mute: false, solo: false }
+      laneId = lane.id
+      // After the lanes of its kind (else where its kind sits among the generator's lanes).
+      const last = project.lanes.map((l, k) => (family(laneKind(l)) ? k : -1)).reduce((a, b) => Math.max(a, b), -1)
+      const at = LANES.findIndex((x) => x.role === role)
+      const next = project.lanes.findIndex((l) => LANES.findIndex((y) => y.name === l.name) > at)
+      project.lanes.splice(last >= 0 ? last + 1 : next < 0 ? project.lanes.length : next, 0, lane)
+    }
+    const added = clips.map((c) => ({ ...structuredClone(c), id: uid(), laneId: laneId! }))
+    if (into && JSON.stringify(added.map(({ id: _i, laneId: _l, ...c }) => c)) === JSON.stringify(before.map(({ id: _i, laneId: _l, ...c }) => c))) continue
+    project.clips.push(...added)
+    const lane = project.lanes.find((l) => l.id === laneId)!
+    const sounds = [...new Set(added.map((c) => c.sample.name))]
+    const note = `${lane.name}: ${sounds.slice(0, 3).join(', ')}${sounds.length > 3 ? ', …' : ''}, added`
+    const choices = [...g.choices.filter((c) => !c.startsWith(`${lane.name}: `)), note]
+    const byPath = new Map(all.map((x) => [x.rel_path, x]))
+    const zips = [...new Set(project.clips.map((c) => byPath.get(c.sample.relPath)?.source_code).filter((x): x is string => !!x))].sort()
+    return { ...g, project, choices, zips }
+  }
+  return null
+}
+
 /**
  * The same track with one lane made again (the Generate view's per-lane button): a new sample
  * and the lane's own rules drawn again (a crash every 8 bars instead of 16, kicks out at other
@@ -4066,7 +4151,7 @@ function rerollBuildup(all: SampleListItem[], opts: GenerateOptions, g: Generati
 export function newLaneSound(all: SampleListItem[], opts: GenerateOptions, g: Generation, laneId: string, seed: number,
                              choose?: (s: SampleListItem, cands: SampleListItem[]) => SampleListItem | null): Generation | null {
   const lane = g.project.lanes.find((l) => l.id === laneId)
-  const role = lane && laneRole(lane.name)
+  const role = lane && laneKind(lane)
   if (!lane || !role) return null
   const rng = new Rng(seed)
   const samples = opts.zipIds ? all.filter((s) => opts.zipIds!.includes(s.zip_id)) : all

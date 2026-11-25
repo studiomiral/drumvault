@@ -48,6 +48,12 @@ export interface Lane {
   comp?: LaneComp
   /** The lane plays through the drum bus (`Project.drumBus`): the bus's gain, from all its lanes together, on this one's stem too. */
   bus?: boolean
+  /**
+   * A lane added to a generated track (SCOPE.md §6.6, "Adding a lane"): the generator role it is
+   * another one of ('buildup', 'top', …), filled and mixed as that kind. Its own lane: remakes of
+   * the track's lanes leave it as it is.
+   */
+  extra?: string
 }
 
 /**

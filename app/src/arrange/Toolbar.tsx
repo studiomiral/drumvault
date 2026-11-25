@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { playback } from '../audio/engine'
 import { Options } from '../create/Options'
 import { IconPlay, IconSparkle, IconStar, IconStop } from '../components/icons'
 import { Range } from '../components/Range'
+import { ContextMenu } from '../components/ContextMenu'
+import { addLaneMenu } from './addLane'
 import { Button, cx, inputClass, PageTitle } from '../components/ui'
 import { formatBpm, GENRE_ABOUT, GENRE_LABELS } from '../lib/format'
 import { beatToSec, BEATS_PER_BAR, formatPosition, formatTime } from '../lib/project'
@@ -68,11 +70,19 @@ export function Transport() {
   const { pxPerBeat, setView, libraryOpen, lanePanel } = useArrange()
   const [, force] = useState(0)
   useEffect(() => playback.subscribe(() => force((n) => n + 1)), [])
+  const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
+  const closeAddMenu = useCallback(() => setAddMenu(null), [])
 
   return (
     <div className="h-11 shrink-0 flex items-center gap-2.5 px-5 border-b border-line bg-panel">
       <Button variant="ghost" title="Undo (⌘Z)" disabled={!past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" title="Redo (⇧⌘Z)" disabled={!future.length} onClick={redo}>↷</Button>
+      <Button variant="ghost" title="Add a lane: a kind the generator fills (a build-up, a top loop, fills, FX, …), or an empty one"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect()
+                setAddMenu({ x: r.left, y: r.bottom + 4 })
+              }}>+</Button>
+      {addMenu && <ContextMenu x={addMenu.x} y={addMenu.y} items={addLaneMenu()} onClose={closeAddMenu} />}
       <div className="w-px h-5 bg-line mx-1.5" />
       <button title="Play / stop (Space)" onClick={() => playback.toggle()}
               className={cx('w-8 h-8 rounded-full flex items-center justify-center shadow-sm',

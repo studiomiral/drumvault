@@ -1,13 +1,15 @@
 import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IconLock, IconSparkle } from '../components/icons'
 import { cx } from '../components/ui'
 import { laneRole } from '../generate/generator'
 import { useApp } from '../store/app'
 import { laneKept, LOCKABLE, rerollLane, setLaneVolume, toggleLane, toggleLaneKeep, useGenerate } from '../store/generate'
-import { LANE_PALETTE, makeLane, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
+import { LANE_PALETTE, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
+import { ContextMenu } from '../components/ContextMenu'
+import { addLaneMenu } from './addLane'
 import { panelOf, useArrange } from '../store/arrange'
 import { useProject } from '../store/project'
 import type { Lane } from '../types/project'
@@ -20,12 +22,17 @@ export function LaneHeaders() {
   const [dragId, setDragId] = useState<string | null>(null)
   const edit = useProject((s) => s.edit)
 
-  const addLane = () => edit('Add lane', (d) => {
-    d.lanes.push(makeLane(`Lane ${d.lanes.length + 1}`, d.lanes.length))
-  })
+  // The kinds of lane to add (addLane.ts): from "+ Lane", or a right-click under the lanes.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
 
   return (
     <div className="relative shrink-0 border-r border-line bg-panel-2 overflow-hidden" style={{ width: HEADER_W }}
+         onContextMenu={(e) => {
+           if ((e.target as HTMLElement).closest('[data-lane]')) return
+           e.preventDefault()
+           setMenu({ x: e.clientX, y: e.clientY })
+         }}
          onWheel={(e) => {
            // Scrolls the lanes with the timeline (which keeps it inside the content).
            const st = useArrange.getState()
@@ -34,7 +41,8 @@ export function LaneHeaders() {
       <div className="absolute inset-x-0 top-0 z-10 bg-panel border-b border-line flex items-end justify-between px-3 pb-1.5"
            style={{ height: TOP }}>
         <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">Lanes</span>
-        <button onClick={addLane} className="text-[12px] text-accent hover:underline">+ Lane</button>
+        <button onClick={(e) => setMenu({ x: e.clientX, y: e.clientY })} className="text-[12px] text-accent hover:underline"
+                title="Add a lane: a kind the generator fills (a build-up, a top loop, fills, FX, …), or an empty one">+ Lane</button>
       </div>
       <div style={{ transform: `translateY(${TOP - scrollY}px)` }}>
         {lanes.map((lane) => (
@@ -51,6 +59,7 @@ export function LaneHeaders() {
                       }} />
         ))}
       </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={addLaneMenu()} onClose={closeMenu} />}
     </div>
   )
 }
@@ -68,7 +77,8 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
   // A generated track's lanes keep their module: kept for the next G, made again, its panel. Their
   // volume, mute and solo carry over to the next tracks, like Generate's mix.
   const role = laneRole(lane.name)
-  const generated = useProject((s) => !!s.project.generation) && !!role
+  // (A lane added to the track, SCOPE.md §6.6: made again as its kind; no Keep, its volume its own.)
+  const generated = useProject((s) => !!s.project.generation) && (!!role || !!lane.extra)
   const kept = useGenerate((s) => !!role && laneKept(role, s.keep))
   const panel = useArrange((s) => s.lanePanel)
   const open = !!panel && JSON.stringify(panel) === JSON.stringify(panelOf(lane.name))
@@ -105,7 +115,7 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
   }
 
   return (
-    <div
+    <div data-lane
       className={cx('relative border-b border-line px-2 flex gap-2 group', dragging && 'opacity-40')}
       style={{ height: lane.height }}
       draggable={name === null}

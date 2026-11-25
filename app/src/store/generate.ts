@@ -11,7 +11,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  addLane, applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
   setStabRhythm, setTrackRule, setTrackRules, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
@@ -524,6 +524,8 @@ export function rerollLane(laneId: string): boolean {
   const g = current()
   const lane = g?.project.lanes.find((l) => l.id === laneId)
   if (!g || !samples || !lane) return false
+  // An added lane (SCOPE.md §6.6, "Adding a lane"): filled again as its kind.
+  if (lane.extra && !laneRole(lane.name)) return addTrackLane(lane.extra as Role, laneId)
   // The stab and disco lanes are made again with their module's rules (the stab in its rhythm).
   const role = laneRole(lane.name)
   if (role && STAB_ROLES.includes(role)) return newChordStabs()
@@ -533,6 +535,32 @@ export function rerollLane(laneId: string): boolean {
   const next = role ? listenBack(made, { only: [role] }) : made
   // The lane keeps its mix (volume, pan, sidechain, mute/solo): only its clips are new.
   apply(next, [...g.project.clips, ...next.project.clips].filter((c) => c.laneId === laneId).map((c) => c.id), `Remake ${lane.name}`)
+  return true
+}
+
+/**
+ * A lane of `role`'s kind added to the track on screen (SCOPE.md §6.6, "Adding a lane"), filled
+ * and mixed as the generator does that kind; `into`: an added lane filled again (its Remake).
+ * Its module's samples are there to draw from even while the module is off for new tracks. False:
+ * nothing came out (the library has nothing of the kind, or no track on screen is generated).
+ */
+export function addTrackLane(role: Role, into?: string): boolean {
+  const { samples } = useGenerate.getState()
+  const g = current()
+  if (!g || !samples) return false
+  const opts = options()
+  const hits = useHits.getState().hits
+  const of = (kind: HitItem['kind']) => hits.filter((h) => h.kind === kind)
+  if (role === 'stab' && !opts.stabs && of('stab').length) opts.stabs = { hits: of('stab'), rhythms: stabsSettings().rhythms ?? [] }
+  if (role === 'disco' && !opts.disco && of('disco').length) opts.disco = { hits: of('disco') }
+  if (role === 'bed' && !opts.ambience && of('ambience').length) opts.ambience = { hits: of('ambience') }
+  const made = addLane(samples, opts, g, role, randomSeed(), into)
+  if (!made) return false
+  const was = new Set(g.project.clips.map((c) => c.id))
+  const lane = into ?? made.project.lanes.find((l) => !g.project.lanes.some((x) => x.id === l.id))?.id
+  const ids = [...g.project.clips.filter((c) => c.laneId === into), ...made.project.clips.filter((c) => !was.has(c.id))].map((c) => c.id)
+  const name = made.project.lanes.find((l) => l.id === lane)?.name ?? 'lane'
+  apply(made, ids, into ? `Remake ${name}` : `Add ${name}`)
   return true
 }
 

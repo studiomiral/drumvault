@@ -3,7 +3,7 @@ import { isGenerated } from '../src/generate/bassline'
 import { stringsBars } from '../src/generate/strings'
 import { breakShape } from '../src/generate/character'
 import {
-  applyMix, arcOf, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newLaneSound, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
+  addLane, ADDABLE, laneKind, applyMix, arcOf, bodyBars, changeKey, gapOf, gapsAgree, generate, LANES, laneRole, liftBars, newLaneSound, newStringsSound, rerollDisco, rerollStrings, rerollVocal, rerollLane, rerollStabs, setStabRhythm, setTrackRule,
   transposeTo, type GenerateOptions, type Generation,
 } from '../src/generate/generator'
 import { CHOICES, choicesFor, optionKey } from '../src/generate/choices'
@@ -3057,5 +3057,62 @@ describe('generator: music loops instead of stabs (SCOPE.md §6.11b)', () => {
     expect(back.music ?? null).toBeNull()
     expect(clipsIn(back, 'Stab').length).toBeGreaterThan(0)
     expect(clipsIn(back, 'Music Loop')).toHaveLength(0)
+  })
+})
+
+describe('adding a lane to a made track (SCOPE.md §6.6, "Adding a lane")', () => {
+  const sig = (cs: Clip[]) => JSON.stringify(cs.map(({ id: _i, ...c }) => c))
+  const g = generate(LIB, OPTS, 4242)
+
+  it('adds a lane of a kind, filled as the generator places it, the rest of the track exactly as it was', () => {
+    let made = 0
+    for (const { role } of ADDABLE.filter((a) => ['top', 'fills', 'fx', 'crash', 'perc', 'kick'].includes(a.role))) {
+      const r = addLane(LIB, OPTS, g, role, 7)
+      if (!r) continue
+      made++
+      const added = r.project.lanes.filter((l) => !g.project.lanes.some((x) => x.id === l.id))
+      expect(added).toHaveLength(1)
+      const [lane] = added
+      expect(lane.extra).toBe(role)
+      expect(lane.name.startsWith('Extra ')).toBe(true)
+      expect(laneKind(lane)).toBe(role)
+      expect(laneRole(lane.name)).toBeUndefined()
+      const clips = r.project.clips.filter((c) => c.laneId === lane.id)
+      expect(clips.length).toBeGreaterThan(0)
+      // Every other lane and clip as it was.
+      expect(sig(r.project.clips.filter((c) => c.laneId !== lane.id))).toBe(sig(g.project.clips))
+      expect(r.project.lanes.filter((l) => l.id !== lane.id)).toEqual(g.project.lanes)
+      // Mixed as its kind: a level, a little under the lanes of its kind already there.
+      expect(typeof lane.levelDb).toBe('number')
+    }
+    expect(made).toBeGreaterThanOrEqual(4)
+  })
+
+  it('adds a build-up to a track without one, and a second one gets its own name', () => {
+    const plain = Array.from({ length: 30 }, (_, i) => generate(LIB, OPTS, 6000 + i)).find((x) => !x.project.lanes.some((l) => l.name === 'Build-up'))!
+    expect(plain).toBeTruthy()
+    const r = addLane(LIB, OPTS, plain, 'buildup', 3)!
+    expect(r).toBeTruthy()
+    const lane = r.project.lanes.find((l) => l.name === 'Extra Build-up')!
+    expect(r.project.clips.filter((c) => c.laneId === lane.id).length).toBeGreaterThan(0)
+    // Into the drops: it ends where a drop starts.
+    const drops = new Set(plain.sections.filter((s) => s.kind === 'drop').map((s) => s.start * 4))
+    const ends = r.project.clips.filter((c) => c.laneId === lane.id).map((c) => c.start + c.length)
+    expect(ends.some((e) => drops.has(e))).toBe(true)
+    const twice = addLane(LIB, OPTS, r, 'buildup', 4)
+    if (twice) expect(twice.project.lanes.some((l) => l.name === 'Extra Build-up 2')).toBe(true)
+  })
+
+  it('remakes an added lane in place, and leaves it be when the track\'s own lanes are made again', () => {
+    const r = addLane(LIB, OPTS, g, 'top', 7)!
+    const lane = r.project.lanes.find((l) => l.extra === 'top')!
+    const again = addLane(LIB, OPTS, r, 'top', 99, lane.id)
+    if (again) {
+      expect(again.project.lanes.filter((l) => l.extra === 'top')).toHaveLength(1)
+      expect(sig(again.project.clips.filter((c) => c.laneId !== lane.id))).toBe(sig(r.project.clips.filter((c) => c.laneId !== lane.id)))
+    }
+    const tops = r.project.lanes.find((l) => l.name === 'Tops')!
+    const remade = rerollLane(LIB, OPTS, r, tops.id, 5)
+    if (remade) expect(sig(remade.project.clips.filter((c) => c.laneId === lane.id))).toBe(sig(r.project.clips.filter((c) => c.laneId === lane.id)))
   })
 })
