@@ -32,7 +32,6 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   // What the bass can play through: Serum patches, bass samples, or both (the module's Source).
   const presets = bassPatches(opts.source, serum, hits)
   const samples = bassPatches('samples', serum, hits).length
-  const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a bass change
   // Default outside the selector: a new [] on every read makes the store re-render forever.
   const favorites = useApp((s) => s.settings?.bass?.favorites) ?? NO_FAVORITES
@@ -56,11 +55,9 @@ export function BassPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
     : !presets.length ? (opts.source === 'samples' ? 'No bass samples with a note yet: add one-shots on the Bass tab, or set Source to Serum.'
       : 'No Serum 2 patches for Bass yet: tick their folders on the Bass tab, or add one-shots there.') : null
 
-  const kept = [keep.bassline && 'bassline', keep.patch && 'patch'].filter(Boolean).join(' and ')
   const summary = !opts.enabled ? 'Off: G generates without bass'
     : missing ?? (b ? <>
         <span className="text-text">{b.midi.name}</span> · {loopLabel(b)} · {b.preset.name}
-        {kept && <span className="text-accent"> · keeping the {kept}</span>}
       </> : 'On: the next generation gets a bass')
 
   return (

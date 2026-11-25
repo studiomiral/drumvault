@@ -2,11 +2,11 @@ import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { IconLock, IconSparkle } from '../components/icons'
+import { IconSparkle } from '../components/icons'
 import { cx } from '../components/ui'
 import { laneRole } from '../generate/generator'
 import { useApp } from '../store/app'
-import { laneKept, LOCKABLE, rerollLane, setLaneVolume, toggleLane, toggleLaneKeep, useGenerate } from '../store/generate'
+import { rerollLane, setLaneVolume, toggleLane } from '../store/generate'
 import { LANE_PALETTE, MAX_LANE_HEIGHT, MIN_LANE_HEIGHT } from '../lib/project'
 import { ContextMenu } from '../components/ContextMenu'
 import { addLaneMenu } from './addLane'
@@ -74,12 +74,11 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
   const edit = useProject((s) => s.edit)
   const clipCount = useProject((s) => s.project.clips.filter((c) => c.laneId === lane.id).length)
   const drumBus = useProject((s) => s.project.drumBus)
-  // A generated track's lanes keep their module: kept for the next G, made again, its panel. Their
+  // A generated track's lanes keep their module: made again, its panel. Their
   // volume, mute and solo carry over to the next tracks, like Generate's mix.
   const role = laneRole(lane.name)
-  // (A lane added to the track, SCOPE.md §6.6: made again as its kind; no Keep, its volume its own.)
+  // (A lane added to the track, SCOPE.md §6.6: made again as its kind, its volume its own.)
   const generated = useProject((s) => !!s.project.generation) && (!!role || !!lane.extra)
-  const kept = useGenerate((s) => !!role && laneKept(role, s.keep))
   const panel = useArrange((s) => s.lanePanel)
   const open = !!panel && JSON.stringify(panel) === JSON.stringify(panelOf(lane.name))
   const toast = useApp((s) => s.toast)
@@ -163,13 +162,6 @@ function LaneHeader({ lane, dragging, onDragStart, onDragEnd, onDropOn }: {
           )}
           {generated && (
             <>
-              {role && LOCKABLE.includes(role) && (
-                <button title={kept ? `Kept: the next press of G keeps ${lane.name}` : `Keep ${lane.name} on the next press of G`}
-                        onClick={() => toggleLaneKeep(role)}
-                        className={cx('w-5 h-5 rounded flex items-center justify-center', kept ? 'bg-accent/20 text-accent' : 'bg-raised text-faint hover:text-text')}>
-                  <IconLock className="w-3 h-3" open={!kept} />
-                </button>
-              )}
               <button title="Remake: a new sound and where it plays, the rest of the track stays (your edits on this lane are replaced; ⌘Z undoes)"
                       className="w-5 h-5 rounded bg-raised text-accent hover:bg-accent/20 flex items-center justify-center"
                       onClick={() => !rerollLane(lane.id) && toast('info', `Nothing new came out for ${lane.name}.`)}>

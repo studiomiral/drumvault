@@ -10,7 +10,6 @@ import { stabNames, StabsPart, stabsWhere } from './StabsPanel'
  */
 export function ChordsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const on = useGenerate((s) => s.settings.stabs.enabled)
-  const keep = useGenerate((s) => s.keep)
   useGenerate((s) => s.history)  // re-render after a change
   const hits = useHits((s) => s.hits)
 
@@ -18,7 +17,6 @@ export function ChordsPanel({ g, fixed }: { g: Generation; fixed?: boolean }) {
   const summary = !on ? 'Off: G generates without chord stabs'
     : <>
         {plays ? <><span className="text-text">Stabs</span> · {stabNames(g, hits).join(', ')} · {stabsWhere(g)}</> : 'No chord stabs in this track'}
-        {plays && keep.lanes.includes('stab') && <span className="text-accent"> · kept</span>}
       </>
 
   return (

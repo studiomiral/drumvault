@@ -1,32 +1,16 @@
 import { ChoiceRow, confirmRemake } from '../components/LanePanel'
-import { IconLock } from '../components/icons'
-import { cx, SectionTitle } from '../components/ui'
+import { SectionTitle } from '../components/ui'
 import { CHOICE_GROUPS, choicesFor } from '../generate/choices'
 import type { Generation } from '../generate/generator'
 import { ALL_KEYS } from '../lib/camelot'
 import { markerColor } from '../lib/project'
-import { changeTrackKey, invalidate, playSection, useGenerate } from '../store/generate'
-
-/** Keep the structure or the key on the next press of G. */
-function KeepLock({ on, what, onClick }: { on: boolean; what: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} title={on ? `Kept: the next press of G keeps the ${what}` : `Keep the ${what} on the next press of G`}
-            className={cx('w-6 h-6 rounded-md flex items-center justify-center', on ? 'bg-accent/15 text-accent' : 'text-faint hover:text-text hover:bg-raised')}>
-      <IconLock className="w-3.5 h-3.5" open={!on} />
-    </button>
-  )
-}
+import { changeTrackKey, playSection } from '../store/generate'
 
 /**
  * The track (the side panel's Track): length, key, structure, its choices (to change, or lock for
  * every next one), its sources.
  */
 export function TrackPanel({ g }: { g: Generation }) {
-  const { keep, set } = useGenerate()
-  const setKeep = (patch: Partial<typeof keep>) => {
-    set({ keep: { ...keep, ...patch } })
-    invalidate()
-  }
   const bpm = g.project.bpm
   const secs = Math.round((g.project.lengthBars * 4 * 60) / bpm)
   const choices = choicesFor(g)
@@ -44,11 +28,10 @@ export function TrackPanel({ g }: { g: Generation }) {
             {ALL_KEYS.map((k) => <option key={k.label} value={k.label}>{k.label} ({k.camelot})</option>)}
           </select>
         </label>
-        <KeepLock on={keep.key} what="key" onClick={() => setKeep({ key: !keep.key })} />
         <span className="text-faint text-[11.5px] ml-auto">seed {g.seed}</span>
       </div>
       <div>
-        <SectionTitle right={<KeepLock on={keep.structure} what="structure" onClick={() => setKeep({ structure: !keep.structure })} />}>Structure</SectionTitle>
+        <SectionTitle>Structure</SectionTitle>
         <div className="flex flex-wrap gap-1.5">
           {g.sections.map((s, i) => (
             <button key={i} onClick={() => playSection(i)} title={`Play from ${s.label} (${i + 1})`}

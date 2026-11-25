@@ -1,4 +1,4 @@
-// Create's session (SCOPE.md §6.6): the tracks made this session, keep toggles and options. The
+// Create's session (SCOPE.md §6.6): the tracks made this session and the options. The
 // next generation is computed and its audio decoded ahead of time, so cycling is instant.
 //
 // The track on screen is always the open project (useProject): a generation is loaded into it as a
@@ -11,8 +11,8 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  addLane, applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, STRINGS_RULES, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
-  setStabRhythm, setTrackRule, setTrackRules, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Keep, type Mix, type Role, type Rules, type VerbOptions,
+  addLane, applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  setStabRhythm, setTrackRule, setTrackRules, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
 import { refine, type RefineOptions } from '../generate/critic'
@@ -217,15 +217,6 @@ export interface LaneToggles {
   solo: string[]
 }
 
-export interface KeepToggles {
-  structure: boolean
-  key: boolean
-  /** Lanes whose sound is kept: the main sample (kick, clap, …), the stab (its rhythm too), the drop hits. */
-  lanes: Role[]
-  bassline: boolean
-  patch: boolean
-}
-
 interface GenerateState {
   samples: SampleListItem[] | null
   /** Real tracks' arrangements: structure templates for most generations. */
@@ -235,9 +226,8 @@ interface GenerateState {
   history: Generation[]
   index: number
   settings: GenerateSettings
-  keep: KeepToggles
   lanes: LaneToggles
-  /** The next generation, computed (and preloaded) ahead of time for the current keep/options. */
+  /** The next generation, computed (and preloaded) ahead of time for the current options. */
   pending: Generation | null
   /** The open project isn't one of the history's tracks (a track built by hand, or none yet). */
   detached: boolean
@@ -257,8 +247,6 @@ function savedSettings(): GenerateSettings {
   return { minMinutes, maxMinutes, zipIds: null, useRatings: true, listenBack: true, mix: savedMix(), tempo: savedTempo(), bass: savedBass(), verb: savedVerb(), disco: savedDisco(), stabs: savedStabs(), piano: savedPiano(), strings: savedStrings(), pads: savedPads(), ambience: savedAmbience(), vocalLoops: savedVocalLoops(), musicLoops: savedMusicLoops(), locks: savedLocks() }
 }
 
-const noKeep = (): KeepToggles => ({ structure: false, key: false, lanes: [], bassline: false, patch: false })
-
 export const useGenerate = create<GenerateState>((set) => ({
   samples: null,
   templates: [],
@@ -266,7 +254,6 @@ export const useGenerate = create<GenerateState>((set) => ({
   history: [],
   index: -1,
   settings: savedSettings(),
-  keep: noKeep(),
   lanes: { mute: [], solo: [] },
   pending: null,
   detached: true,
@@ -357,34 +344,6 @@ function bpm(): number {
   return useApp.getState().settings?.engine.library_bpm ?? 124
 }
 
-function keepFrom(g: Generation | null, k: KeepToggles): Keep {
-  if (!g) return {}
-  const picks: Keep['picks'] = {}
-  const rules: Rules = {}
-  for (const role of k.lanes) if (g.picks[role]) picks[role] = g.picks[role]
-  // Kept stabs (all of them) play their rhythm on, taking the same turns; kept drop hits come in again.
-  if (k.lanes.includes('stab') && g.picks.stab && g.rules.stabs) {
-    for (const role of STAB_ROLES) if (g.picks[role]) picks[role] = g.picks[role]
-    Object.assign(rules, { stabs: true, stabRhythm: g.rules.stabRhythm, stabCount: g.rules.stabCount ?? 1, stabTurns: g.rules.stabTurns ?? 'hits',
-      stabLoop: !!g.rules.stabLoop, ...(g.rules.stabLoop ? { stabLayout: g.rules.stabLayout, stabMove: g.rules.stabMove ?? 0, stabMoveAt: g.rules.stabMoveAt } : {}) })
-  }
-  // A kept bed plays on.
-  if (k.lanes.includes('bed') && g.picks.bed) rules.bedIn = true
-  // Kept strings play where they did.
-  if (k.lanes.includes('strings') && g.picks.strings) {
-    Object.assign(rules, { stringsIn: true, ...Object.fromEntries(STRINGS_RULES.map((r) => [r, g.rules[r]])) })
-  }
-  if (k.lanes.includes('disco') && g.picks.disco) {
-    if (g.picks.disco2) picks.disco2 = g.picks.disco2
-    Object.assign(rules, { discoIn: true, discoCount: g.picks.disco2 ? 2 : 1 })
-  }
-  return {
-    structure: k.structure ? g.sections : undefined, arc: k.structure ? g.arc ?? null : undefined, key: k.key ? g.key : undefined, picks, rules,
-    bassMidi: k.bassline ? g.bass?.midi : undefined, bassPreset: k.patch ? g.bass?.preset : undefined,
-    bassEdit: k.bassline && g.bass?.notes ? { notes: g.bass.notes, bars: bassBars(g.bass) } : undefined,
-  }
-}
-
 /** The generator's options: for a new track (`fresh`, which sings no vocal) or the one on screen. */
 function options(fresh = false): GenerateOptions {
   const { settings, templates, references } = useGenerate.getState()
@@ -424,11 +383,10 @@ function options(fresh = false): GenerateOptions {
  * from a random one, each listened back to (score.ts).
  */
 function make(seed?: number): Generation | null {
-  const { samples, keep } = useGenerate.getState()
+  const { samples } = useGenerate.getState()
   if (!samples?.length) return null
   const opts = options(true)
-  const kept = keepFrom(current(), keep)
-  const one = (s: number) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }, true)
+  const one = (s: number) => listenBack(generate(samples, opts, s), {}, true)
   const g = seed != null ? one(seed) : bestOf(samples, randomSeed(), CANDIDATES, one)
   applyLaneToggles(g.project, useGenerate.getState().lanes)
   return g
@@ -436,11 +394,10 @@ function make(seed?: number): Generation | null {
 
 /** As make(), a candidate per tick: the screen and the playing track get the thread between them. */
 async function makeSoon(): Promise<Generation | null> {
-  const { samples, keep } = useGenerate.getState()
+  const { samples } = useGenerate.getState()
   if (!samples?.length) return null
   const opts = options(true)
-  const kept = keepFrom(current(), keep)
-  const it = bestOfSteps(samples, randomSeed(), CANDIDATES, (s) => listenBack(generate(samples, opts, s, kept), { locked: keep.lanes }, true))
+  const it = bestOfSteps(samples, randomSeed(), CANDIDATES, (s) => listenBack(generate(samples, opts, s), {}, true))
   for (;;) {
     const r = it.next()
     if (r.done) {
@@ -643,33 +600,6 @@ function saveLocks(locks: Rules): void {
   }
   invalidate()
 }
-
-/**
- * Lock a lane (its 🔒 in the overview): its sound stays on the next press of G. Bass keeps its
- * part and patch, the stabs (any of their lanes) their samples and rhythm, the disco lanes their hits.
- */
-export function toggleLaneKeep(lane: Role): void {
-  const role = keepRole(lane)
-  const { keep, set } = useGenerate.getState()
-  const on = laneKept(role, keep)
-  const lanes = keep.lanes.filter((r) => r !== role)
-  set({
-    keep: role === 'bass' ? { ...keep, bassline: !on, patch: !on } : { ...keep, lanes: on ? lanes : [...lanes, role] },
-  })
-  invalidate()
-}
-
-/** Whether the next press of G keeps a lane (all of it: Bass its part and patch). */
-export function laneKept(lane: Role, keep: KeepToggles = useGenerate.getState().keep): boolean {
-  const role = keepRole(lane)
-  return role === 'bass' ? keep.bassline && keep.patch : keep.lanes.includes(role)
-}
-
-/** The stab lanes are kept together. */
-const keepRole = (role: Role): Role => (STAB_ROLES.includes(role) ? 'stab' : role)
-
-/** Lanes that can be kept: the ones with a main sound of their own. */
-export const LOCKABLE: Role[] = ['kick', 'clap', 'hats', 'perc', 'top', 'groove', 'bass', ...STAB_ROLES, 'strings', 'disco']
 
 /**
  * New drop hits for the current generation (the Drop Hits module's button): other hits and/or
@@ -1224,7 +1154,7 @@ export function setVerbOptions(patch: Partial<GenerateSettings['verb']>): void {
   if (patch.amount === undefined) invalidate()
 }
 
-/** Options or keep toggles changed: the prefetched generation no longer fits. */
+/** Options changed: the prefetched generation no longer fits. */
 export function invalidate(): void {
   prefetch()
 }
@@ -1340,7 +1270,6 @@ function show(index: number, from?: number): void {
     const start = from ?? (g.sections[Math.min(section, g.sections.length - 1)]?.start ?? 0) * 4
     if (was || from != null) void playback.play(start)
     else playback.setPosition(0)
-    if (useGenerate.getState().keep.lanes.length || useGenerate.getState().keep.structure || useGenerate.getState().keep.key) invalidate()
   })
 }
 
@@ -1407,7 +1336,7 @@ function applyGenre(g: Genre): boolean {
   storeGenre = g
   const back = otherTracks.get(g)
   set({ settings: savedSettings(), history: back?.history ?? [], index: back?.index ?? -1, pending: null, detached: true,
-        keep: noKeep(), lanes: { mute: [], solo: [] } })
+        lanes: { mute: [], solo: [] } })
   return true
 }
 

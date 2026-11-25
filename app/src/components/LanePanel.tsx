@@ -8,7 +8,7 @@ import { useProject } from '../store/project'
 import { TrackPanel } from '../create/TrackPanel'
 import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { laneKept, LOCKABLE, newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setMusicLoopOptions, setPadsOptions, setPianoOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLaneKeep, toggleLock, useGenerate } from '../store/generate'
+import { newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setMusicLoopOptions, setPadsOptions, setPianoOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLock, useGenerate } from '../store/generate'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
@@ -91,8 +91,8 @@ export function confirmRemake(what: string): boolean {
 /**
  * Create's side panel (SCOPE.md §6.6): the track (key, structure, choices), the modules of the
  * track (Bass, Chords, Vocals, Strings, Drop Hits, Reverb builds), one at a time, or a lane's
- * sounds and the choices that shape it. Each lane on it can get a new sound where it plays, be
- * made again, and be kept for the next track. Every change is an edit of the track (⌘Z).
+ * sounds and the choices that shape it. Each lane on it can get a new sound where it plays, or be
+ * made again. Every change is an edit of the track (⌘Z).
  */
 export function LanePanel({ g, panel, onPanel }: {
   g: Generation
@@ -146,14 +146,12 @@ export function LanePanel({ g, panel, onPanel }: {
   )
 }
 
-/** A lane's name and its buttons: keep for the next track, a new sound where it plays, made again. */
+/** A lane's name and its buttons: a new sound where it plays, made again. */
 function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
   const lane = g.project.lanes.find((l) => l.name === laneName)!
   const drumBus = g.project.drumBus
   const role = laneRole(laneName)
-  const keep = useGenerate((s) => s.keep)
   const toast = useApp((s) => s.toast)
-  const kept = role && laneKept(role, keep)
   const btn = 'h-7 px-2 rounded-md bg-raised hover:bg-[#3a3b3f] text-[12px] inline-flex items-center gap-1.5'
   const rendered = role === 'bass'
   // A track's vocal is its own take (made for it): no other sound for it, and Remake sings it another way.
@@ -179,12 +177,6 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
         <button className={cx(btn, !drumBus.off && 'text-accent')} onClick={() => toggleDrumBus()}
                 title={`Drum bus ${drumBus.off ? 'off' : 'on'}: the drum lanes glued together, ${compSummary(drumBus)}, makeup +${drumBus.makeupDb} dB; each drum stem carries its share (click: ${drumBus.off ? 'on' : 'off'}, for every drum lane)`}>
           Bus
-        </button>
-      )}
-      {role && LOCKABLE.includes(role) && (
-        <button className={cx(btn, kept && 'bg-accent/15 text-accent')} onClick={() => toggleLaneKeep(role)}
-                title={kept ? 'Kept: the next press of G keeps this lane' : 'Keep this lane on the next press of G'}>
-          <IconLock className="w-3.5 h-3.5" open={!kept} />{kept ? 'Kept' : 'Keep'}
         </button>
       )}
       {!sung && (
