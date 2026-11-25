@@ -78,7 +78,9 @@ Vocals
 `
     const i = parseInfoText(real)
     expect(i.tags).toEqual(['Melodic', 'Club', 'Soulful'])
-    expect(i.description.split('\n')).toHaveLength(3)
+    // (The Arrangement line of older exports is left out.)
+    expect(i.description.split('\n')).toHaveLength(2)
+    expect(i.description).not.toContain('Arrangement')
     expect(i.description.startsWith('Deep, warm house')).toBe(true)
     expect(i.vocals.split('\n')).toHaveLength(3)
     expect(trackNameOf(i.title)).toBe('Bring It')

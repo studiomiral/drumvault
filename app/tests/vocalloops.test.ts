@@ -189,17 +189,17 @@ describe('info.txt', () => {
 describe('the track described in info.txt', () => {
   const gs = Array.from({ length: 12 }, (_, i) => generate(LIB, { bpm: BPM, minMinutes: 4, maxMinutes: 6, zipIds: null, useRatings: true }, 9300 + i))
   const about = (g: Generation, sung: VocalMeta[] = []) =>
-    describeTrack({ ...g.project, generation: g } as Project, sung, g.sections.reduce((n, x) => n + x.bars, 0))
+    describeTrack({ ...g.project, generation: g } as Project, sung)
 
-  it('says what kind of house it is, what it\'s made of, its DJ layout and labels it would sit with', () => {
+  it('says what kind of house it is, what it\'s made of and labels it would sit with, not its arrangement', () => {
     for (const g of gs) {
-      const [what, layout, labels] = about(g)
+      const lines = about(g)
+      expect(lines.length).toBe(2)
+      const [what, labels] = lines
       const c = g.rules.character as keyof typeof LABELS | null
       expect(what).toMatch(new RegExp(`^.+ at 124 BPM in [A-G][#b]? (minor|major)(, built around .+)?: .+\\.$`))
       if (c) expect(what.toLowerCase()).toContain(c === 'drums' ? 'percussive' : c === 'disco' ? 'disco' : c === 'dub' ? 'dubby' : 'deep')
-      const drops = g.sections.filter((x) => x.kind === 'drop').length
-      expect(layout).toContain(`${g.sections.reduce((n, x) => n + x.bars, 0)} bars`)
-      expect(layout).toContain(`${['no', 'one', 'two', 'three', 'four'][drops]} drop`)
+      expect(lines.join('\n')).not.toMatch(/Arrangement|-bar intro|breakdown \(/)
       expect(labels).toBe(`Would sit well on labels like ${LABELS[c ?? 'none'][0]}, ${LABELS[c ?? 'none'][1]} and ${LABELS[c ?? 'none'][2]}.`)
     }
   })
@@ -209,7 +209,7 @@ describe('the track described in info.txt', () => {
     const lanes = [...g.project.lanes, { id: 'v', name: 'Vocal', mute: false } as Project['lanes'][number]]
     const clips = [...g.project.clips, { id: 'vc', laneId: 'v', type: 'audio', start: 0, length: 4, sample: { relPath: 'x' } } as unknown as Project['clips'][number]]
     const made = { ...loop('m', 'Am'), source: 'elevenlabs', voice: 'female', mood: 'gospel', lines: ['Hold on'], splice: undefined } as VocalMeta
-    const [what, , labels] = describeTrack({ ...g.project, lanes, clips, generation: { ...g, rules: { ...g.rules, vocalAt: 'halves' } } } as Project, [made], 160)
+    const [what, labels] = describeTrack({ ...g.project, lanes, clips, generation: { ...g, rules: { ...g.rules, vocalAt: 'halves' } } } as Project, [made])
     expect(what).toContain('a gospel female vocal in the second half of each drop')
     expect(labels.startsWith('Would sit well on labels like Defected')).toBe(true)
   })

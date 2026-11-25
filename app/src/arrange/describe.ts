@@ -1,7 +1,7 @@
 // The "About the track" part of an export's info.txt (SCOPE.md §6.5): a short description in DJ
 // terms, read from the project as it is exported (its lanes that play, its sections, its rules):
-// what kind of house it is and what drives it, what it's made of, how it's laid out for a DJ, and
-// labels whose sound it would sit with. Plain text, nothing measured again.
+// what kind of house it is and what drives it, what it's made of, and labels whose sound it would
+// sit with (not its arrangement: the form shows the track). Plain text, nothing measured again.
 
 import { LEAD_LABEL, type Character, type Lead } from '../generate/character'
 import type { Project } from '../types/project'
@@ -36,7 +36,7 @@ function playing(project: Project): Set<string> {
 }
 
 /** The short description: a few lines of plain text. */
-export function describeTrack(project: Project, sung: VocalMeta[], bars: number): string[] {
+export function describeTrack(project: Project, sung: VocalMeta[]): string[] {
   const g = project.generation
   const on = playing(project)
   const has = (name: string) => on.has(name)
@@ -77,22 +77,6 @@ export function describeTrack(project: Project, sung: VocalMeta[], bars: number)
   }
   const first = `${kind} at ${Math.round(project.bpm)} BPM${key ? ` in ${keyWords(key)}` : ''}${lead && LEAD_LABEL[lead] ? `, built around ${LEAD_LABEL[lead]}` : ''}`
   const lines = [`${first}: ${list(parts)}.`]
-
-  // How it's laid out for a DJ.
-  const s = g?.sections ?? []
-  if (s.length) {
-    const intro = s[0].kind === 'intro' ? s[0].bars : 0
-    const outro = s[s.length - 1].kind === 'outro' ? s[s.length - 1].bars : 0
-    const drops = s.filter((x) => x.kind === 'drop').length
-    const breaks = s.filter((x) => x.kind === 'break')
-    const longest = Math.max(0, ...breaks.map((x) => x.bars))
-    const layout = [
-      intro && outro ? `a ${intro}-bar intro and a ${outro}-bar outro to mix in and out of` : intro ? `a ${intro}-bar intro to mix in on` : '',
-      `${count(drops)} ${drops === 1 ? 'drop' : 'drops'}`,
-      breaks.length === 1 ? `a ${longest}-bar breakdown` : breaks.length ? `${count(breaks.length)} breakdowns (the longest ${longest} bars)` : 'no breakdown',
-    ].filter(Boolean)
-    lines.push(`Arrangement: ${bars} bars; ${list(layout)}.`)
-  }
 
   // Labels it would sit with: a soulful sung vocal leans to Defected.
   let labels = LABELS[character ?? 'none']

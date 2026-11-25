@@ -16,7 +16,6 @@ import { exportDir, exportFolderName, exportStems, exportTargets, hasVocals, MAS
 type Phase =
   | { kind: 'setup' }
   | { kind: 'running'; message: string; pct: number }
-  | { kind: 'clipping'; result: ExportResult; opts: ExportOptions }
   | { kind: 'done'; files: string[]; note?: string; result?: ExportResult }
   | { kind: 'error'; message: string }
 
@@ -58,7 +57,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const bars = (r.endBeat - r.startBeat) / BEATS_PER_BAR
   const base: ExportOptions = {
     dir, folder: folder.trim() || exportFolderName(project), range: r, format, sampleRate, laneIds: lanes, master, midi,
-    gain: 1, allowClipping: false,
+    gain: 1,
   }
   const targets = exportTargets(project, base)
   const running = phase.kind === 'running'
@@ -86,41 +85,10 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       // (Its music loop is used now: new tracks no longer draw it.)
       void loadMusicLoops()
       if (cancelled.current) setPhase({ kind: 'done', files: result.written, note: 'Export cancelled.', result })
-      else if (result.clipped.length) setPhase({ kind: 'clipping', result, opts })
       else setPhase({ kind: 'done', files: result.written, result })
     } catch (e) {
       setPhase({ kind: 'error', message: (e as Error).message })
     }
-  }
-
-  if (phase.kind === 'clipping') {
-    const { result, opts } = phase
-    const overDb = 20 * Math.log10(result.maxPeak)
-    const gain = 0.97 / result.maxPeak  // ≈ -0.26 dBFS peak
-    return (
-      <Modal title="Some stems would clip" onClose={onClose}>
-        <p className="text-muted leading-relaxed">
-          {result.clipped.map((c) => c.target.label).join(', ')} peak{result.clipped.length === 1 ? 's' : ''} above
-          0 dBFS (up to <span className="text-bad font-medium">+{overDb.toFixed(1)} dB</span>), which 24-bit files can't hold.
-          {result.written.length > 0 && <> The other {result.written.length} file{result.written.length > 1 ? 's were' : ' was'} written.</>}
-        </p>
-        <div className="mt-4 grid gap-2">
-          <Button variant="primary" className="justify-start h-9" onClick={() => void run({ ...opts, format: 'float32' }, false)}>
-            Export everything as 32-bit float (no clipping; Logic reads it fine)
-          </Button>
-          <Button className="justify-start h-9" onClick={() => void run({ ...opts, gain }, false)}>
-            Auto-gain: lower every stem by {(-20 * Math.log10(gain)).toFixed(1)} dB and export 24-bit
-          </Button>
-          <Button variant="ghost" className="justify-start h-9" onClick={() => void run({
-            ...opts, allowClipping: true, laneIds: result.clipped.map((c) => c.target.key).filter((k) => k !== 'master'),
-            master: result.clipped.some((c) => c.target.key === 'master'), midi: false,
-          }, false)}>
-            Export the clipping stems anyway
-          </Button>
-          <Button variant="ghost" className="justify-start h-9" onClick={onClose}>Cancel</Button>
-        </div>
-      </Modal>
-    )
   }
 
   if (phase.kind === 'done' || phase.kind === 'error') {
@@ -129,6 +97,12 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         {phase.kind === 'error' ? <p className="text-bad select-text">{phase.message}</p> : (
           <>
             {phase.note && <p className="text-warn mb-2">{phase.note}</p>}
+            {phase.result && phase.result.gain < 1 && (
+              <p className="text-muted mb-2">
+                Auto-gain: every stem {(-20 * Math.log10(phase.result.gain)).toFixed(1)} dB lower, so none clips in 24-bit (the loudest peaked
+                at +{(20 * Math.log10(phase.result.maxPeak)).toFixed(1)} dBFS).
+              </p>
+            )}
             {phase.result?.masterError && (
               <p className="text-warn mb-2 select-text">mastered.wav was not made: {phase.result.masterError}</p>
             )}

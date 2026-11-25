@@ -3,8 +3,9 @@
 // (one full-length WAV per lane, named as the lane) and `midi/` (the bass part, named as its
 // lane). Every WAV has the same length and starts at the range start.
 //
-// One render pass in the common case. In 24-bit mode a stem that would clip is not written;
-// the caller then decides (32-bit float, auto-gain, export clipped, cancel) and calls again.
+// One render pass in the common case. In 24-bit mode, once a stem would clip, the rest are only
+// measured (not written), and everything is rendered again with every stem lowered by the same
+// amount (auto-gain: the loudest peak at -0.26 dBFS), so the balance between them stays.
 
 import { api } from '../api'
 import { renderLanes, type RenderRange } from '../audio/render'
@@ -32,9 +33,10 @@ export interface ExportOptions {
   midi: boolean
   /** Linear gain applied to every stem (auto-gain); 1 = none. */
   gain: number
-  /** Write 24-bit stems even if they clip. */
-  allowClipping: boolean
 }
+
+/** Auto-gain's target: the loudest stem's peak (≈ -0.26 dBFS). */
+export const AUTO_GAIN_PEAK = 0.97
 
 export type ExportSub = 'masters' | 'stems' | 'midi'
 
@@ -47,10 +49,10 @@ export interface ExportTarget {
 
 export interface ExportResult {
   written: string[]
-  /** Stems that would clip in 24-bit (not written), with their peak (linear). */
-  clipped: { target: ExportTarget; peak: number }[]
   /** Highest peak of all stems (linear, before gain). */
   maxPeak: number
+  /** The gain every stem was written with (linear): below 1 when auto-gain lowered them so none clips in 24-bit. */
+  gain: number
   /** How mastered.wav came out, or why it wasn't made. */
   mastered?: MasterResult
   masterError?: string
@@ -141,7 +143,7 @@ export function trackInfo(project: Project, o: Pick<ExportOptions, 'folder' | 'r
     bpm: formatBpm(project.bpm),
     key: key ? keyName(key) : 'none',
     length: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} (${bars} bars)`,
-    description: describeTrack(project, sung, bars).join('\n'),
+    description: describeTrack(project, sung).join('\n'),
     tags: houseTags(project, sung),
     vocals: credits.join('\n'),
   }
@@ -173,7 +175,8 @@ export function parseInfoText(text: string): TrackInfo {
     const end = toEnd ? rest.length : rest.findIndex((x) => !x.trim())
     return rest.slice(0, end < 0 ? rest.length : end)
   }
-  const about = block('About the track')
+  // (Older exports said the arrangement too: "Arrangement: 176 bars; …". It's left out.)
+  const about = block('About the track').filter((x) => !x.startsWith('Arrangement:'))
   const tagLine = about.find((x) => x.startsWith('Tags:'))
   const vocals = block('Vocals', true)
   while (vocals.length && !vocals[vocals.length - 1].trim()) vocals.pop()
@@ -260,7 +263,9 @@ export async function exportStems(project: Project, o: ExportOptions,
                                   onProgress: (message: string, pct: number) => void,
                                   isCancelled: () => boolean = () => false): Promise<ExportResult> {
   const targets = exportTargets(project, o)
-  const result: ExportResult = { written: [], clipped: [], maxPeak: 0 }
+  const result: ExportResult = { written: [], maxPeak: 0, gain: o.gain }
+  // A stem would clip in 24-bit: from then on only measured, then all of it again with auto-gain.
+  let clips = false
   const unmuted = project.lanes.filter((l) => !l.mute).map((l) => l.id)
   const instrumental = project.lanes.filter((l) => !l.mute && !VOCAL_LANES.has(l.name)).map((l) => l.id)
   for (let i = 0; i < targets.length; i++) {
@@ -276,10 +281,8 @@ export async function exportStems(project: Project, o: ExportOptions,
     const channels = [audio.getChannelData(0), audio.getChannelData(1)]
     const peak = peakOf(channels)
     result.maxPeak = Math.max(result.maxPeak, peak)
-    if (o.format === 'pcm24' && peak * o.gain > 1 && !o.allowClipping) {
-      result.clipped.push({ target: t, peak })
-      continue
-    }
+    if (o.format === 'pcm24' && peak * o.gain > 1) clips = true
+    if (clips) continue
     onProgress(`Writing ${t.file}`, (i + 0.8) / targets.length)
     await api.writeExportFile(exportDir(o, t.sub), t.file, encodeWav(channels, o.sampleRate, o.format, o.gain))
     result.written.push(`${t.sub}/${t.file}`)
@@ -307,6 +310,11 @@ export async function exportStems(project: Project, o: ExportOptions,
         }
       }
     }
+  }
+  if (clips && !isCancelled()) {
+    const gain = AUTO_GAIN_PEAK / result.maxPeak
+    const db = (-20 * Math.log10(gain)).toFixed(1)
+    return exportStems(project, { ...o, gain }, (message, pct) => onProgress(`${message} · auto-gain −${db} dB`, pct), isCancelled)
   }
   const parts = o.midi ? midiParts(project) : []
   if (parts.length && !isCancelled()) {
