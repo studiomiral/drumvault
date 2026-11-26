@@ -5,7 +5,7 @@
 //
 // send → high-pass (the low end stays out of the wash) → convolver → lane
 
-export type ReverbKind = 'hall' | 'room'
+export type ReverbKind = 'hall' | 'room' | 'plate'
 
 /**
  * Per kind: seconds the tail takes to fall by 60 dB and the impulse's length; the pre-delay; the
@@ -16,6 +16,8 @@ export type ReverbKind = 'hall' | 'room'
 const KINDS: Record<ReverbKind, { decay: number; length: number; predelay: number; onset: number; bright: number; dark: number; darken: number }> = {
   hall: { decay: 2.8, length: 3.4, predelay: 0.02, onset: 0.03, bright: 9000, dark: 1800, darken: 0.6 },
   room: { decay: 0.55, length: 0.75, predelay: 0.006, onset: 0.008, bright: 8000, dark: 3200, darken: 0.2 },
+  // Vocal Enhance's (enhance.ts): dense at once, bright, a second and a half, its pre-delay keeping the words in front.
+  plate: { decay: 1.5, length: 1.9, predelay: 0.03, onset: 0.004, bright: 11_000, dark: 4500, darken: 0.4 },
 }
 /** Below this the send is cut: kick and bass stay clean under the wash. */
 const SEND_HIGHPASS_HZ = 280

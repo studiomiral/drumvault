@@ -34,7 +34,8 @@ import { nextGeneratedName, onProjects, openProject, refreshProjectList, saveNow
 import { useArrange } from './arrange'
 import type { HitItem, MusicLoopMeta, SampleListItem, SavedStabRhythm, SpliceCandidate, TrackArrangement } from '../types/api'
 import { DEFAULT_GENRE, type Genre, type ReferenceTrack } from '../types/engine'
-import type { AudioClip, GenerationMeta, Project, Velocity } from '../types/project'
+import type { AudioClip, GenerationMeta, LaneEnhance, Project, Velocity } from '../types/project'
+import { ENHANCE_DEFAULTS } from '../audio/enhance'
 import { attempt, useApp } from './app'
 import { useProject } from './project'
 
@@ -441,6 +442,17 @@ export function toggleLaneComp(laneId: string): void {
   const comp = next.project.lanes.find((l) => l.id === laneId)!.comp!
   comp.off = !comp.off
   apply(next, [], comp.off ? 'Compressor off' : 'Compressor on', 'same')
+}
+
+/**
+ * The Vocal lane's Enhance changed (SCOPE.md §6.11c): on or off, or one of its settings (a lane
+ * without one starts from the defaults). An edit of the track (⌘Z): a slider's drag is one step.
+ */
+export function setVocalEnhance(laneId: string, patch: Partial<LaneEnhance>, label: string): void {
+  onScreen(label, (p) => {
+    const lane = p.lanes.find((l) => l.id === laneId)
+    if (lane) lane.enhance = { ...(lane.enhance ?? ENHANCE_DEFAULTS), ...patch }
+  }, `enhance-${label}`)
 }
 
 /** The track's drum bus on or off (for all its drum lanes, its makeup with it): an edit of the track (in Arrange, ⌘Z). */

@@ -35,6 +35,7 @@ import {
 import { balanceFrom, dropRanges, evenClips, laneHitDb, levelLanes, punchRefs, STAB_UNDER_KICK_DB, type Balance } from './balance'
 import { bassy, filterLoss, eqLanes } from './eq'
 import { busLanes, compLanes } from './comp'
+import { ENHANCE_DEFAULTS } from '../audio/enhance'
 import { GATE_FAMILIES, GATE_LABEL, gatedPhrases, introGate, type GateFamily } from './gate'
 import { FILL_WORDS, varyFills } from './fills'
 import { interlockFit, paletteFit, paletteFor, paletteRefs, type Palette } from './palette'
@@ -185,6 +186,8 @@ function balanceLanes(project: Project, all: SampleListItem[], opts: GenerateOpt
   const measured = levelLanes(project, byPath, balance, drops, laneRole, startingDb, only, punch)
   eqLanes(project, byPath, opts.templates ?? [], drops, laneRole, only)
   compLanes(project, byPath, drops, laneRole, only)
+  // The vocal sung with Vocal Enhance on (SCOPE.md §6.11c); one already set keeps its settings.
+  for (const l of project.lanes) if (laneRole(l.name) === 'vocal' && !l.enhance && (!only || only.has(l.id))) l.enhance = { ...ENHANCE_DEFAULTS }
   // The whole mix against the user's tracks (a whole track only: one lane made again keeps the rest's levels).
   const mix = only ? null : checkMix(project, byPath, opts.templates ?? [], drops, laneRole, punch)
   // The mix check may have moved the clap: the stabs and the moments (fills, …) go by its hits, so they follow.

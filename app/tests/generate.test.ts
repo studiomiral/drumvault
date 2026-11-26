@@ -13,6 +13,7 @@ import type { EventShape, HitItem, LoopGroove, MidiItem, MusicLoopMeta, SerumPre
 import { musicFits, musicShift } from '../src/generate/musicloops'
 import { hitPitch } from '../src/generate/disco'
 import type { VocalTake } from '../src/generate/vocals'
+import { ENHANCE_DEFAULTS } from '../src/audio/enhance'
 import { feelFit } from '../src/generate/feel'
 import { mainBuildOf, mainBuilds, readReference, readSections, templateFrom, templateFromReference } from '../src/generate/template'
 import { arcFit, bestOf, scoreGeneration } from '../src/generate/score'
@@ -2193,6 +2194,10 @@ describe('generator: vocals', () => {
       const others = (x: Generation) => strip({ ...x, project: { ...x.project, clips: x.project.clips.filter((c) => !voc(c)) } })
       expect(others(g)).toBe(others(bare))
     }
+  })
+
+  it('sings with Vocal Enhance on, at its defaults', () => {
+    for (const g of gs.slice(0, 10)) expect(g.project.lanes.find((l) => l.name === 'Vocal')!.enhance).toEqual(ENHANCE_DEFAULTS)
   })
 
   it('takes a vocal no export has used yet while there is one', () => {

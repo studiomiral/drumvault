@@ -1,8 +1,8 @@
 // Plays scheduled events into a Web Audio graph. Used by live playback and (Phase 4)
 // offline export with an OfflineAudioContext, so both render identically.
 //
-// source → [clip filter] → [loop crossfade] → clip gain → lane gain → [lane EQ] → [lane comp] → lane duck (sidechain) → lane pan → [mono low end] → tail → [bus gain] → master
-//                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)
+// source → [clip filter] → [loop crossfade] → clip gain → lane gain → [lane EQ] → [enhance's beef] → [lane comp] → [enhance's saturation] → lane duck (sidechain) → lane pan → [mono low end] → tail → [bus gain] → master
+//                                    ↘ [reverb send → lane reverb] ↗ (into lane gain)                                     ↘ [enhance's plate and ducked delay] ↗ (into lane duck)
 // A drum bus lane's tail also feeds the bus's detector (live), whose gain drives every bus lane's bus gain.
 
 /// <reference types="vite/client" />
@@ -10,6 +10,7 @@ import { dbToGain } from '../lib/project'
 import type { EqBand, Lane, Project } from '../types/project'
 import { BUS_NODE, COMP_NODE, DETECT_MS, type CompParams } from './compressor'
 import compWorkletUrl from './compressor.worklet.ts?worker&url'
+import { attachDucker, beefBands, beefTrimDb, createEnhance, dropEnhance, echoDuckParams, echoFeedback, echoSeconds, echoSend, enhancedComp, enhanceLevels, plateSend, renewTails, satCurve, satDrive, satMix, type EnhanceNodes } from './enhance'
 import { createEcho, createReverb, type Echo, type Reverb } from './reverb'
 import { fadeAt, fadeBreakpoints, type ScheduledEvent } from './schedule'
 
@@ -29,6 +30,8 @@ export interface LaneNodes {
   echo?: Echo
   /** The lane's compressor, after its EQ (made when the lane gets one; left in place, set to do nothing, when it goes). */
   comp?: AudioWorkletNode
+  /** Vocal Enhance (enhance.ts): its beef before the compressor, its saturation after, its plate and delay into the duck. */
+  enh?: EnhanceNodes
   /** The end of the lane's own chain (its pan and mono low end play into it). */
   out: GainNode
   /** Where the lane plays into (the master). */
@@ -61,6 +64,7 @@ export function dropVerb(nodes: LaneNodes): void {
   nodes.echo?.output.disconnect()
   nodes.echo?.feedback.disconnect()
   nodes.echo = undefined
+  if (nodes.enh) renewTails(nodes.duck.context, nodes.enh, nodes.duck)
 }
 
 export function createLaneNodes(ctx: BaseAudioContext, dest: AudioNode): LaneNodes {
@@ -129,15 +133,22 @@ export function setLaneMono(ctx: BaseAudioContext, nodes: LaneNodes, hz: number 
   }
 }
 
-/** The lane's gain → its EQ bands → its compressor (if it has one) → its duck, wired again. */
+/** The lane's gain → its EQ bands → Enhance's beef → its compressor (if it has one) → Enhance's saturation → its duck, wired again. */
 function wireChain(nodes: LaneNodes): void {
+  const enh = nodes.enh
   nodes.gain.disconnect()
   for (const f of nodes.eq) f.disconnect()
+  enh?.beef[enh.beef.length - 1].disconnect()
   nodes.comp?.disconnect()
   let at: AudioNode = nodes.gain
   for (const f of nodes.eq) at = at.connect(f)
+  if (enh) {
+    at.connect(enh.beef[0])
+    at = enh.beef[enh.beef.length - 1]
+  }
   if (nodes.comp) at = at.connect(nodes.comp)
-  at.connect(nodes.duck)
+  // (Enhance's output plays into the duck itself: it is wired so when made.)
+  at.connect(enh ? enh.input : nodes.duck)
 }
 
 /** The lane's EQ as `bands` (none: bypassed): new nodes only when the bands' shape changes. */
@@ -195,6 +206,54 @@ export function setLaneComp(ctx: BaseAudioContext, nodes: LaneNodes, p: CompPara
   }
   setCompParams(nodes.comp, p)
 }
+
+/**
+ * The lane's Vocal Enhance as `lane.enhance` has it (off or none: out of the chain). Made the first
+ * time it is on; the echoes' ducker once the worklet is loaded. A change while it plays glides
+ * (no zipper on a slider); a new chain is set at once (an export is exact from its first sample).
+ */
+export function setLaneEnhance(ctx: BaseAudioContext, nodes: LaneNodes, lane: Lane, bpm: number): void {
+  const lv = enhanceLevels(lane.enhance)
+  if (!lv) {
+    if (!nodes.enh) return
+    dropEnhance(nodes.enh)
+    nodes.enh = undefined
+    wireChain(nodes)
+    return
+  }
+  const fresh = !nodes.enh
+  if (fresh) {
+    nodes.enh = createEnhance(ctx, nodes.duck)
+    wireChain(nodes)
+  }
+  const e = nodes.enh!
+  if (!e.ducker && compLoaded.has(ctx)) {
+    const d = createBusDetector(ctx)
+    if (d) attachDucker(e, d)
+  }
+  const set = (a: AudioParam, v: number) => {
+    if (fresh) a.value = v
+    else if (a.value !== v) a.setTargetAtTime(v, ctx.currentTime, 0.02)
+  }
+  beefBands(lv.beef).forEach((b, i) => set(e.beef[i].gain, b.gainDb))
+  set(e.output.gain, dbToGain(beefTrimDb(lv.beef)))
+  const drive = satDrive(lv.saturation)
+  if (e.drive !== drive) {
+    e.shaper.curve = satCurve(drive)
+    e.drive = drive
+  }
+  set(e.dry.gain, 1 - satMix(lv.saturation))
+  set(e.wet.gain, satMix(lv.saturation))
+  set(e.plateSend.gain, plateSend(lv.reverb))
+  set(e.echoSend.gain, echoSend(lv.delay))
+  set(e.echo.feedback.gain, echoFeedback(lv.delay))
+  const time = echoSeconds(lane.enhance!.delayTime, bpm)
+  if (e.echo.delay.delayTime.value !== time) e.echo.delay.delayTime.value = time
+  if (e.ducker) setCompParams(e.ducker, echoDuckParams(lane.comp, lane.volumeDb + (lane.levelDb ?? 0)))
+}
+
+/** Whether the lane needs the compressor's worklet: its compressor, or Enhance's ducker. */
+export const laneNeedsWorklet = (lane: Lane, bpm: number): boolean => !!laneCompParams(lane, bpm) || !!enhanceLevels(lane.enhance)
 
 /** A compressor worklet's (or the bus detector's) settings; null: doing nothing. */
 function setCompParams(node: AudioWorkletNode, p: CompParams | null): void {
@@ -275,7 +334,9 @@ export function setLaneBus(nodes: LaneNodes, bus: { drive: AudioNode; tap?: Audi
  * lane's sound is at that point (after its volume and its level in the mix), its release in ms.
  */
 export function laneCompParams(lane: Lane, bpm: number): CompParams | null {
-  const c = lane.comp
+  // (Vocal Enhance's compression pushes it harder.)
+  const lv = enhanceLevels(lane.enhance)
+  const c = lv ? enhancedComp(lane.comp, lv.comp) : lane.comp
   if (!c || c.off || !(c.ratio > 1)) return null
   return {
     thresholdDb: c.thresholdDb + lane.volumeDb + (lane.levelDb ?? 0),
@@ -307,11 +368,12 @@ export function resetDuck(nodes: LaneNodes, at: number): void {
   nodes.duck.gain.setValueAtTime(1, at)
 }
 
-/** Lane volume/pan/mute, EQ and compressor (solo is applied by the caller via `audible`). */
+/** Lane volume/pan/mute, EQ, compressor and Vocal Enhance (solo is applied by the caller via `audible`). */
 export function applyLane(nodes: LaneNodes, lane: Lane, audible: boolean, bpm: number, at = 0): void {
   nodes.gain.gain.setTargetAtTime(audible ? dbToGain(laneGainDb(lane)) : 0, at, 0.01)
   setLaneEq(nodes.gain.context, nodes, laneEqBands(lane))
   setLaneComp(nodes.gain.context, nodes, laneCompParams(lane, bpm))
+  setLaneEnhance(nodes.gain.context, nodes, lane, bpm)
   setLaneMono(nodes.gain.context, nodes, lane.monoBelow)
   setLaneRoom(nodes, !!lane.room)
   nodes.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, lane.pan)), at, 0.01)

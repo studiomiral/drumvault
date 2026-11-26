@@ -48,6 +48,8 @@ export interface Lane {
   comp?: LaneComp
   /** The lane plays through the drum bus (`Project.drumBus`): the bus's gain, from all its lanes together, on this one's stem too. */
   bus?: boolean
+  /** Vocal Enhance (SCOPE.md §6.11c): body, compression, saturation, a plate and a delay on the Vocal lane, in playback and baked into its stem. */
+  enhance?: LaneEnhance
   /**
    * A lane added to a generated track (SCOPE.md §6.6, "Adding a lane"): the generator role it is
    * another one of ('buildup', 'top', …), filled and mixed as that kind. Its own lane: remakes of
@@ -72,6 +74,21 @@ export interface LaneComp {
   detectMs?: number
   /** Gain after it (dB): what it takes off, given back, so the balance stands. */
   makeupDb: number
+  off?: boolean
+}
+
+/**
+ * Vocal Enhance's settings (SCOPE.md §6.11c): each part 0…1, all of them scaled by `amount`
+ * (0…1.5: 1 is the parts as set). The delay repeats a dotted 8th or a quarter apart.
+ */
+export interface LaneEnhance {
+  amount: number
+  beef: number
+  comp: number
+  saturation: number
+  reverb: number
+  delay: number
+  delayTime: '1/8d' | '1/4'
   off?: boolean
 }
 

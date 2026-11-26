@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { audition } from '../audio/audition'
 import { choicesOfRole, choiceValue, optionKey, type Choice } from '../generate/choices'
 import { laneRole, type Generation, type Role } from '../generate/generator'
@@ -8,7 +8,9 @@ import { useProject } from '../store/project'
 import { TrackPanel } from '../create/TrackPanel'
 import { compSummary } from '../generate/comp'
 import { eqSummary } from '../generate/eq'
-import { newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setMusicLoopOptions, setPadsOptions, setPianoOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLock, useGenerate } from '../store/generate'
+import { newSound, rerollLane, setBassOptions, setChoice, setDiscoOptions, setStabOptions, setAmbienceOptions, setMusicLoopOptions, setPadsOptions, setPianoOptions, setStringsOptions, setVerbOptions, setVocalLoopOptions, setVocalEnhance, toggleDrumBus, toggleLaneComp, toggleLaneEq, toggleLock, useGenerate } from '../store/generate'
+import type { Lane } from '../types/project'
+import { EnhancePopup } from './EnhancePopup'
 import { BassPanel } from './BassPanel'
 import { ChordsPanel } from './ChordsPanel'
 import { DiscoPanel } from './DiscoPanel'
@@ -20,7 +22,7 @@ import { AmbiencePanel } from './AmbiencePanel'
 import { VocalLoopsPanel } from './VocalLoopsPanel'
 import { VocalPanel } from './VocalPanel'
 import { ELEVENLABS } from '../vocals/plan'
-import { IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
+import { IconChevron, IconLock, IconPlay, IconShuffle, IconSparkle, IconStop } from './icons'
 import { VerbPanel } from './VerbPanel'
 import { cx, Toggle } from './ui'
 
@@ -173,6 +175,7 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
           Comp
         </button>
       )}
+      {role === 'vocal' && <EnhanceButton lane={lane} btn={btn} />}
       {lane.bus && drumBus && (
         <button className={cx(btn, !drumBus.off && 'text-accent')} onClick={() => toggleDrumBus()}
                 title={`Drum bus ${drumBus.off ? 'off' : 'on'}: the drum lanes glued together, ${compSummary(drumBus)}, makeup +${drumBus.makeupDb} dB; each drum stem carries its share (click: ${drumBus.off ? 'on' : 'off'}, for every drum lane)`}>
@@ -191,6 +194,31 @@ function LaneBar({ g, laneName }: { g: Generation; laneName: string }) {
         <IconSparkle className="w-3.5 h-3.5 text-accent" />Remake
       </button>
     </div>
+  )
+}
+
+/**
+ * Vocal Enhance (SCOPE.md §6.11c): the button switches it on or off (a lane without it starts from
+ * the defaults), its arrow opens the popup with the settings.
+ */
+function EnhanceButton({ lane, btn }: { lane: Lane; btn: string }) {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLSpanElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  const on = !!lane.enhance && !lane.enhance.off
+  return (
+    <span ref={anchor} className="inline-flex">
+      <button className={cx(btn, 'rounded-r-none', on && 'text-accent')}
+              onClick={() => setVocalEnhance(lane.id, { off: on }, on ? 'Enhance off' : 'Enhance on')}
+              title={`Vocal Enhance ${on ? 'on' : 'off'}: body, compression, saturation, a plate and a ducked delay (in the stem; click: ${on ? 'off' : 'on'})`}>
+        Enhance
+      </button>
+      <button className={cx(btn, 'rounded-l-none border-l border-line !px-1', open && 'text-accent')}
+              onClick={() => setOpen((o) => !o)} title="Vocal Enhance's settings" aria-expanded={open}>
+        <IconChevron className={cx('w-3.5 h-3.5 transition-transform', open ? '-rotate-90' : 'rotate-90')} />
+      </button>
+      {open && anchor.current && <EnhancePopup lane={lane} anchor={anchor.current} onClose={close} />}
+    </span>
   )
 }
 

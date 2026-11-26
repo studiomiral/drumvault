@@ -1,12 +1,12 @@
 // Offline rendering for stem export (SCOPE.md §6.5): one OfflineAudioContext per stem, using
 // the same scheduler (schedule.ts) and node graph (graph.ts) as live playback. Reverb builds
-// are baked into their lane's stem, tails and all; so are the lane's EQ and compressor, and the
+// are baked into their lane's stem, tails and all; so are the lane's EQ, compressor and Vocal Enhance, and the
 // drum bus's gain on a bus lane (rendered once from all of them: the stems add up to the bus).
 
 import { beatToSec, dbToGain } from '../lib/project'
 import type { Project } from '../types/project'
 import { buffers } from './context'
-import { createBusDetector, createLaneNodes, duckAt, laneCompParams, laneEqBands, laneGainDb, loadComp, onBus, playEvent, setBusDetector, setLaneBus, setLaneComp, setLaneEq, setLaneMono, setLaneRoom, type LaneNodes } from './graph'
+import { createBusDetector, createLaneNodes, duckAt, laneCompParams, laneEqBands, laneGainDb, laneNeedsWorklet, loadComp, onBus, playEvent, setBusDetector, setLaneBus, setLaneComp, setLaneEnhance, setLaneEq, setLaneMono, setLaneRoom, type LaneNodes } from './graph'
 import { duckRelease, eventsInRange, kickHits } from './schedule'
 import { ensureTempo } from './tempo'
 
@@ -46,6 +46,7 @@ async function playLanes(ctx: OfflineAudioContext, project: Project, ids: Set<st
     n.gain.gain.value = lane.mute ? 0 : dbToGain(laneGainDb(lane))
     setLaneEq(ctx, n, laneEqBands(lane))
     setLaneComp(ctx, n, laneCompParams(lane, project.bpm))
+    setLaneEnhance(ctx, n, lane, project.bpm)
     setLaneMono(ctx, n, lane.monoBelow)
     setLaneRoom(n, !!lane.room)
     n.pan.pan.value = Math.max(-1, Math.min(1, lane.pan))
@@ -137,7 +138,7 @@ export async function renderLanes(project: Project, laneIds: string[], range: Re
   const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: Math.max(1, frames), sampleRate })
   const wanted = new Set(laneIds)
   const bussed = project.lanes.filter((l) => wanted.has(l.id) && onBus(l, project))
-  if (bussed.length || project.lanes.some((l) => wanted.has(l.id) && laneCompParams(l, project.bpm))) await needComp(ctx)
+  if (bussed.length || project.lanes.some((l) => wanted.has(l.id) && laneNeedsWorklet(l, project.bpm))) await needComp(ctx)
   const nodes = await playLanes(ctx, project, wanted, range, ctx.destination, watch, 'lanes')
   if (bussed.length) {
     const curve = await busGain(project, range, sampleRate, watch)
