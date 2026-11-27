@@ -204,7 +204,8 @@ export function learnBass(midis: MidiItem[]): BassModel | null {
   for (const m of files) {
     const line = readLine(m)
     if (!line) continue
-    const weight = m.favorite ? FAVORITE_WEIGHT : 1
+    // (A line a track was exported with counts as a favourite does: it went out.)
+    const weight = m.favorite || m.source === 'export' ? FAVORITE_WEIGHT : 1
     const { hits, total, period } = line
     if (period <= 32) periods[(period / 4) as LoopBeats] += weight
     else long++

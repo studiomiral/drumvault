@@ -165,7 +165,7 @@ export type RpcRequest =
   | { id: string; method: "import_hits"; params: { paths: string[]; kind?: "disco" | "stab" | "strings" | "bass" | "piano" | "ambience"; settings: EngineSettings } }
   | { id: string; method: "set_hit_meta"; params: { hit_id: number; key_label?: string | null; clear_key?: boolean; pitch_fix?: number | null; settings: EngineSettings } }
   | { id: string; method: "delete_hits"; params: { hit_ids: number[]; settings: EngineSettings } }
-  | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; settings: EngineSettings } }
+  | { id: string; method: "save_midi"; params: { name: string; notes: number[][]; bars: number; key_label?: string | null; source?: string | null; settings: EngineSettings } }
   | { id: string; method: "serum_presets"; params: { root: string; folders: string[] | null; settings: EngineSettings } }
   | { id: string; method: "grid_preview"; params: { zip_id: number; settings: EngineSettings } }
   | { id: string; method: "health"; params: Record<string, never> }

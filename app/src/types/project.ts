@@ -2,6 +2,7 @@
 
 import type { Category, Genre, SampleKind } from './engine'
 import type { Generation } from '../generate/generator'
+import type { TrackOrigin } from '../generate/taste'
 
 export interface SampleRef {
   /** Library-relative path: the stable identity of a sample across reprocessing. */
@@ -282,6 +283,11 @@ export interface Project {
    * so its lanes keep their modules in Arrange: a new sound, the lane made again.
    */
   generation?: GenerationMeta
+  /**
+   * How a generated track was first made (generate/taste.ts): what its export is compared with,
+   * so Generate learns what the user changed. Absent on tracks built by hand or made before.
+   */
+  origin?: TrackOrigin
   /**
    * The drum bus (SCOPE.md §6.6): one compressor heard from the lanes with `bus` together, its
    * gain applied to each of them, so each stem carries its share and the stems still add up to the

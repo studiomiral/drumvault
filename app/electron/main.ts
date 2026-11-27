@@ -12,7 +12,7 @@ import { DEFAULT_GENRE, GENRES, type EngineEvent, type Genre, type GridPreview, 
 import { keptDir, LibraryReader } from './db'
 import { checkDeps } from './deps'
 import {
-  augmentedPath, deleteProjectFile, expandSamplePaths, exportFile, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist,
+  augmentedPath, deleteProjectFile, expandSamplePaths, exportFile, expandZipPaths, SAMPLE_EXTENSIONS, findEngineDir, libraryFile, listProjects, loadSettings, readShortlist, writeShortlist, readExportLog, writeExportLog,
   readProjectFile, saveSettings, which, writeProjectFile,
 } from './fs'
 import * as eleven from './eleven'
@@ -389,10 +389,10 @@ function registerIpc(): void {
       notes: p.notes ?? null, bars: p.bars ?? null, groove: p.groove ?? null, color: p.color ?? null, settings: engineSettings(),
     }, 300_000)
   })
-  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null }) => {
+  ipcMain.handle('midi:save', async (_e, p: { name: string; notes: number[][]; bars: number; keyLabel: string | null; source?: string }) => {
     if (!sidecar) throw new Error('Engine is not running')
     const r = await sidecar.request<{ id: number }>('save_midi', {
-      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, settings: engineSettings(),
+      name: p.name, notes: p.notes, bars: p.bars, key_label: p.keyLabel, source: p.source ?? null, settings: engineSettings(),
     }, 60_000)
     send('library-changed')
     return r.id
@@ -414,6 +414,8 @@ function registerIpc(): void {
   ipcMain.handle('lib:byPath', (_e, relPaths: string[]) => reader.samplesByPath(relPaths))
   ipcMain.handle('shortlist:read', () => readShortlist(lib()))
   ipcMain.handle('shortlist:write', (_e, text: string) => writeShortlist(lib(), text))
+  ipcMain.handle('exports:read', () => readExportLog(lib()))
+  ipcMain.handle('exports:write', (_e, text: string) => writeExportLog(lib(), text))
   ipcMain.handle('projects:list', () => listProjects(lib()))
   ipcMain.handle('projects:read', (_e, file: string) => readProjectFile(lib(), file))
   ipcMain.handle('projects:write', (_e, prev: string | null, name: string, text: string) =>

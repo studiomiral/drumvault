@@ -3,6 +3,11 @@ import { api } from '../api'
 import { Button } from '../components/ui'
 import { useApp } from '../store/app'
 import { invalidate, saveTempo, useGenerate } from '../store/generate'
+import { setLearning, tasteFor, useTaste } from '../store/taste'
+import { CHOICES } from '../generate/choices'
+import { LANES } from '../generate/generator'
+import { describeTaste } from '../generate/taste'
+import { useProject } from '../store/project'
 import type { ZipListItem } from '../types/api'
 
 /** Create's Options (SCOPE.md §6.6): how the next tracks are made. The track on screen keeps its own. */
@@ -121,6 +126,7 @@ function OptionsBody() {
                onChange={(e) => update({ listenBack: e.target.checked })} />
         Listen back
       </label>
+      <LearnOption />
       {open && (
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setOpen(false)} />
@@ -146,6 +152,50 @@ function OptionsBody() {
             })}
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+/** A role's lane name ("+top": a lane added as another one of the top loops). */
+function laneName(role: string): string {
+  const added = role.startsWith('+')
+  const r = added ? role.slice(1) : role
+  const name = LANES.find((l) => l.role === r)?.name ?? r
+  return added ? `${name} (added lane)` : name
+}
+
+/** Learning from exports (SCOPE.md §6.6): on or off, and what new tracks take from them. */
+function LearnOption() {
+  const { enabled, records } = useTaste()
+  const genre = useProject((s) => s.project.genre)
+  const [show, setShow] = useState(false)
+  const taste = enabled ? tasteFor(genre) : null
+  const lines = taste ? describeTaste(taste, CHOICES, laneName, (p) => p.split('/').pop()!.replace(/\.SerumPreset$/i, '')) : []
+  const n = records.filter((r) => r.genre === genre).length
+  return (
+    <div className="basis-full flex flex-col gap-1.5 mt-1">
+      <span className="flex items-center gap-2">
+        <label className="flex items-center gap-1.5"
+               title="New tracks lean to what you changed in the tracks you exported: choices, sounds, the bass patch, the tempo and lanes taken out of sections">
+          <input type="checkbox" className="accent-[#e2c35f]" checked={enabled} onChange={(e) => {
+            setLearning(e.target.checked)
+            invalidate()
+          }} />
+          Learn from exports
+        </label>
+        <span className="text-faint">{n ? `${n} exported track${n === 1 ? '' : 's'}` : 'none exported yet'}</span>
+        {enabled && n > 0 && (
+          <button className="text-faint hover:text-text underline-offset-2 hover:underline" onClick={() => setShow(!show)}>
+            {show ? 'hide' : 'what it learned'}
+          </button>
+        )}
+      </span>
+      {show && enabled && (
+        <ul className="rounded-lg border border-line bg-panel-2 p-2.5 space-y-0.5 max-h-56 overflow-y-auto text-[11px] select-text">
+          {lines.length ? lines.map((l) => <li key={l}>{l}</li>)
+            : <li className="text-faint">Nothing to go on yet: the exports kept the tracks as they were made.</li>}
+        </ul>
       )}
     </div>
   )

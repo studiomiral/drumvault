@@ -627,7 +627,7 @@ export interface DrumvaultAPI {
   renderBass(p: { preset: string; midiId: number; transpose: number; bpm: number; outRel: string;
     notes?: [number, number, number, number][]; bars?: number; groove?: number[]; color?: number[] }): Promise<void>
   /** Save an edited bassline to the MIDI library; returns its id. */
-  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null }): Promise<number>
+  saveMidi(p: { name: string; notes: [number, number, number, number][]; bars: number; keyLabel: string | null; source?: 'export' }): Promise<number>
   /** Deleted samples, newest first. */
   listRemoved(): Promise<RemovedSample[]>
   /** Put deleted samples back. `pending`: had no trashed file; they return on the next reprocess. */
@@ -654,6 +654,9 @@ export interface DrumvaultAPI {
   /** Generate's shortlist (starred generations, JSON), or null before the first star. */
   readShortlist(): Promise<string | null>
   writeShortlist(text: string): Promise<void>
+  /** The export log (generate/taste.ts: ExportRecord[] as JSON), or null before the first export. */
+  readExportLog(): Promise<string | null>
+  writeExportLog(text: string): Promise<void>
   listProjects(): Promise<ProjectFileInfo[]>
   readProject(file: string): Promise<string>
   /** Returns the file name used (it follows the project name). */

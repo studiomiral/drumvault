@@ -11,7 +11,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import { playback } from '../audio/engine'
 import {
-  addLane, applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, newLaneSound, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
+  addLane, applyMix, bassBars, bassClipRender, changeKey, generate, laneRole, roleOfLane, newLaneSound, newStringsSound, rerollBed, rerollDisco, rerollPad, rerollStrings, rerollVocal, rerollLane as rerollSounds, rerollStabs,
   setStabRhythm, setTrackRule, setTrackRules, STAB_ROLES, type GenerateOptions, type Generation, type GenerationBass, type Mix, type Role, type Rules, type VerbOptions,
 } from '../generate/generator'
 import { CHOICES, choiceValue } from '../generate/choices'
@@ -22,6 +22,8 @@ import { loadHits, useHits } from './hits'
 import { saveStabsSettings, stabsSettings } from './stabs'
 import { loadVocals, playableVocals, useVocals } from './vocals'
 import { loadMusicLoops, useMusicLoops } from './musicloops'
+import { loadTaste, tasteFor } from './taste'
+import { originOf } from '../generate/taste'
 import { musicFits } from '../generate/musicloops'
 import { folderLoopFits, LOOP_CHANCE, loopFits, type VocalTake } from '../generate/vocals'
 import { takeName, type VocalRequest } from '../vocals/plan'
@@ -376,7 +378,9 @@ function options(fresh = false): GenerateOptions {
   // screen keeps (and can change) the one it plays.
   const allLoops = useMusicLoops.getState().loops
   const musicLoops = storeGenre === 'house' && allLoops.length && (!fresh || settings.musicLoops.enabled) ? { loops: allLoops } : null
-  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, piano, strings, pads, ambience, vocals, musicLoops, templates, references }
+  // What the exports say (taste.ts): new tracks only (a lane made again keeps the track's own).
+  const taste = fresh ? tasteFor(storeGenre) : null
+  return { ...settings, genre: storeGenre, bpm: bpm(), bass, verb: enabled ? verb : null, disco, stabs, piano, strings, pads, ambience, vocals, musicLoops, templates, references, taste }
 }
 
 /**
@@ -390,6 +394,7 @@ function make(seed?: number): Generation | null {
   const one = (s: number) => listenBack(generate(samples, opts, s), {}, true)
   const g = seed != null ? one(seed) : bestOf(samples, randomSeed(), CANDIDATES, one)
   applyLaneToggles(g.project, useGenerate.getState().lanes)
+  g.project.origin = originOf(g, roleOfLane)
   return g
 }
 
@@ -403,6 +408,7 @@ async function makeSoon(): Promise<Generation | null> {
     const r = it.next()
     if (r.done) {
       applyLaneToggles(r.value.project, useGenerate.getState().lanes)
+      r.value.project.origin = originOf(r.value, roleOfLane)
       return r.value
     }
     await new Promise((ok) => setTimeout(ok, 0))
@@ -1173,7 +1179,7 @@ export function invalidate(): void {
 
 export async function loadSamples(): Promise<void> {
   const [samples, templates, references] = await Promise.all([api.querySamples({ sort: 'name' }), api.arrangements(), fetchReferences(),
-    loadBass(), loadHits(), loadVocals(), loadMusicLoops()])
+    loadBass(), loadHits(), loadVocals(), loadMusicLoops(), loadTaste()])
   useGenerate.getState().set({ samples, templates, references })
   prefetch()
   void moveShortlist()

@@ -217,7 +217,7 @@ class RpcServer:
                 self._reply(req_id, pipeline.render_bass(settings, p.preset, p.midi_id, p.transpose, p.bpm, p.out_rel,
                                                          p.notes, p.bars, p.groove, p.color))
             elif method == "save_midi":
-                self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label))
+                self._reply(req_id, pipeline.save_midi(settings, p.name, p.notes, p.bars, p.key_label, p.source))
             elif method == "set_midi_meta":
                 self._reply(req_id, pipeline.set_midi_meta(settings, p.midi_id, p.role, p.key_label, p.clear_key))
             elif method == "delete_midi":

@@ -14,6 +14,7 @@ import { bassPath, stringsRenderPrefix } from '../audio/schedule'
 import type { HitItem, MidiItem, MusicLoopMeta, SampleListItem, SavedStabRhythm, SerumPreset, TrackArrangement } from '../types/api'
 import type { AudioClip, BassRender, Clip, ClipFilter, ClipReverb, Lane, PatternClip, Project, StepGroove, Velocity } from '../types/project'
 import { bassModel, generateBassline, generatedMidi, isGenerated, type BassTurn, type LoopBeats } from './bassline'
+import { applyCuts, drawCuts, SECTION_KEY_LABEL, tasteRules, tasteTempo, type SectionKey, type Taste } from './taste'
 import { chordName, followBass, generatePiano, pianoMidi, pianoModel, type PianoKind, type PianoPart } from './piano'
 import { hitPitch, hitSample } from './disco'
 import { BED_CHANCE, BED_DUCK, BED_FADE_BARS, bedItem, bedRender, bedSample, bedShift } from './ambience'
@@ -99,6 +100,11 @@ const GAP_THROUGH = new Set<Role>(['fills', 'hits', 'bed'])
 const STRINGS_SIDECHAIN = 0.6
 /** The rules the Strings lane owns, kept with kept strings. */
 export const STRINGS_RULES = ['stringsAt'] as const
+
+/** A lane's role for the learning (taste.ts): a lane added to a track is one of its own ("+top"). */
+export function roleOfLane(laneName: string, extra?: string): string | undefined {
+  return extra ? `+${extra}` : laneRole(laneName)
+}
 
 export function laneRole(laneName: string): Role | undefined {
   return LANES.find((x) => x.name === laneName)?.role
@@ -424,6 +430,11 @@ export interface GenerateOptions {
    * real track it's built on does. Applied last, also when a lane is made again.
    */
   locks?: Rules | null
+  /**
+   * What the user's exports say (taste.ts): choices, sounds, the bass patch, the tempo and lanes
+   * left out of kinds of section a new track leans to. Null or left out: as the generator draws.
+   */
+  taste?: Taste | null
   /**
    * Project tempo: a whole BPM from this range per track (min = max for a fixed one); null or
    * left out = the library BPM (`bpm`). Loops are sliced and FX stretched to it in playback.
@@ -792,12 +803,14 @@ class Picker {
   private used = new Map<number, number>()
   private keys: Set<string> | null
 
-  constructor(private rng: Rng, private ratings: boolean, key: string | null, private avoid = new Set<string>()) {
+  constructor(private rng: Rng, private ratings: boolean, key: string | null, private avoid = new Set<string>(),
+    /** Sounds the user swapped in (more likely) or out (less) before exporting (taste.ts). */
+    private learned: Record<string, number> = {}) {
     this.keys = key ? new Set(expandCompatible([key])) : null
   }
 
   private weight(s: SampleListItem): number {
-    return this.ratings ? 1 + (s.favorite ? 2 : 0) + (s.rating ?? 0) * 0.4 : 1
+    return (this.ratings ? 1 + (s.favorite ? 2 : 0) + (s.rating ?? 0) * 0.4 : 1) * (this.learned[s.rel_path] ?? 1)
   }
 
   /** Not one of the samples to avoid (a lane re-roll's). */
@@ -1193,8 +1206,11 @@ class Lanes {
 export function generate(all: SampleListItem[], opts: GenerateOptions, seed: number, keep: Keep = {}): Generation {
   const rng = new Rng(seed)
   const samples = opts.zipIds ? all.filter((s) => opts.zipIds!.includes(s.zip_id)) : all
-  const bpm = !opts.tempo ? opts.bpm
+  const drawnBpm = !opts.tempo ? opts.bpm
     : opts.tempo.max > opts.tempo.min ? rng.int(Math.round(opts.tempo.min), Math.round(opts.tempo.max)) : opts.tempo.min
+  // A tempo the user moved exported tracks to, now and then (taste.ts; its own RNG).
+  const bpm = opts.tempo && opts.tempo.max > opts.tempo.min
+    ? tasteTempo(opts.taste, new Rng(seed ^ 0x54454d50), Math.round(opts.tempo.min), Math.round(opts.tempo.max)) ?? drawnBpm : drawnBpm
   const minutes = opts.minMinutes + rng.next() * Math.max(0, opts.maxMinutes - opts.minMinutes)
   // Most tracks follow a real track's structure and rules, changed a little; the rest the grammar.
   const readable = (opts.references ?? []).filter((r) => r.profile && readReference(r.profile))
@@ -1208,7 +1224,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // A replay (one of the track's rules changed) goes on from where the track's own RNG was here.
   if (keep.replay != null) rng.restore(keep.replay)
   const rngAt = rng.save()
-  const picker = new Picker(rng, opts.useRatings, key, new Set(keep.avoid))
+  // What the user's exports say (taste.ts): choices taken from them as soft locks, under the
+  // user's own locks and never over what is kept.
+  const learned = opts.taste ? tasteRules(opts.taste, new Rng(seed ^ 0x54415354)) : null
+  if (learned && keep.rules) for (const r of Object.keys(keep.rules)) delete learned[r]
+  const locks: Rules | null | undefined = learned && Object.keys(learned).length ? { ...learned, ...opts.locks } : opts.locks
+  const picker = new Picker(rng, opts.useRatings, key, new Set(keep.avoid), opts.taste?.samples)
   const choices: string[] = []
 
   // ---- main samples (one per lane for the whole track, variations for later drops) ----
@@ -1255,7 +1276,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const gaterng = new Rng(seed ^ 0x47415445)
   const drawnCharacter = crng.pick(organic ? ORGANIC_CHARACTERS : CHARACTERS)
   // (A track made again carries its own, also when it has none: one made before characters.)
-  const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : opts.locks?.character ?? drawnCharacter) as Character | null
+  const character = (keep.rules && 'character' in keep.rules ? keep.rules.character : locks?.character ?? drawnCharacter) as Character | null
   const charRules = characterRules(drawnCharacter, crng, KICK_PHRASE_ENDS)
 
   // ---- picked as a record (SCOPE.md §6.6): the kick is the anchor, the character sets where the
@@ -1323,12 +1344,12 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const musicDrawn = musicRng.chance(MUSIC_CHANCE)
   const musicColor = drawColor(musicRng)
   const allLoops = organic ? [] : opts.musicLoops?.loops ?? []
-  const musicWant = (keep.rules?.musicLoop ?? opts.locks?.musicLoop) as string | undefined
+  const musicWant = (keep.rules?.musicLoop ?? locks?.musicLoop) as string | undefined
   const musicKept = keep.picks?.music?.id
   const musicOwn = allLoops.find((l) => (l.id === musicWant || musicItem(l).id === musicKept) && (musicWant || musicKept) && musicShift(l, key) != null)
   const musicFit = allLoops.filter((l) => musicFits(l, key, bpm))
   const canMusic = !!musicOwn || musicFit.length > 0
-  const keysGiven = (keep.rules?.keys ?? opts.locks?.keys) as 'stabs' | 'piano' | 'music' | undefined
+  const keysGiven = (keep.rules?.keys ?? locks?.keys) as 'stabs' | 'piano' | 'music' | undefined
   const keysDrawn = pianoRng.chance(PIANO_CHANCE) ? 'piano' : canMusic && musicDrawn ? 'music' : 'stabs'
   /** Where the piano's filter sits where it is held back (Hz), and over how many bars a long intro announces the drop. */
   const pianoHz = pianoRng.int(...PIANO_DARK_HZ)
@@ -1352,10 +1373,10 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   let pianoPart: PianoPart | null = null
   if (pModel && keys === 'piano') {
     // Another part for the same track (the panel's "New piano"): a seed of its own, kept in the rules.
-    const pSeed = Number(keep.rules?.pianoSeed ?? opts.locks?.pianoSeed ?? 0)
-    const kind = (keep.rules?.pianoKind ?? opts.locks?.pianoKind ?? null) as PianoKind | null
+    const pSeed = Number(keep.rules?.pianoSeed ?? locks?.pianoSeed ?? 0)
+    const kind = (keep.rules?.pianoKind ?? locks?.pianoKind ?? null) as PianoKind | null
     pianoPart = generatePiano(pModel, new Rng(seed ^ 0x50415254 ^ pSeed), { key, kind })
-    const want = (keep.rules?.pianoPreset ?? opts.locks?.pianoPreset) as string | undefined
+    const want = (keep.rules?.pianoPreset ?? locks?.pianoPreset) as string | undefined
     const pool = bassPool(po!.presets, seed ^ 0x50494e4f)
     const preset = (want ? po!.presets.find((x) => x.path === want) : undefined) ?? pianoRng.pick(pool)
     if (pianoPart && preset) {
@@ -1374,7 +1395,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const bo = opts.bass
   const model = bo?.midis.length && bo.presets.length ? bassModel(bo.midis) : null
   const bassPreset = model && bo
-    ? keep.bassPreset ?? rng.pickBy(bassPool(bo.presets, seed), (p) => 1 + (bo.favorites.includes(p.path) ? 3 : 0)) : null
+    ? keep.bassPreset ?? rng.pickBy(bassPool(bo.presets, seed), (p) => (1 + (bo.favorites.includes(p.path) ? 3 : 0)) * (opts.taste?.presets[p.path] ?? 1)) : null
   // (The line has an RNG of its own: the rest of the track is the same whatever line it writes. It
   // may slide one note into the next on a patch that glides.)
   const bassLine = (line: ReturnType<typeof generateBassline>) => {
@@ -1399,9 +1420,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const stabsOn = stabPool.length > 0 && (keptRule ?? true)
   const useStabs = stabsOn && !piano && !music
   // (Known before the rules are: a kept or locked value, else on.)
-  const stabFitEarly = ((keep.rules?.stabFit ?? opts.locks?.stabFit ?? true) as boolean) !== false
+  const stabFitEarly = ((keep.rules?.stabFit ?? locks?.stabFit ?? true) as boolean) !== false
   // (One loop of them, rule `stabLoop`, likewise: on unless kept or locked off; only with stabs that fit.)
-  const stabLoopEarly = stabFitEarly && ((keep.rules?.stabLoop ?? opts.locks?.stabLoop ?? true) as boolean) !== false
+  const stabLoopEarly = stabFitEarly && ((keep.rules?.stabLoop ?? locks?.stabLoop ?? true) as boolean) !== false
   const stabs: SampleListItem[] = []
   if (useStabs) {
     const keptIds = STAB_ROLES.map((r) => keep.picks?.[r]?.id)
@@ -1509,7 +1530,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // is built around. A kept or locked value stands; a track made before has neither ----
   const hasLead: Lead[] = [...(stabs.length ? ['stab' as const] : []), ...(piano ? ['piano' as const] : []), ...(music ? ['music' as const] : []), ...(bass ? ['bass' as const] : []), ...(perc?.kind === 'loop' ? ['perc' as const] : [])]
   const drawnLead = pickLead(character ?? drawnCharacter, crng, hasLead)
-  const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : opts.locks && 'lead' in opts.locks ? opts.locks.lead : undefined
+  const kept = keep.rules && 'lead' in keep.rules ? keep.rules.lead : locks && 'lead' in locks ? locks.lead : undefined
   // A piano carries the track (its big breakdown is the piano's), unless another lead is kept or locked.
   // (A music loop likewise: it plays where a piano would.)
   const lead = piano && (kept === undefined || kept === 'stab' || kept === 'piano') ? 'piano'
@@ -1701,7 +1722,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
     stabRhythm: stabRhythm(srng, opts.stabs?.rhythms ?? [], stabFitEarly ? {
       perBar: perBarFor(stabs.map((x) => stabOf.get(x.rel_path)!).filter(Boolean)),
       bass: bass ? bassSteps(bass.notes ?? bass.midi.notes, bassBars(bass)) : null,
-      mode: ((keep.rules?.stabBass ?? opts.locks?.stabBass ?? stabMode) as StabBass),
+      mode: ((keep.rules?.stabBass ?? locks?.stabBass ?? stabMode) as StabBass),
       loop: stabLoopEarly,
     } : undefined),
     // How a phrase's last bar turns; a slow filter opening over the first bars of drop 1 or of every
@@ -1741,7 +1762,7 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const rules: typeof drawn = { ...drawn, ...(character ? charOwn as Partial<typeof drawn> : undefined), ...(leadRules(lead) as Partial<typeof drawn>),
     ...(organic ? organicRules(orng, drawn) as Partial<typeof drawn> : undefined),
     ...(tpl?.rules as Partial<typeof drawn> | undefined), ...(keep.rules as Partial<typeof drawn> | undefined),
-    ...(opts.locks as Partial<typeof drawn> | undefined), character, lead }
+    ...(locks as Partial<typeof drawn> | undefined), character, lead }
   // The piano's rules are what it is (written above, from what is kept or locked); none without a Piano tab.
   rules.keys = !keys ? null : piano ? 'piano' : music ? 'music' : 'stabs'
   rules.musicLoop = music?.loop.id ?? null
@@ -1752,11 +1773,15 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   // A build-up or a roll sample into drops, not both: a locked roll goes without the build-up,
   // otherwise the build-up takes the roll's place (a fill can still lead in with it).
   if (rules.buildup !== 'none' && rules.dropFill === 'roll') {
-    if (opts.locks && 'dropFill' in opts.locks && !('buildup' in opts.locks)) rules.buildup = 'none'
+    if (locks && 'dropFill' in locks && !('buildup' in locks)) rules.buildup = 'none'
     else rules.dropFill = fills.length ? 'fill' : null
   }
+  // Which lanes leave which kinds of section, as the exports say (taste.ts: drawCuts); a track keeps its own.
+  const learnedCuts = (keep.rules?.learnedCuts as [string, SectionKey][] | undefined)
+    ?? (opts.taste ? drawCuts(opts.taste, new Rng(seed ^ 0x43555453)) : [])
+  if (learnedCuts.length) (rules as Rules).learnedCuts = learnedCuts
   /** Kept from the track made before, or locked: not the track's own to change. */
-  const given = (rule: string) => (!!keep.rules && rule in keep.rules) || (!!opts.locks && rule in opts.locks)
+  const given = (rule: string) => (!!keep.rules && rule in keep.rules) || (!!locks && rule in locks)
   // A gap before drops has the drum fill in it (unless the fills are locked out).
   if (rules.dropIn === 'gap' && !rules.dropFill && fills.length && !given('dropFill')) rules.dropFill = 'fill'
   // The drops after the long breakdown: the biggest, with the big build into them (rule `bigBuild`).
@@ -3281,6 +3306,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   const fillWords = rules.fillVariants
     ? varyFills(project.clips, project.lanes.find((l) => l.name === 'Fills')?.id, new Map(all.map((s) => [s.rel_path, s])), fills, new Rng(seed ^ 0x46494c4c))
     : null
+  // The lanes the user takes out of a kind of section before exporting, out of it here too
+  // (taste.ts): drawn for a new track, kept with its rules when a lane is made again.
+  const cuts = applyCuts(project, sections, learnedCuts, roleOfLane)
   const used = new Set(project.clips.map((c) => c.laneId))
   project.lanes = project.lanes.filter((l) => used.has(l.id))
   project.markers = sections.map((s) => makeMarker(s.label, s.start * 4, (s.start + s.bars) * 4))
@@ -3297,6 +3325,9 @@ export function generate(all: SampleListItem[], opts: GenerateOptions, seed: num
   if (bass) choices.push(`bass in drops, ${rules.bassBreaks === 'filtered' ? `high-passed (${rules.bassHp} Hz)` : 'out'} in breakdowns`)
   if (tops.length && n('break')) choices.push(`tops ${{ filtered: 'low-passed', open: 'open', none: 'out' }[rules.topsBreaks]} in breakdowns`)
   choices.push(...carried)
+  const asExported = Object.keys(learned ?? {}).filter((r) => !opts.locks || !(r in opts.locks)).length
+  if (asExported) choices.push(`${asExported} choice${asExported === 1 ? '' : 's'} as in your exports`)
+  if (cuts.length) choices.push(`as in your exports: ${cuts.map(([r, k]) => `${LANES.find((l) => l.role === r)?.name ?? r} out of ${SECTION_KEY_LABEL[k]}`).join(', ')}`)
   if (breaths) choices.push(`${rules.dropBreath === 'all' ? 'tops, drums and bass' : 'tops'} out in the bar before drops`)
   if (hats) {
     const io = { none: 'none', half: 'from halfway', all: 'all through' }

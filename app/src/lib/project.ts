@@ -331,6 +331,7 @@ export function parseProject(text: string): Project {
     loop: p.loop ?? { start: 0, end: 16, enabled: false }, metronome: p.metronome ?? false,
     createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now,
     ...(p.generation ? { generation: p.generation } : {}),
+    ...(p.origin ? { origin: p.origin } : {}),
     ...(p.drumBus ? { drumBus: p.drumBus } : {}),
   }
 }

@@ -6,8 +6,9 @@ import { formatBpm } from '../lib/format'
 import { BEATS_PER_BAR } from '../lib/project'
 import { useApp } from '../store/app'
 import { useProject } from '../store/project'
-import { keepTrack } from '../store/generate'
+import { invalidate, keepTrack } from '../store/generate'
 import { loadMusicLoops } from '../store/musicloops'
+import { learnFromExport, type ExportLearning } from '../store/taste'
 import { nextGeneratedName } from './persistence'
 import type { WavFormat } from '../audio/wav'
 import { Preflight } from './Preflight'
@@ -16,7 +17,7 @@ import { exportDir, exportFolderName, exportStems, exportTargets, hasVocals, MAS
 type Phase =
   | { kind: 'setup' }
   | { kind: 'running'; message: string; pct: number }
-  | { kind: 'done'; files: string[]; note?: string; result?: ExportResult }
+  | { kind: 'done'; files: string[]; note?: string; result?: ExportResult; learning?: ExportLearning }
   | { kind: 'error'; message: string }
 
 /** Export Stems (SCOPE.md §6.5). */
@@ -85,7 +86,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       // (Its music loop is used now: new tracks no longer draw it.)
       void loadMusicLoops()
       if (cancelled.current) setPhase({ kind: 'done', files: result.written, note: 'Export cancelled.', result })
-      else setPhase({ kind: 'done', files: result.written, result })
+      else {
+        // What Generate learns from it: the bassline (into the library) and what was changed (SCOPE.md §6.6).
+        const learning = await learnFromExport(useProject.getState().project)
+        // (The next track is made with it.)
+        if (learning.logged) invalidate()
+        setPhase({ kind: 'done', files: result.written, result, learning })
+      }
     } catch (e) {
       setPhase({ kind: 'error', message: (e as Error).message })
     }
@@ -112,6 +119,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                 the whole track {phase.result.mastered.lufs.toFixed(1)} LUFS integrated, peak {phase.result.mastered.peak_db.toFixed(1)} dBFS.
               </p>
             )}
+            {phase.learning && <LearningNote learning={phase.learning} />}
             {phase.result?.preflight && <Preflight result={phase.result.preflight} />}
             {phase.result?.preflightError && (
               <p className="text-warn mb-2 select-text">The masters were not checked: {phase.result.preflightError}</p>
@@ -209,5 +217,19 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         </Button>
       </div>
     </Modal>
+  )
+}
+
+/** What the export taught Generate (SCOPE.md §6.6). */
+function LearningNote({ learning: l }: { learning: ExportLearning }) {
+  const parts = [
+    l.bass?.saved ? `the bassline is saved to your basslines as “${l.bass.name}”` : null,
+    l.logged ? 'what you changed from the generated track is logged' : null,
+  ].filter(Boolean)
+  return (
+    <>
+      {parts.length > 0 && <p className="text-muted mb-2">Generate learns from this export: {parts.join(', and ')}.</p>}
+      {l.error && <p className="text-warn mb-2 select-text">Generate could not learn from this export: {l.error}</p>}
+    </>
   )
 }

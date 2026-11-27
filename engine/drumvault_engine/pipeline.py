@@ -1252,8 +1252,12 @@ def analyze_vocal(settings: Settings, folder: str) -> dict:
     return vocalmod.analyze(settings, folder)
 
 
-def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int, key_label: str | None) -> dict:
-    """Save an edited bassline (piano roll) as a new MIDI file in the library, like an import."""
+def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int, key_label: str | None,
+              source: str | None = None) -> dict:
+    """
+    Save an edited bassline (piano roll) as a new MIDI file in the library, like an import. A line
+    saved when its track was exported has `source` "export" (the same loop saved before becomes one).
+    """
     import mido
     from . import midi as midimod
     lib = Path(settings.library_path)
@@ -1285,6 +1289,8 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
         same = db.midi_by_sha1(zipio.sha1_file(lib / rel))
         if same is not None:  # the very same loop was saved before
             (lib / rel).unlink()
+            if source and not same["source"]:
+                db.update_midi(same["id"], source=source)
             return {"id": same["id"], "rel_path": same["rel_path"]}
         info = midimod.analyze(lib / rel, settings.thresholds)
         stored = [[round(n.start, 6), round(n.length, 6), n.pitch, n.velocity] for n in info.notes]
@@ -1292,7 +1298,7 @@ def save_midi(settings: Settings, name: str, notes: list[list[float]], bars: int
                              file_sha1=zipio.sha1_file(lib / rel), role="bass", bars=bars,
                              key_label=key_label or info.key_label,
                              key_camelot=midimod.camelot(*midimod.parse_label(key_label)) if key_label else info.key_camelot,
-                             notes=json.dumps(stored), created_at=now_iso(), genre=settings.genre)
+                             notes=json.dumps(stored), created_at=now_iso(), genre=settings.genre, source=source)
     return {"id": mid, "rel_path": rel}
 
 

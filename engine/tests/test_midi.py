@@ -189,6 +189,23 @@ def test_save_edited_loop_as_new_bassline(tmp_path):
     assert pipeline.save_midi(s, "Roll edit", notes[:2], 2, "Fm")["rel_path"] == "MIDI/Bass/roll-edit-2.mid"
 
 
+def test_save_bassline_of_an_export(tmp_path):
+    lib = tmp_path / "lib"
+    s = Settings(library_path=str(lib))
+    notes = [[0, 0.25, 41, 110], [0.75, 0.25, 41, 70], [1.5, 0.25, 44, 90]]
+    r = pipeline.save_midi(s, "Generated 03 bass", notes, 1, "Fm", "export")
+    db = sqlite3.connect(lib / ".drumvault" / "library.sqlite")
+    assert db.execute("SELECT source FROM midi_files WHERE id = ?", (r["id"],)).fetchone()[0] == "export"
+    # A loop saved from the piano roll before, then exported: one row, now an exported one.
+    other = [[0, 0.5, 36, 100]]
+    first = pipeline.save_midi(s, "Mine", other, 1, "Cm")
+    db.commit()
+    assert db.execute("SELECT source FROM midi_files WHERE id = ?", (first["id"],)).fetchone()[0] is None
+    assert pipeline.save_midi(s, "Mine", other, 1, "Cm", "export") == first
+    assert sqlite3.connect(lib / ".drumvault" / "library.sqlite").execute(
+        "SELECT source FROM midi_files WHERE id = ?", (first["id"],)).fetchone()[0] == "export"
+
+
 @pytest.mark.skipif(not SERUM.exists() or not FACTORY_BASS.exists(), reason="Serum 2 not installed")
 def test_render_bass_from_edited_notes(tmp_path):
     lib = tmp_path / "lib"

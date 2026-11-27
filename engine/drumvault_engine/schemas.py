@@ -301,6 +301,9 @@ class SaveMidiParams(BaseModel):
     notes: list[list[float]]
     bars: int = Field(ge=1, le=16)
     key_label: Optional[str] = None
+    # Where it comes from: "export" for a track's line saved when the track was exported (it
+    # counts more in what new basslines learn); none for a piano-roll save.
+    source: Optional[str] = None
     settings: dict[str, Any] = Field(default_factory=dict)
 
 

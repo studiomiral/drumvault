@@ -165,6 +165,24 @@ export async function writeShortlist(library: string, text: string): Promise<voi
   await writeAtomic(path, text)
 }
 
+/** The export log (what each exported track changed from how it was made, SCOPE.md §6.6): JSON, in the library. */
+function exportLogPath(library: string): string {
+  return join(library, '.drumvault', 'exports.json')
+}
+
+export async function readExportLog(library: string): Promise<string | null> {
+  try {
+    return await readFile(exportLogPath(library), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+export async function writeExportLog(library: string, text: string): Promise<void> {
+  await mkdir(join(library, '.drumvault'), { recursive: true })
+  await writeAtomic(exportLogPath(library), text)
+}
+
 export function projectsDir(library: string): string {
   return join(library, '.drumvault', 'projects')
 }
